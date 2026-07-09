@@ -1,0 +1,36 @@
+{
+  "name": "claude-code-status-dot",
+  "version": "0.1.0",
+  "description": "Colorize Claude Code's VSCode tab icon with 4-state status dots (idle/running/done/interrupted) via a minimal, reversible patch.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "patch": "npx tsx patch.ts",
+    "revert": "npx tsx patch.ts --revert"
+  },
+  "keywords": [
+    "claude-code",
+    "vscode",
+    "claude",
+    "status-indicator",
+    "patch"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourname/claude-code-status-dot.git"
+  },
+  "homepage": "https://github.com/yourname/claude-code-status-dot#readme",
+  "bugs": {
+    "url": "https://github.com/yourname/claude-code-status-dot/issues"
+  },
+  "author": "wangdong",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "patch.ts",
+    "hooks/**/*",
+    "resources/**/*",
+    "docs/**/*.md"
+  ]
+}

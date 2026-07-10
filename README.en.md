@@ -1,123 +1,118 @@
 # claude-code-status-dot
 
-Adds **four-state colored status dots** to the session tab icon of Claude Code's VSCode extension, so you can see at a glance what each session is doing.
+Adds **session status visualization** to Claude Code's VSCode extension: four-state colored dots on the tab icon + completion/interruption notifications + an aggregate status bar at the bottom-right (click to switch sessions).
 
-> Implemented as a **patch**, not a standalone VSCode extension. See [Why a patch?](#why-a-patch) below.
+> Implemented as a **patch**, not a standalone extension — VSCode does not allow a third-party extension to modify another extension's webview tab icon (see [Why a patch?](#why-a-patch)).
 
 ![screenshot](docs/screenshot.png)
-
 > Screenshot pending (`docs/screenshot.png`).
 
 ---
 
-## Features
+## What it gives you
 
-Claude Code's native session tab icon refreshes only on sparse events and distinguishes little more than "pending permission / unseen completion". This project injects a 500ms redraw timer that expands the icon into four states:
+1. **Four-state tab icon dots**: each Claude Code session's tab icon changes color by state — 🟡 running (breathing) / 🟢 done / 🔴 interrupted (fast flash) / ⚪ idle. More complete than CC's native (only blue/orange dots).
+2. **Completion / interruption notifications**: when a session completes or is rate-limited, the foreground is suppressed; **when you've switched away, a system notification + sound fires** — no need to keep watching.
+3. **Aggregate status bar**: a floating bar at the bottom-right of the CC panel, one dot per session (same four-state colors), **click to switch to that session's tab**.
 
-| State | Meaning | Color | Animation | SVG |
-|---|---|---|---|---|
-| `idle` | Idle (initial / no state file / done > 5 min) | Gray `#808080` | Static | `claude-logo-idle.svg` |
-| `running` | Running | Yellow `#CCA700` ↔ `#FFD60A` | Breathing (500ms two-frame toggle) | `claude-logo-running.svg` ↔ `claude-logo-running-bright.svg` |
-| `done` | Done | Green `#3FB950` | Static | `claude-logo-done.svg` |
-| `interrupted` | Interrupted (rate-limited / errored) | Red `#F85149` | Fast flash (500ms on/off toggle) | `claude-logo-error.svg` ↔ CC default `claude-logo.svg` |
+## Status colors
 
-> **permission (awaiting user approval)**: handled by Claude Code's native blue dot — this project **does not override it**. When there is no external state file or the state is unknown, the injected timer simply `return`s and does not touch CC's icon, so CC's blue dot shows naturally.
+| Color | Meaning | Trigger |
+|---|---|---|
+| 🟡 Yellow (breathing) | Running | Prompt submitted, around tool calls (heartbeat) |
+| 🟢 Green (static) | Turn done | CC fires `Stop` (turns gray after 5 min) |
+| 🔴 Red (fast flash) | Interrupted / errored | CC fires `StopFailure` (rate limit, overload, etc.) |
+| ⚪ Gray (static) | Idle | Initial / done > 5 min ago / no state file |
+| 🔵 Blue (CC native) | Awaiting approval | CC's native blue dot, **not overridden** |
 
-Full state contract: [`docs/STATES.md`](docs/STATES.md) (single source of truth).
+Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](docs/STATES.md).
 
-## How it works
+## Quick start
 
-One sentence: **patch CC's `extension.js` to inject an IIFE (reads a state file every 500ms and sets `iconPath`) + CC hooks write the state file + 5 SVGs.**
-
-- **Writer side**: CC hooks write each session's state to `~/.claude/cc-tab-status/<session_id>.json` (fields `{state, since, error?}`).
-- **Reader side**: the injected timer reads the state file for its own session and swaps the corresponding SVG by absolute path.
-- **Assets**: 5 SVGs live in this project's `resources/`, referenced by absolute path (a CC auto-update only wipes the extension dir, so the SVGs are never lost).
-
-See [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) for details.
-
-## Why a patch
-
-A VSCode `WebviewPanel` tab icon (`iconPath`) is set **exclusively by the extension that created that panel**. VSCode **exposes no public API** for one third-party extension to modify another extension's webview tab icon. Claude Code's session tab is a `WebviewPanel` created by the CC extension itself, so its `iconPath` can only be assigned from inside CC's `extension.js`.
-
-We exhausted the alternatives (a standalone VSCode extension, proposed APIs, webview interception, etc.) — none can reach the icon. The only viable path is to patch CC's `extension.js` and inject our redraw logic. The trade-off is that a CC auto-update overwrites the patched file and you must re-run the patch (see [FAQ](#faq)).
-
-## Prerequisites
-
-- **Node.js 18+**: the hook script `hooks/cc-status.js` is zero-dependency and uses only Node built-ins.
-- **Claude Code's VSCode extension installed**: the patcher searches `~/.vscode/extensions` (and insiders / server / cursor / vscodium) for `anthropic.claude-code-*`.
-- `npx tsx` to run the TypeScript script (no global install needed; `npx` fetches it).
-
-## Install
+**Prerequisites**: Node.js 18+; Claude Code's VSCode extension installed.
 
 ```bash
 git clone <this-repo> claude-code-status-dot
 cd claude-code-status-dot
-npx tsx patch.ts
+npx tsx patch.ts          # patch + auto-wire hooks + verify (idempotent)
 ```
 
-`patch.ts` will: discover the CC extension → back up `extension.js` → inject the IIFE → write 6 hook events into `~/.claude/settings.json` → verify all 5 SVGs are present.
+Then **Reload Window**: `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win) → `Developer: Reload Window`.
 
-After install, **Reload Window** to apply: `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux) → type `Developer: Reload Window`.
+Submit a prompt, watch the tab icon breathe yellow; on completion → green + (if you've switched away) a system notification; the aggregate bar appears at the bottom-right.
 
-> Hook wiring is **written automatically** into `~/.claude/settings.json` by the patcher (idempotent, tagged with `# cc-status-dot-managed`, safe to re-run). To wire hooks manually or inspect the format, see [`hooks/settings-snippet.json`](hooks/settings-snippet.json).
+## Commands
 
-## State colors
+| Command | Effect |
+|---|---|
+| `npx tsx patch.ts` | Install (patch `extension.js` + `webview` + wire hooks, idempotent) |
+| `npx tsx patch.ts --revert` | Restore (`extension.js` + `webview` from `.bak`, remove hooks) |
+| `npx tsx patch.ts --status` | Dry-run report, changes nothing |
 
-| Color you see | Meaning | Trigger |
-|---|---|---|
-| Gray (static) | Idle | Initial / done more than 5 min ago / no state file |
-| Yellow (breathing) | Running | Prompt submitted, around tool calls (heartbeat) |
-| Green (static) | Turn done | CC fires `Stop` |
-| Red (fast flash) | Interrupted / errored | CC fires `StopFailure` (e.g. rate limit, overload) |
-| Blue (CC native) | Awaiting approval | CC's native blue dot, not this project |
+## Notification config (optional)
 
-## Revert
+Add to VSCode's `settings.json`:
 
-```bash
-npx tsx patch.ts --revert
+```json
+{
+  "ccStatusDot.notify": true,
+  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifySound": "Glass"
+}
 ```
 
-Restores `extension.js` from `extension.js.bak` and surgically removes this project's hook entries from `settings.json` based on the marker (your other manual hooks are left untouched).
+- `notify`: master switch (default `true`)
+- `notifyWhenFocused`: also show a VSCode message when focused (default `false`, icon is enough)
+- `notifySound`: macOS notification sound (default `"Glass"`; `""` for silent)
 
-## Status (changes nothing)
+> The first system notification triggers a one-time macOS prompt "Script Editor wants to send notifications" — allow it.
 
-```bash
-npx tsx patch.ts --status
-```
+## How it works
 
-Dry-run report: CC extension version, whether patched, whether hooks are wired, whether SVGs are present, and the state directory.
+**Patches CC's `extension.js` + `webview/index.js` + `webview/index.css`, injecting:**
+
+- **`extension.js`**: a 500ms timer (IIFE) — reads state files to set tab icons + aggregates all session states and pushes them to the webview + listens for "switch tab" clicks.
+- **`webview`**: the bottom-right status bar (vanilla DOM, attached to body, **outside the React tree** — zero render interference) + click-to-switch messages.
+- **CC hooks** write each session's state to `~/.claude/cc-tab-status/<session_id>.json` (`{state, since, error?}`).
+- **7 SVGs** (idle / running×4 frames / done / error) in this project's `resources/`, referenced by absolute path (a CC update only wipes the extension dir, SVGs are never lost).
+
+See [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) (icon injection) + [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md) (status bar injection).
+
+## Why a patch
+
+A VSCode `WebviewPanel` tab icon (`iconPath`) is set **exclusively by the extension that created that panel** — there is no public API for a third-party extension to modify it. CC's session tab is a WebviewPanel created by the CC extension itself, so its icon can only be assigned from inside CC's `extension.js`. We exhausted the alternatives (standalone extension, proposed APIs, webview interception, etc.) — none can reach the icon. The only viable path is a patch. Trade-off: a CC auto-update overwrites it, so you must re-run the patch.
 
 ## FAQ
 
-**Q: After a Claude Code update, the status dot stopped lighting up?**
-A: A CC auto-update replaces the entire extension directory, so the patched `extension.js` is overwritten by the original → silent failure. Re-run `npx tsx patch.ts` (the SVGs live in this project's directory and are not lost, so no re-copy is needed).
+**After a CC update the status dot stopped lighting up?** A CC auto-update replaces the entire extension dir, overwriting the patched files with the originals. Re-run `npx tsx patch.ts` (SVGs live in this project's dir and aren't lost).
 
-**Q: I just installed it and the icon didn't change?**
-A: First run `Developer: Reload Window`. If it still doesn't work, run `npx tsx patch.ts --status` and read the report: is the CC extension detected, is it patched, are hooks wired, are SVGs present?
+**Just installed and the icon didn't change?** First run `Developer: Reload Window`. If it still doesn't work, run `--status` and read the report.
 
-**Q: The patch reports "Anchor mismatch"?**
-A: CC's minified code has drifted (the anchor strings no longer match). The patcher refuses to write any file, so the extension is not damaged. Please open an issue on this project's issue tracker with your CC version and wait for an anchor update.
+**The patch reports "Anchor mismatch"?** CC's minified code has drifted. The patcher refuses to write, so the extension is not damaged. Open an issue with your CC version.
 
-**Q: The state is stuck on `running`?**
-A: Most likely you interrupted CC with Esc (no hook fires). The next prompt or normal completion will correct it naturally. See [Known limitations](#known-limitations).
+**State stuck on running?** Likely you interrupted CC with Esc (no hook fires). The next prompt or normal completion corrects it.
+
+**The status bar overlaps the input box?** Tune the CSS `bottom` offset (see [`docs/WEBVIEW-injection.md` §5.2](docs/WEBVIEW-injection.md)).
 
 ## Known limitations
 
-- **No hook for manual Esc interrupt**: interrupting CC with Esc does not fire `Stop`/`StopFailure`, so the state stays on `running`. The injected timer makes no active inference; it is corrected naturally by the next `UserPromptSubmit` (new turn) or `Stop` (next normal completion).
-- **CC auto-update overwrite**: see FAQ; re-run the patch.
-- **Minified anchor version fragility**: the patch relies on two exact strings (Anchor A/B) in CC's `extension.js`. When a CC version upgrade shifts the minified code, the patcher errors out and refuses to write, and asks you to open an issue.
+- **No hook for manual Esc interrupt**: CC doesn't fire Stop/StopFailure, so the state stays on running; corrected naturally by the next prompt/Stop ([anthropics/claude-code#45289](https://github.com/anthropics/claude-code/issues/45289)).
+- **CC auto-update overwrite**: patched `extension.js`/`webview` overwritten by originals → silent failure, re-run the patch.
+- **Minified anchor version fragility**: the patch depends on a few exact strings in CC's code; on version drift the patcher errors out and refuses to write.
+- **No notification when VSCode is fully closed**: the IIFE runs in the extension host; if VSCode is closed, no notification.
+- **System notification click doesn't jump to tab**: osascript has no click callback; locate the session via the tab dot back in VSCode.
 
 ## Risk disclaimer
 
-This project modifies Claude Code's extension `extension.js` (a backup is taken; `--revert` fully restores it) and writes to your `~/.claude/settings.json` (backed up as `settings.json.cc-status-dot.bak` on first run). The hook script is designed to **never block or break CC** — any error (empty stdin, invalid JSON, IO failure, module-load failure) exits silently with code 0 and writes nothing to CC's stderr. Please read the known limitations above before use.
+This project modifies Claude Code's `extension.js` + `webview/index.js` + `webview/index.css` (all backed up; `--revert` fully restores), and writes to your `~/.claude/settings.json` (backed up on first run). The hook script is designed to **never block or break CC** — any error exits silently with code 0. Read the known limitations before use.
 
 ## Uninstall
 
 ```bash
-npx tsx patch.ts --revert   # restore extension.js + remove hooks
+npx tsx patch.ts --revert   # restore extension.js + webview + remove hooks
 ```
 
-Then delete this project's directory. The state directory `~/.claude/cc-tab-status/` is user data; delete it yourself if you wish.
+Then delete this project's directory. `~/.claude/cc-tab-status/` is user data; delete it yourself if you wish.
 
 ## License
 

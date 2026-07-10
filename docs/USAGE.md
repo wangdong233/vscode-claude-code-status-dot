@@ -62,6 +62,17 @@ npx tsx patch.ts
 
 > 限制：VSCode 完全关闭时不通知（IIFE 不运行）；系统通知点击不能跳转到 CC tab（仅提醒，回 VSCode 靠 tab 点定位）。详见 [`STATES.md` §4b/§5](STATES.md)。
 
+## 3.6 聚合状态条（webview 右下角）
+
+patch 还在 CC 聊天面板右下角注入一个**聚合色块条**：每个 CC session 一个小色块，颜色同 tab 图标四态（灰空闲/黄运行/绿完成/红中断），点击某色块切换到对应 session tab。
+
+- **位置**：webview 右下角浮层（`position:fixed`），不进 React 树，React 重渲染无影响。
+- **当前 session 高亮**：白色描边。
+- **2 秒无数据自动隐藏**（如会话列表侧栏 webview 收不到桥推送）。
+- **点击切 tab**：点色块 → 切到该 session（已开的走 reveal，不新建）。
+
+> 若色块条压住输入框发送按钮，可调 CSS `bottom` 偏移（见 [`WEBVIEW-injection.md` §5.2](WEBVIEW-injection.md)）。布局定位需真实 webview 目测。
+
 ## 4. 排错
 
 **图标完全没变**

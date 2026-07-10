@@ -99,3 +99,14 @@ RUN_FRAMES = [running, running-1, running-2, running-bright, running-2, running-
 - **VSCode 完全关闭时不通知**：IIFE 跑在 CC 扩展宿主进程，VSCode 关闭则 IIFE 不运行 → 不通知（v2 可由 hook 补位）。
 - **系统通知点击不可跳转 CC tab**：osascript 无 click callback；通知仅提醒，回 VSCode 后靠 tab 绿/红点定位。
 - **macOS 首次授权**：首次 osascript 通知会弹"X 想发送通知"授权，一次性。
+
+---
+
+## 6. 聚合状态条（webview 右下角浮层，可选展示）
+
+除 tab 图标点外，patch 还在 CC webview 右下角注入一个**聚合色块条**（vanilla DOM `position:fixed`，不进 React 树）：每个 session 一个小色块，颜色同 §1 四态，点击切到对应 session tab。
+
+- **数据源**：复用本表状态文件，由 extension.js IIFE 聚合后 postMessage 推给 webview（webview 沙箱无 fs）。
+- **点击切 tab**：webview postMessage `cc_focus_session` → extension.js `onDidReceiveMessage` → `vscode.commands.executeCommand("claude-vscode.editor.open", sid)`（已存在 panel 走 reveal）。
+- **2 秒无数据自动隐藏**（兼容 sidebar 等无桥 webview）。
+- 详见 [`WEBVIEW-injection.md`](WEBVIEW-injection.md)。

@@ -344,6 +344,8 @@ function buildIIFE(resDir: string): string {
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||""}catch(e){}`,
         `if(prevSt&&prevSt!==st&&(st==="done"||st==="interrupted")){try{notify(st,err)}catch(e){}}`,
         `if(st)prevSt=st;`,
+        `try{var files=fs.readdirSync(DIR);var arr=[];for(var fi=0;fi<files.length;fi++){if(!files[fi].endsWith(".json"))continue;var fsid=files[fi].slice(0,-5);try{var jj=JSON.parse(fs.readFileSync(pth.join(DIR,files[fi]),"utf8"));arr.push({sid:fsid,state:jj.state,title:jj.title||"",since:jj.since||0})}catch(e){}}if(t.webview&&t.webview.postMessage){t.webview.postMessage({type:"cc_status_bar",currentSid:t.__ccSid,sessions:arr})}}catch(e){}`,
+        `if(!t.__ccFocusWired&&t.webview&&t.webview.onDidReceiveMessage){t.__ccFocusWired=true;t.webview.onDidReceiveMessage(function(m){if(m&&m.type==="cc_focus_session"&&m.sessionId){try{vs.commands.executeCommand("claude-vscode.editor.open",m.sessionId)}catch(e){}}})}`,
         `var now=Date.now();`,
         `var svg;`,
         `if(st==="interrupted"){svg=(seq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
@@ -440,6 +442,110 @@ function restoreExtension(extDir: string): void {
     fs.copyFileSync(bak, extJs);
     log("restored extension.js from extension.js.bak");
     // Intentionally keep extension.js.bak as a safety net.
+}
+
+// ---------------------------------------------------------------------------
+// Webview patch — aggregate status bar (see docs/WEBVIEW-injection.md)
+//   Patches webview/index.js (stash acquireVsCodeApi + inject bar IIFE) and
+//   webview/index.css (bar styles). Different files from extension.js, zero
+//   overlap with the iconPath patch.
+// ---------------------------------------------------------------------------
+
+/** Regex matching CC's single acquireVsCodeApi() call site. Captures the
+ *  minified var names so we only depend on the stable API name. Must hit 1x. */
+const ACQUIRE_RE = /let (\w+)=acquireVsCodeApi\(\),(\w+)=new (\w+)\(\1\)/;
+
+/** Idempotency markers (presence === already patched). */
+const WV_JS_MARKER = "cc-status-bar-injected";
+const WV_API_MARKER = "window.__ccVsApi=";
+const WV_CSS_MARKER = "cc-status-bar-css";
+
+function buildWebviewJsIIFE(): string {
+    // Vanilla DOM bar, mounted on document.body (outside React tree → zero
+    // reconcile interference). Reads state via postMessage bridge from the
+    // extension.js IIFE. See docs/WEBVIEW-injection.md §6.B.
+    return [
+        `/*${WV_JS_MARKER}*/`,
+        `(function(){`,
+        `if(window.__ccBarStarted)return;window.__ccBarStarted=true;`,
+        `if(window.IS_SESSION_LIST_ONLY)return;`,
+        `var API=window.__ccVsApi;if(!API)return;`,
+        `var COLORS={idle:"#808080",running:"#CCA700",done:"#3FB950",interrupted:"#F85149"};`,
+        `var bar=document.createElement("div");bar.id="cc-status-bar";`,
+        `bar.style.cssText="position:fixed;bottom:0;right:0;display:flex;gap:4px;padding:4px 6px;z-index:10001;";`,
+        `var hideT=null;`,
+        `function mount(){if(!document.body){setTimeout(mount,50);return;}document.body.appendChild(bar);hideT=setTimeout(function(){bar.style.display="none";},2000);}`,
+        `if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",mount);else mount();`,
+        `function render(p){if(hideT){clearTimeout(hideT);hideT=null;}bar.style.display="flex";bar.innerHTML="";var ss=p.sessions||[];var cur=p.currentSid;ss.sort(function(a,b){return (b.since||0)-(a.since||0);});for(var i=0;i<ss.length;i++){var s=ss[i];var d=document.createElement("div");d.className="cc-status-dot";d.style.background=COLORS[s.state]||COLORS.idle;d.dataset.state=s.state||"";d.dataset.sid=s.sid;if(s.sid===cur)d.classList.add("cc-status-dot-active");d.title=(s.title||s.sid)+" ["+(s.state||"?")+"]";d.addEventListener("click",function(ev){var sid=ev.currentTarget.dataset.sid;try{API.postMessage({type:"cc_focus_session",sessionId:sid});}catch(e){}});bar.appendChild(d);}}`,
+        `window.addEventListener("message",function(ev){var d=ev.data;if(d&&d.type==="cc_status_bar"){try{render(d);}catch(e){}}});`,
+        `})();`,
+    ].join("");
+}
+
+function buildWebviewCss(): string {
+    // EOF-append to webview/index.css. z-index 10001 > CC's max 10000.
+    // bottom:0 may overlap the input row — tune to bottom:44px if it does.
+    return [
+        `/*${WV_CSS_MARKER}*/`,
+        `#cc-status-bar{position:fixed;bottom:0;right:0;display:flex;flex-direction:row;gap:4px;padding:4px 6px;z-index:10001;background:transparent;pointer-events:none;}`,
+        `#cc-status-bar .cc-status-dot{width:10px;height:10px;border-radius:3px;cursor:pointer;pointer-events:auto;opacity:.85;transition:transform .12s,opacity .12s;border:1px solid rgba(0,0,0,.25);}`,
+        `#cc-status-bar .cc-status-dot:hover{opacity:1;transform:scale(1.25);}`,
+        `#cc-status-bar .cc-status-dot:active{transform:scale(.9);}`,
+        `#cc-status-bar .cc-status-dot-active{outline:2px solid #fff;outline-offset:1px;opacity:1;}`,
+        `@keyframes cc-breath{0%{filter:brightness(1);}50%{filter:brightness(1.5);}100%{filter:brightness(1);}}`,
+        `#cc-status-bar .cc-status-dot[data-state="running"]{animation:cc-breath 1.5s ease-in-out infinite;}`,
+    ].join("");
+}
+
+function patchWebview(extDir: string): void {
+    const wvJs = path.join(extDir, "webview", "index.js");
+    const wvCss = path.join(extDir, "webview", "index.css");
+    if (!fs.existsSync(wvJs)) { warn("webview/index.js not found — skipping webview patch"); return; }
+    if (!fs.existsSync(wvCss)) { warn("webview/index.css not found — skipping webview CSS"); return; }
+
+    // --- index.js: stash acquireVsCodeApi + append bar IIFE ---
+    let js = fs.readFileSync(wvJs, "utf8");
+    if (js.includes(WV_API_MARKER)) {
+        log("webview/index.js already patched — skipping");
+    } else {
+        const acquireCount = (js.match(/acquireVsCodeApi\(\)/g) || []).length;
+        if (acquireCount !== 1) {
+            fail(`Expected exactly 1 acquireVsCodeApi() call in webview/index.js, found ${acquireCount}. No files were modified.`);
+        }
+        const m = js.match(ACQUIRE_RE);
+        if (!m) {
+            fail(`acquireVsCodeApi() call site regex did not match in webview/index.js (anchor drift). No files were modified.`);
+        }
+        const repl = `let ${m![1]}=acquireVsCodeApi();window.__ccVsApi=${m![1]};let ${m![2]}=new ${m![3]}(${m![1]})`;
+        backupOnce(wvJs, wvJs + ".bak");
+        js = js.replace(ACQUIRE_RE, repl) + buildWebviewJsIIFE();
+        fs.writeFileSync(wvJs, js, "utf8");
+        log("patched webview/index.js (stashed vscode API + injected status bar)");
+    }
+
+    // --- index.css: append bar styles ---
+    let css = fs.readFileSync(wvCss, "utf8");
+    if (css.includes(WV_CSS_MARKER)) {
+        log("webview/index.css already patched — skipping");
+    } else {
+        backupOnce(wvCss, wvCss + ".bak");
+        css = css + buildWebviewCss();
+        fs.writeFileSync(wvCss, css, "utf8");
+        log("patched webview/index.css (status bar styles)");
+    }
+}
+
+function restoreWebview(extDir: string): void {
+    for (const name of ["index.js", "index.css"]) {
+        const f = path.join(extDir, "webview", name);
+        const bak = f + ".bak";
+        if (fs.existsSync(bak)) {
+            fs.copyFileSync(bak, f);
+            log(`restored webview/${name} from .bak`);
+        } else {
+            log(`no webview/${name}.bak — was not patched (nothing to restore)`);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +707,9 @@ function reportStatus(): void {
     const extJs = path.join(dir, "extension.js");
     const patched = fs.existsSync(extJs) && isExtensionPatched(fs.readFileSync(extJs, "utf8"));
     log(`extension.js patched: ${patched ? "YES" : "no"}`);
+    const wvJs = path.join(dir, "webview", "index.js");
+    const wvPatched = fs.existsSync(wvJs) && fs.readFileSync(wvJs, "utf8").includes(WV_API_MARKER);
+    log(`webview patched (status bar): ${wvPatched ? "YES" : "no"}`);
     log(`hooks wired: ${isHooksWired() ? "YES" : "no"}`);
     checkSvgs(path.join(PROJECT_ROOT, "resources"));
     log(`state dir: ${STATE_DIR} ${fs.existsSync(STATE_DIR) ? "(exists)" : "(will be created on first hook fire)"}`);
@@ -650,6 +759,7 @@ function run(argv: string[]): void {
         const { dir, version } = discoverExtension();
         log(`CC extension v${version}: ${dir}`);
         restoreExtension(dir);
+        restoreWebview(dir);
         unwireHooks();
         // Option A (absolute SVG path) copies nothing into CC resources, so there
         // are no SVGs to delete. State dir left in place (user data).
@@ -664,6 +774,7 @@ function run(argv: string[]): void {
     log(`CC extension v${version}: ${dir}`);
     ensureStateDir();
     patchExtension(dir);
+    patchWebview(dir);
     wireHooks();
     checkSvgs(path.join(PROJECT_ROOT, "resources"));
     reloadHint();

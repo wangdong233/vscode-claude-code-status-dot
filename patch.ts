@@ -89,6 +89,8 @@ const STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status");
 const OUR_SVGS = [
     "claude-logo-idle.svg",
     "claude-logo-running.svg",
+    "claude-logo-running-1.svg",
+    "claude-logo-running-2.svg",
     "claude-logo-running-bright.svg",
     "claude-logo-done.svg",
     "claude-logo-error.svg",
@@ -295,19 +297,21 @@ function countOccurrences(haystack: string, needle: string): number {
 // Build the injected IIFE. Single line, version-robust, no minified refs.
 //   t = the `ts` panel instance (has panelTab, context.extensionPath).
 //   Reads ~/.claude/cc-tab-status/<sid>.json -> {state, since, error?}
-//   State machine mirrors docs/STATES.md §1/§4 exactly — keep in sync.
-//     running     -> breathe claude-logo-running.svg <-> -running-bright.svg
-//     interrupted -> flash  claude-logo-error.svg     <-> CC's claude-logo.svg (off-frame)
+//   State machine + notification mirror docs/STATES.md §1/§4/§4b — keep in sync.
+//     running     -> 4-frame triangle wave (6 steps, 3s period) over running/-1/-2/-bright
+//     interrupted -> flash claude-logo-error.svg <-> CC's claude-logo.svg (off-frame)
 //     done        -> steady claude-logo-done.svg; if since older than 5 min -> idle
 //     idle        -> steady claude-logo-idle.svg
 //     missing/unknown -> return (don't fight CC's own pending/done icon)
+//   On running->done/interrupted transition: notify (VSCode msg + macOS osascript
+//   when unfocused). Config: ccStatusDot.{notify,notifyWhenFocused,notifySound}.
 // ---------------------------------------------------------------------------
 
 function buildIIFE(resDir: string): string {
     // JSON.stringify yields a safely-quoted, escaped JS string literal for the path
     // (also handles the non-ASCII chars in the project path correctly).
     const resLiteral = JSON.stringify(resDir);
-    // State machine mirrors docs/STATES.md §1/§4 exactly. Keep in sync.
+    // State machine + notification mirror docs/STATES.md §1/§4/§4b. Keep in sync.
     return [
         `/*${INJECT_MARKER}*/`,
         `(function(t){`,
@@ -318,16 +322,32 @@ function buildIIFE(resDir: string): string {
         `var RES=${resLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         `var DONE_TO_IDLE_MS=5*60*1000;`,
-        `var seq=0;`,
+        `var RUN_FRAMES=["claude-logo-running.svg","claude-logo-running-1.svg","claude-logo-running-2.svg","claude-logo-running-bright.svg","claude-logo-running-2.svg","claude-logo-running-1.svg"];`,
+        `var seq=0,prevSt=null;`,
+        `function notify(st,err){`,
+        `var c=vs.workspace.getConfiguration("ccStatusDot");`,
+        `if(!c.get("notify",true))return;`,
+        `var focused=vs.window.state.focused;`,
+        `if(focused&&!c.get("notifyWhenFocused",false))return;`,
+        `var msg,sev;`,
+        `if(st==="done"){sev="info";msg="Claude Code: turn complete"}`,
+        `else{sev="warn";var m={rate_limit:"rate limit reached",overloaded:"server overloaded"}[err]||err||"interrupted";msg="Claude Code: "+m}`,
+        `if(t.__ccTitle)msg+=" ["+t.__ccTitle+"]";`,
+        `if(focused){if(sev==="info")vs.window.showInformationMessage(msg,"Dismiss");else vs.window.showWarningMessage(msg,"Dismiss")}`,
+        `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);`,
+        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var sndStr=snd?(' sound name "'+snd+'"'):'';try{require("child_process").execFile("osascript",["-e",'display notification "'+msg+'" with title "Claude Code"'+sndStr])}catch(e){}}}`,
+        `}`,
         `setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
         `var sid=t.__ccSid;if(!sid)return;`,
-        `var st=null,since=null;`,
-        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since}catch(e){}`,
+        `var st=null,since=null,err="";`,
+        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||""}catch(e){}`,
+        `if(prevSt&&prevSt!==st&&(st==="done"||st==="interrupted")){try{notify(st,err)}catch(e){}}`,
+        `if(st)prevSt=st;`,
         `var now=Date.now();`,
         `var svg;`,
         `if(st==="interrupted"){svg=(seq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
-        `else if(st==="running"){svg=(seq%2===0)?pth.join(RES,"claude-logo-running.svg"):pth.join(RES,"claude-logo-running-bright.svg")}`,
+        `else if(st==="running"){svg=pth.join(RES,RUN_FRAMES[seq%6])}`,
         `else if(st==="done"){svg=(since&&(now-since>DONE_TO_IDLE_MS))?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-done.svg")}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
         `else{return}`,
@@ -390,7 +410,7 @@ function patchExtension(extDir: string): void {
     // consequent as a single `return a,b,c,d` expression preserves the binding.
     const replA =
         'else if(e.request.type==="update_session_state")return ' +
-        "this.__ccSid=e.request.sessionId," +
+        "this.__ccSid=e.request.sessionId,this.__ccTitle=e.request.title," +
         iife +
         ',this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}';
 
@@ -614,6 +634,11 @@ function run(argv: string[]): void {
     const args = argv.slice(2);
     if (args.includes("-h") || args.includes("--help")) {
         printHelp();
+        return;
+    }
+    if (args.includes("--check-iife")) {
+        // Dev: dump the injected IIFE string for syntax verification (node --check).
+        console.log(buildIIFE(path.join(PROJECT_ROOT, "resources")));
         return;
     }
     if (args.includes("--status")) {

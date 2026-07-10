@@ -17,9 +17,9 @@ npx tsx patch.ts
 1. 在 `~/.vscode/extensions`（及 insiders / server / cursor / vscodium）下查找 `anthropic.claude-code-*`，选版本最高的。
 2. 校验 `extension.js` 中两段 anchor 字符串的命中数（Anchor A 必须唯一命中，Anchor B 命中 0 或 1 次）。命中失败则**不写任何文件**并报错。
 3. 备份 `extension.js` → `extension.js.bak`（仅首次）。
-4. 注入 IIFE（含 `setInterval` 500ms 重绘逻辑），把 `resources/` 的绝对路径 bake 进注入块。
+4. 注入 IIFE（含 `setInterval` 500ms 重绘 + done/interrupted 通知逻辑），把 `resources/` 的绝对路径 bake 进注入块。
 5. 把 6 个 hook 事件写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记），首次备份为 `settings.json.cc-status-dot.bak`。
-6. 校验 `resources/` 下 5 个 SVG 齐全。
+6. 校验 `resources/` 下 7 个 SVG 齐全（idle/running/running-1/running-2/running-bright/done/error）。
 
 > hook 接线由 patcher 自动完成。如果你想手工接线，参考 [`../hooks/settings-snippet.json`](../hooks/settings-snippet.json)。
 
@@ -38,6 +38,29 @@ npx tsx patch.ts
 | permission | CC 弹出授权请求时（CC 原生蓝点，非本项目） | 蓝色（CC 原生） |
 
 > 手动 Esc 中断**不会**触发任何 hook，状态会停在 `running`，属已知限制（见 [`STATES.md` §5](STATES.md)）。
+
+## 3.5 通知（完成 / 中断时）
+
+当某 session 转为 `done` 或 `interrupted` 时，patch 注入的 IIFE 会发通知（仅状态转换时，不重复）：
+
+- **VSCode 在前台**（你在看）：默认抑制（tab 图标变绿/红快闪已足够）。
+- **VSCode 不在前台**（你切走了）：弹 VSCode 消息（触发 dock bounce）+ macOS 系统通知（进通知中心 + 声音）。
+
+**macOS 首次授权**：第一次收到系统通知时，系统会弹"Script Editor 想发送通知"——点允许（一次性）。
+
+**配置**（写进 VSCode `settings.json`，可选）：
+```json
+{
+  "ccStatusDot.notify": true,
+  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifySound": "Glass"
+}
+```
+- `notify`：总开关（默认 true）。
+- `notifyWhenFocused`：前台时也弹 VSCode 消息（默认 false）。
+- `notifySound`：macOS 系统通知声音（默认 `"Glass"`；`""` 静音；可选 Basso/Ping/Hero 等）。
+
+> 限制：VSCode 完全关闭时不通知（IIFE 不运行）；系统通知点击不能跳转到 CC tab（仅提醒，回 VSCode 靠 tab 点定位）。详见 [`STATES.md` §4b/§5](STATES.md)。
 
 ## 4. 排错
 

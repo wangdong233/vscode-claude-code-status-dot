@@ -6,7 +6,7 @@
  *
  * Reads a CC hook event from stdin (JSON) and writes a status file to
  *   ~/.claude/cc-tab-status/<session_id>.json
- * shaped as  { state, since, error? }
+ * shaped as  { state, since, error?, activeSubagents }
  * so an external reader (e.g. a VS Code status-dot patch) can render the
  * current state of every CC session.
  *
@@ -15,9 +15,14 @@
  *    permission is left to CC's native blue pending dot — not written here)
  *
  * Event mapping (MUST equal HOOK_EVENTS in patch.ts; see docs/STATES.md §2):
- *   UserPromptSubmit          -> running
+ *   UserPromptSubmit          -> running (activeSubagents: prefer payload
+ *                                 background_tasks, else keep — don't reset 0)
  *   PreToolUse / PostToolUse  -> running (heartbeat; refresh `since`)
- *   Stop                      -> done
+ *   SubagentStart             -> running (early signal; activeSubagents+1)
+ *   SubagentStop              -> persist decremented count (clamp 0); running if
+ *                                 tasks remain, else keep cur.state (Stop decides)
+ *   Stop                      -> done, UNLESS background_tasks / activeSubagents
+ *                                 > 0 -> running (workflow still in flight)
  *   StopFailure               -> interrupted (records the error enum)
  *   SessionEnd                -> delete the session's status file
  *
@@ -25,6 +30,11 @@
  *   - empty stdin or invalid JSON  -> silent exit(0)
  *   - any module-load/parse/IO error -> silent exit(0), nothing on stderr
  *   - writes are atomic (tmp + rename), dir auto-created
+ *   - deriveStatus is read-modify-write: reads current activeSubagents, then
+ *     writes back. Hybrid — the background_tasks payload is authoritative when
+ *     present (CC v2.1.145+); activeSubagents is the early-signal fallback.
+ *     Cross-process races are bounded by payload correction + clamp 0
+ *     (see SUBAGENT-design.md §4.3); reader never reads activeSubagents.
  *   - zero external dependencies (Node built-ins only)
  *
  * Portability: Node's built-in modules are loaded with dynamic import()
@@ -57,33 +67,88 @@ function readStdin() {
 const DELETE = Symbol('delete');
 
 /**
- * Map a parsed hook payload to a status object.
- * Returns:
- *   - { state, since, error? }  -> write it
- *   - null                      -> ignore this event
- *   - DELETE                    -> remove the session's status file
+ * Count of in-flight background tasks carried by the payload (CC v2.1.145+:
+ * Stop / SubagentStop ship `background_tasks[]` scoped to the parent session).
+ * Returns null when the field is absent (old CC version / event without it),
+ * meaning "no authoritative signal — fall back to activeSubagents bookkeeping".
  */
-function deriveStatus(payload) {
+function inflightFromPayload(payload) {
+  return Array.isArray(payload && payload.background_tasks)
+    ? payload.background_tasks.length
+    : null;
+}
+
+/**
+ * Map a parsed hook payload to a status object (read-modify-write, hybrid).
+ *   - Method B (primary): prefer the authoritative `background_tasks.length`
+ *     from the payload when present — zero counting, zero drift, covers every
+ *     background type (workflow / subagent / teammate / …).
+ *   - Method A (fallback / early signal): maintain `activeSubagents` across
+ *     SubagentStart/SubagentStop so the dot turns yellow the moment a subagent
+ *     is spawned (before the first Stop), and old CC versions (< v2.1.145)
+ *     still get reasonable behavior. B periodically overrides A, and the count
+ *     is clamped at 0, so any drift is bounded and has no functional effect
+ *     (the reader never reads activeSubagents).
+ *
+ * `cur` is the currently-on-disk status (defaulted on missing/corrupt file).
+ *
+ * Returns:
+ *   - { state, since, error?, activeSubagents } -> write it (atomic)
+ *   - null                                      -> ignore this event (don't write)
+ *   - DELETE                                    -> remove the session's status file
+ */
+function deriveStatus(payload, cur) {
   const event = payload.hook_event_name;
   const now = Date.now();
+  const inflight = inflightFromPayload(payload);
+  const a = Number.isFinite(cur && cur.activeSubagents) ? cur.activeSubagents : 0;
 
   switch (event) {
     // A new turn just began: CC is working on the user's prompt.
+    // Don't reset activeSubagents to 0 — a prior workflow may still be running.
+    // Correct it from the authoritative payload if available, else keep it.
     case 'UserPromptSubmit':
-      return { state: 'running', since: now };
+      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : a };
 
     // Heartbeat: keep CC marked running and refresh the timestamp.
     case 'PreToolUse':
     case 'PostToolUse':
-      return { state: 'running', since: now };
+      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : a };
 
-    // Turn completed normally.
+    // Early signal: a subagent was just spawned — turn yellow immediately,
+    // before the first Stop. Prefer the authoritative count, else increment.
+    case 'SubagentStart':
+      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : (a + 1) };
+
+    // A subagent finished. Prefer the authoritative count, else decrement
+    // (clamped at 0). If tasks remain, stay running; otherwise do NOT
+    // preempt — let Stop decide the terminal state (null = no write).
+    case 'SubagentStop': {
+      const next = inflight != null ? inflight : Math.max(a - 1, 0);
+      // Always persist the decremented count. Returning null would leave a stale
+      // activeSubagents on disk and mislead the following Stop into running.
+      // Don't preempt the terminal state — keep cur.state, let Stop decide done.
+      return {
+        state: next > 0 ? 'running' : (cur && cur.state) || 'running',
+        since: now,
+        activeSubagents: next,
+      };
+    }
+
+    // Turn completed normally. Authoritative call: if background tasks are
+    // still in flight (a workflow running in the background), stay running
+    // instead of falsely going green. Old CC versions degrade to activeSubagents.
     case 'Stop':
-      return { state: 'done', since: now };
+      return {
+        state: (inflight != null ? inflight : a) > 0 ? 'running' : 'done',
+        since: now,
+        activeSubagents: inflight != null ? inflight : a,
+      };
 
     // Turn was aborted/interrupted; preserve the failure reason enum.
+    // Interrupt wins regardless of subagent count; keep the count for resume.
     case 'StopFailure':
-      return { state: 'interrupted', since: now, error: payload.error || 'unknown' };
+      return { state: 'interrupted', since: now, error: payload.error || 'unknown', activeSubagents: a };
 
     // Session is over: clean up its status file.
     case 'SessionEnd':
@@ -144,11 +209,26 @@ async function main() {
   const sid = payload && payload.session_id;
   if (!sid) process.exit(0);
 
-  // --- Map event -> status action ---
-  const status = deriveStatus(payload);
-  if (status === null) process.exit(0); // event we don't track
-
   const filePath = path.join(STATUS_DIR, sid + '.json');
+
+  // --- Read current on-disk status (read-modify-write for activeSubagents) ---
+  // Missing/corrupt file or any read error -> benign defaults, stay silent.
+  let cur = { state: 'idle', activeSubagents: 0, since: 0 };
+  try {
+    const prev = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    cur = {
+      state: prev.state || 'idle',
+      since: prev.since || 0,
+      error: prev.error,
+      activeSubagents: Number.isFinite(prev.activeSubagents) ? prev.activeSubagents : 0,
+    };
+  } catch {
+    /* no file / corrupt JSON -> default cur */
+  }
+
+  // --- Map event -> status action ---
+  const status = deriveStatus(payload, cur);
+  if (status === null) process.exit(0); // event we don't track / not writing
 
   if (status === DELETE) {
     try {

@@ -107,13 +107,18 @@ const SEARCH_DIRS = [
 
 /** CC hook events that feed session-state transitions to cc-status.js.
  *  MUST equal the event set handled by hooks/cc-status.js (docs/STATES.md §2).
- *  Intentionally excludes Notification (CC's native blue dot handles permission,
- *  reader does not override that state) and SessionStart (no writer case —
- *  wiring it would be dead wiring, audit F-5). */
+ *  SubagentStart / SubagentStop feed the activeSubagents early-signal counter
+ *  (and also carry background_tasks for authoritative correction) so the dot
+ *  stays yellow while a workflow / background subagent runs; see
+ *  docs/SUBAGENT-design.md §4–§5. Intentionally excludes Notification (CC's
+ *  native blue dot handles permission, reader does not override that state) and
+ *  SessionStart (no writer case — wiring it would be dead wiring, audit F-5). */
 const HOOK_EVENTS = [
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
+    "SubagentStart",
+    "SubagentStop",
     "Stop",
     "StopFailure",
     "SessionEnd",

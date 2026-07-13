@@ -26,14 +26,16 @@
 
 | CC hook 事件 | → 写入 state | 说明 |
 |---|---|---|
-| `UserPromptSubmit` | `running` | 新一轮开始 |
+| `UserPromptSubmit` | `running` | 新一轮开始；`activeSubagents` 用 payload `background_tasks` 纠正，否则保留（不重置 0） |
 | `PreToolUse` | `running` | 心跳，刷新 `since` |
 | `PostToolUse` | `running` | 心跳，刷新 `since` |
-| `Stop` | `done` | 本轮正常完成 |
-| `StopFailure` | `interrupted` | 记 `error` 枚举（rate_limit/overloaded/…） |
+| `SubagentStart` | `running` | **早信号**：subagent 一 spawn 即黄；`activeSubagents` 优先用 `background_tasks` 纠正，否则 +1 |
+| `SubagentStop` | `running`（若仍有在飞任务）/ **不写**（若归零） | `activeSubagents` 优先用 `background_tasks` 纠正，否则 −1（clamp 0）；归零时不抢断，终态交 `Stop` |
+| `Stop` | `done`，**除非** `background_tasks`/`activeSubagents > 0` → `running` | 权威裁定：workflow 后台跑期间不假绿（v2.1.145+）；旧版本退化为 `activeSubagents` 计数 |
+| `StopFailure` | `interrupted` | 记 `error` 枚举（rate_limit/overloaded/…）；中断优先，保留 `activeSubagents` |
 | `SessionEnd` | （删除该 session 状态文件） | 清理 |
 
-**故 `HOOK_EVENTS` = `["UserPromptSubmit","PreToolUse","PostToolUse","Stop","StopFailure","SessionEnd"]`**（6 个）。
+**故 `HOOK_EVENTS` = `["UserPromptSubmit","PreToolUse","PostToolUse","SubagentStart","SubagentStop","Stop","StopFailure","SessionEnd"]`**（8 个）。
 
 **故意不接的事件**（及原因，防止死接线）：
 - `Notification`：permission 由 CC 原生蓝点处理，reader 不覆盖该态。
@@ -45,13 +47,17 @@
 
 - 目录：`~/.claude/cc-tab-status/`
 - 文件名：`<session_id>.json`
-- 字段：`{ "state": "idle|running|done|interrupted", "since": <ms 纪元>, "error"?: "<StopFailure 枚举>" }`
-- 写入：**原子**（`.tmp` + `rename`），目录自动创建
+- 字段：`{ "state": "idle|running|done|interrupted", "since": <ms 纪元>, "error"?: "<StopFailure 枚举>", "activeSubagents": <int> }`
+  - `activeSubagents`（int，默认 0）：**仅供 writer 记账**（SubagentStart/Stop 计数 + `background_tasks` 纠正）。**reader 不读此字段**——state 仍四态，渲染逻辑零改动（§4）。
+  - `background_tasks[]` / `session_crons[]`：**hook payload 字段（CC v2.1.145+），不落盘**——Stop/SubagentStop 时由 writer 就地读取作权威判定（覆盖 workflow/subagent/teammate 等全类型）。
+- 写入：**原子**（`.tmp` + `rename`），目录自动创建；writer 为 **read-modify-write**（读当前 `activeSubagents` → 改 → 原子写回）
 - reader 读失败（文件不存在 / JSON 破损）→ 跳过本帧，**不覆盖**图标（保留 CC 原生 pending/done）
 
 ---
 
 ## 4. reader 渲染逻辑（patch.ts 注入 IIFE，每 500ms 一帧）
+
+> **本节零改动（Subagent/workflow 支持不影响 reader）**：reader 只读 `state`（仍四态）+ `since` + `error`；`activeSubagents` 是 writer 内部记账字段，reader 不读、不渲染。workflow 跑期间保持 running 完全由 writer 在 `Stop`/`SubagentStop` 时改写 `state` 实现。`buildIIFE` 因此无任何改动。
 
 ```
 读 <sid>.json → state, since, error
@@ -93,12 +99,16 @@ RUN_FRAMES = [running, running-1, running-2, running-bright, running-2, running-
 
 ## 5. 已知限制（诚实声明，写入文档）
 
+**v2 新特性 — workflow / 后台 subagent 跑期间保持 running**：主 agent 回复"已启动"后 `Stop` 不再误写 `done`（假绿）。实现 = hybrid：`Stop`/`SubagentStop` 时优先读 payload 的 `background_tasks[]`（CC v2.1.145+ 权威，覆盖 workflow/subagent/teammate 全类型），缺失时退化为 `activeSubagents` 计数 + `SubagentStart` 早信号。reader 不读 `activeSubagents`，state 仍四态。详见 [`SUBAGENT-design.md`](SUBAGENT-design.md)。
+
 - **手动 Esc 中断无 hook**：CC 不触发 Stop/StopFailure（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)），状态会停在 `running`。reader 无 watchdog（当前版本不做主动推断），靠下一次 `UserPromptSubmit`/`Stop` 自然更正。
 - **多 session**：每个 CC panel 实例各自一个 500ms 定时器，按各自 `__ccSid` 读各自状态文件，互不干扰。
 - **CC 自动更新**：覆盖 patched `extension.js` → 静默失效，需重跑 `tsx patch.ts`（SVG 在本项目目录不丢）。
 - **VSCode 完全关闭时不通知**：IIFE 跑在 CC 扩展宿主进程，VSCode 关闭则 IIFE 不运行 → 不通知（v2 可由 hook 补位）。
 - **系统通知点击不可跳转 CC tab**：osascript 无 click callback；通知仅提醒，回 VSCode 后靠 tab 绿/红点定位。
 - **macOS 首次授权**：首次 osascript 通知会弹"X 想发送通知"授权，一次性。
+- **activeSubagents 计数漂移（hybrid 的 A 部分）**：SubagentStart/Stop 不配对（subagent 崩溃/被杀未发 Stop）→ 计数虚高；多 subagent 并发 Start/Stop 的 read-modify-write 也可能丢更新。缓解：每次带 `background_tasks` 的事件用权威值覆盖 + clamp 0；reader 不读此字段，漂移只影响"早信号"窗口，无功能性后果（B 的 `Stop` 终裁）。
+- **workflow 收尾后→done 的转换依赖会话被唤醒**：workflow 完成后若主会话不被 task-notification 唤醒、不再发 `Stop`，图标可能停在 `running` 直到下一次用户 prompt。**安全失败**（停黄优于假绿），不再出现"workflow 还在跑却显示绿"。
 
 ---
 

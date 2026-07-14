@@ -11,7 +11,7 @@ Adds **session status visualization** to Claude Code's VSCode extension: four-st
 
 ## What it gives you
 
-1. **Four-state tab icon dots**: each Claude Code session's tab icon changes color by state — 🟡 running (breathing) / 🟢 done / 🔴 interrupted (fast flash) / ⚪ idle. More complete than CC's native (only blue/orange dots).
+1. **Four-state tab icon dots**: each Claude Code session's tab icon changes color by state — 🟡 running (breathing) / 🟢 done / 🔴 interrupted (fast flash) / ⚪ idle. **Shown in both the top tab bar and the "Open Editors" view** (iconPath is a tab property, shared by both). More complete than CC's native (only blue/orange dots).
 2. **Completion / interruption notifications**: when a session completes or is rate-limited, the foreground is suppressed; **when you've switched away, a system notification + sound fires** — no need to keep watching.
 3. **Aggregate status bar**: a floating bar at the bottom-right of the CC panel, one dot per session (same four-state colors), **click to switch to that session's tab**.
 

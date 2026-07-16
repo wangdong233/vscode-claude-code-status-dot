@@ -1,6 +1,6 @@
 {
   "name": "vscode-claude-code-status-dot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Colorize Claude Code's VSCode tab icon with 4-state status dots (idle/running/done/interrupted) via a minimal, reversible patch.",
   "type": "module",
   "license": "MIT",

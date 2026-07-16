@@ -14,7 +14,7 @@
  * the SVG filenames and the docs must all stay in sync with it.
  *
  * RUN
- *   npx claude-code-status-dot            # install (published bin → dist/patch.js)
+ *   npx vscode-claude-code-status-dot            # install (published bin → dist/patch.js)
  *   tsx patch.ts                          # install from source (dev)
  *   tsx patch.ts --revert                 # undo everything (also: published bin --revert)
  *   tsx patch.ts --status                 # dry-run report, no changes
@@ -947,10 +947,10 @@ function printHelp(): void {
             "cc-status-dot patcher",
             "",
             "Usage:",
-            "  claude-code-status-dot            install patch + wire hooks (idempotent)",
-            "  claude-code-status-dot --revert   restore extension.js/webview, remove hooks + runtime copy",
-            "  claude-code-status-dot --status   show detection results, change nothing",
-            "  claude-code-status-dot --help     this message",
+            "  vscode-claude-code-status-dot            install patch + wire hooks (idempotent)",
+            "  vscode-claude-code-status-dot --revert   restore extension.js/webview, remove hooks + runtime copy",
+            "  vscode-claude-code-status-dot --status   show detection results, change nothing",
+            "  vscode-claude-code-status-dot --help     this message",
             "",
             "  (from source, replace the command with: npx tsx patch.ts)",
             "",

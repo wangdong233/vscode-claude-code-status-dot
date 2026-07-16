@@ -1,4 +1,4 @@
-# claude-code-status-dot
+# vscode-claude-code-status-dot
 
 Adds **session status visualization** to Claude Code's VSCode extension: four-state colored dots on the tab icon + completion/interruption notifications + an aggregate status bar at the bottom-right (click to switch sessions).
 
@@ -34,14 +34,14 @@ Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](doc
 **Recommended (one-liner after publish — no need to clone)**:
 
 ```bash
-npx claude-code-status-dot   # patch + auto-wire hooks + verify (idempotent)
+npx vscode-claude-code-status-dot   # patch + auto-wire hooks + verify (idempotent)
 ```
 
 **Or from source (dev)**:
 
 ```bash
-git clone <this-repo> claude-code-status-dot
-cd claude-code-status-dot
+git clone <this-repo> vscode-claude-code-status-dot
+cd vscode-claude-code-status-dot
 npx tsx patch.ts
 ```
 
@@ -55,9 +55,9 @@ Submit a prompt, watch the tab icon breathe yellow; on completion → green + (i
 
 | Command | Effect |
 |---|---|
-| `npx claude-code-status-dot` | Install (patch `extension.js` + `webview` + wire hooks, idempotent) |
-| `npx claude-code-status-dot --revert` | Restore (`extension.js` + `webview` from `.bak`, remove hooks + runtime copy) |
-| `npx claude-code-status-dot --status` | Dry-run report, changes nothing |
+| `npx vscode-claude-code-status-dot` | Install (patch `extension.js` + `webview` + wire hooks, idempotent) |
+| `npx vscode-claude-code-status-dot --revert` | Restore (`extension.js` + `webview` from `.bak`, remove hooks + runtime copy) |
+| `npx vscode-claude-code-status-dot --status` | Dry-run report, changes nothing |
 
 > For dev, swap the command for `npx tsx patch.ts` (same flags).
 
@@ -96,9 +96,9 @@ A VSCode `WebviewPanel` tab icon (`iconPath`) is set **exclusively by the extens
 
 ## FAQ
 
-**After a CC update the status dot stopped lighting up?** A CC auto-update replaces the entire extension dir, overwriting the patched files with the originals. Re-run `npx claude-code-status-dot` (the SVG/hook runtime copies live in `INSTALL_DIR`, which a CC update doesn't touch; deleting the source project doesn't matter either).
+**After a CC update the status dot stopped lighting up?** A CC auto-update replaces the entire extension dir, overwriting the patched files with the originals. Re-run `npx vscode-claude-code-status-dot` (the SVG/hook runtime copies live in `INSTALL_DIR`, which a CC update doesn't touch; deleting the source project doesn't matter either).
 
-**Upgrading from an old (git clone) install?** Just re-run `npx claude-code-status-dot` — the patcher detects the stale baked path and rewrites it in place; no need to `--revert` first.
+**Upgrading from an old (git clone) install?** Just re-run `npx vscode-claude-code-status-dot` — the patcher detects the stale baked path and rewrites it in place; no need to `--revert` first.
 
 **Just installed and the icon didn't change?** First run `Developer: Reload Window`. If it still doesn't work, run `--status` and read the report.
 
@@ -123,7 +123,7 @@ This project modifies Claude Code's `extension.js` + `webview/index.js` + `webvi
 ## Uninstall
 
 ```bash
-npx claude-code-status-dot --revert   # restore extension.js + webview + remove hooks + delete INSTALL_DIR
+npx vscode-claude-code-status-dot --revert   # restore extension.js + webview + remove hooks + delete INSTALL_DIR
 ```
 
 `--revert` keeps `~/.claude/cc-tab-status/` (user data) and the first-run `.bak` safety copies (remove manually if you wish). For dev, the command is `npx tsx patch.ts --revert`.

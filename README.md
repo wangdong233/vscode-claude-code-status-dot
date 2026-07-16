@@ -1,4 +1,4 @@
-# claude-code-status-dot
+# vscode-claude-code-status-dot
 
 给 Claude Code 的 VSCode 扩展加上**会话状态可视化**：tab 图标四态彩色点 + 完成/中断通知 + 右下角聚合色块条（点击切换会话）。
 
@@ -34,14 +34,14 @@
 **推荐（发布后一行装，无需 clone 源码）**：
 
 ```bash
-npx claude-code-status-dot   # patch + 自动接 hooks + 校验（幂等）
+npx vscode-claude-code-status-dot   # patch + 自动接 hooks + 校验（幂等）
 ```
 
 **或从源码（开发态）**：
 
 ```bash
-git clone <this-repo> claude-code-status-dot
-cd claude-code-status-dot
+git clone <this-repo> vscode-claude-code-status-dot
+cd vscode-claude-code-status-dot
 npx tsx patch.ts
 ```
 
@@ -55,9 +55,9 @@ npx tsx patch.ts
 
 | 命令 | 作用 |
 |---|---|
-| `npx claude-code-status-dot` | 安装（patch `extension.js` + `webview` + 接 hooks，幂等） |
-| `npx claude-code-status-dot --revert` | 还原（从 `.bak` 恢复 `extension.js` + `webview`，移除 hooks + 运行时副本） |
-| `npx claude-code-status-dot --status` | dry-run 报告，不改任何文件 |
+| `npx vscode-claude-code-status-dot` | 安装（patch `extension.js` + `webview` + 接 hooks，幂等） |
+| `npx vscode-claude-code-status-dot --revert` | 还原（从 `.bak` 恢复 `extension.js` + `webview`，移除 hooks + 运行时副本） |
+| `npx vscode-claude-code-status-dot --status` | dry-run 报告，不改任何文件 |
 
 > 开发态把命令换成 `npx tsx patch.ts`（带同样参数）。
 
@@ -96,9 +96,9 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 
 ## FAQ
 
-**CC 更新后状态点不亮了？** CC 自动更新整体替换扩展目录，patched 文件被原版覆盖。重跑 `npx claude-code-status-dot`（SVG/hook 运行时副本在 `INSTALL_DIR`，CC 更新不碰它；项目源目录删了也不影响）。
+**CC 更新后状态点不亮了？** CC 自动更新整体替换扩展目录，patched 文件被原版覆盖。重跑 `npx vscode-claude-code-status-dot`（SVG/hook 运行时副本在 `INSTALL_DIR`，CC 更新不碰它；项目源目录删了也不影响）。
 
-**从旧版（git clone 装）升级？** 直接重跑 `npx claude-code-status-dot`——patcher 会检测到旧的 baked 路径过期并原地改写，无需 `--revert` 后重装。
+**从旧版（git clone 装）升级？** 直接重跑 `npx vscode-claude-code-status-dot`——patcher 会检测到旧的 baked 路径过期并原地改写，无需 `--revert` 后重装。
 
 **刚装完图标没变？** 先 `Developer: Reload Window`。还不行跑 `--status` 看报告。
 
@@ -123,7 +123,7 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 ## 卸载
 
 ```bash
-npx claude-code-status-dot --revert   # 还原 extension.js + webview + 移除 hooks + 删 INSTALL_DIR
+npx vscode-claude-code-status-dot --revert   # 还原 extension.js + webview + 移除 hooks + 删 INSTALL_DIR
 ```
 
 `--revert` 会保留 `~/.claude/cc-tab-status/`（用户数据）和首次的 `.bak` 安全副本（可手动删）。开发态命令为 `npx tsx patch.ts --revert`。

@@ -9,14 +9,14 @@
 **推荐（发布后一行装，无需 clone 源码）**：
 
 ```bash
-npx claude-code-status-dot
+npx vscode-claude-code-status-dot
 ```
 
 **或从源码（开发态）**：
 
 ```bash
-git clone <this-repo> claude-code-status-dot
-cd claude-code-status-dot
+git clone <this-repo> vscode-claude-code-status-dot
+cd vscode-claude-code-status-dot
 npx tsx patch.ts
 ```
 
@@ -31,7 +31,7 @@ npx tsx patch.ts
 5. 把 **8 个 hook 事件**写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记，命令指向 `INSTALL_DIR/hooks/cc-status.js`），首次备份为 `settings.json.cc-status-dot.bak`。
 6. 校验 `INSTALL_DIR/resources` 下 7 个 SVG 齐全（idle/running/running-1/running-2/running-bright/done/error）。
 
-> **升级**：旧版（git clone 装的）用户直接重跑 `npx claude-code-status-dot` 即可——patcher 会检测到旧的 baked 路径过期并**原地改写** IIFE 的 `RES` 与 hook 命令，无需 `--revert` 后重装。
+> **升级**：旧版（git clone 装的）用户直接重跑 `npx vscode-claude-code-status-dot` 即可——patcher 会检测到旧的 baked 路径过期并**原地改写** IIFE 的 `RES` 与 hook 命令，无需 `--revert` 后重装。
 
 ## 2. Reload Window
 
@@ -87,7 +87,7 @@ patch 还在 CC 聊天面板右下角注入一个**聚合色块条**：每个 CC
 
 **图标完全没变**
 - 先 `Developer: Reload Window`。
-- 跑 `npx claude-code-status-dot --status`（开发态 `npx tsx patch.ts --status`）：
+- 跑 `npx vscode-claude-code-status-dot --status`（开发态 `npx tsx patch.ts --status`）：
   - `extension.js patched: no` → 没装上，重跑。
   - `baked RES: ... (STALE ...)` → baked 路径过期（通常是旧版升级），重跑会原地改写。
   - `hooks wired: no` → settings.json 接线丢失，重跑。
@@ -100,12 +100,12 @@ patch 还在 CC 聊天面板右下角注入一个**聚合色块条**：每个 CC
 - 多半是你用 Esc 中断了 CC（无 hook）。下次发 prompt 或等正常完成会自然更正。
 
 **CC 更新后失效**
-- CC 自动更新覆盖了 patched `extension.js`。重跑 `npx claude-code-status-dot`（SVG/hook 运行时副本在 `INSTALL_DIR`，CC 更新不碰它；项目源目录删了也不影响）。
+- CC 自动更新覆盖了 patched `extension.js`。重跑 `npx vscode-claude-code-status-dot`（SVG/hook 运行时副本在 `INSTALL_DIR`，CC 更新不碰它；项目源目录删了也不影响）。
 
 ## 5. 还原
 
 ```bash
-npx claude-code-status-dot --revert
+npx vscode-claude-code-status-dot --revert
 # 开发态：npx tsx patch.ts --revert
 ```
 
@@ -117,7 +117,7 @@ npx claude-code-status-dot --revert
 ## 6. 卸载
 
 ```bash
-npx claude-code-status-dot --revert
+npx vscode-claude-code-status-dot --revert
 ```
 
 然后可选删除项目源目录。`~/.claude/cc-tab-status/` 是用户数据，可自行删除。

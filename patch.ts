@@ -131,10 +131,17 @@ const INSTALL_DIR = path.join(os.homedir(), ".claude", "cc-status-dot");
 const RUNTIME_RES_DIR = path.join(INSTALL_DIR, "resources");
 
 /** The SVGs the injected timer references from this project's resources/.
- *  MUST stay in sync with docs/STATES.md §1 (single source of truth). */
+ *  MUST stay in sync with docs/STATES.md §1 (single source of truth).
+ *  Running breath (candidate A, v0.1.2+): 2-frame dim/bright wave over
+ *  running-dim (#8A6A00 dark) ↔ running-bright (#FFD60A lit) — strong
+ *  light/dark swing reads like a slow LED breath, and 2 frames halve the
+ *  per-period iconPath redraws vs the old 6-step hue triangle (which
+ *  stuttered because tab icons cannot animate via CSS — every frame is
+ *  a discrete VSCode icon repaint). */
 const OUR_SVGS = [
     "claude-logo-idle.svg",
     "claude-logo-running.svg",
+    "claude-logo-running-dim.svg",
     "claude-logo-running-1.svg",
     "claude-logo-running-2.svg",
     "claude-logo-running-bright.svg",
@@ -349,8 +356,16 @@ function countOccurrences(haystack: string, needle: string): number {
 //   t = the `ts` panel instance (has panelTab, context.extensionPath).
 //   Reads ~/.claude/cc-tab-status/<sid>.json -> {state, since, error?}
 //   State machine + notification mirror docs/STATES.md §1/§4/§4b — keep in sync.
-//     running     -> 4-frame triangle wave (6 steps, 3s period) over running/-1/-2/-bright
+//     running     -> 2-frame dim/bright wave over running-dim ↔ running-bright,
+//                    step every 3 ticks (Math.floor(seq/3)%2 → 1500ms per frame,
+//                    3000ms period). Strong dark↔light swing reads as a slow LED
+//                    breath; only 2 iconPath repaints per cycle (down from 6 in
+//                    the old hue triangle) — minimises the stutter that comes
+//                    from VSCode redrawing the tab icon on every iconPath swap
+//                    (tab icons cannot animate via CSS; each swap is a discrete
+//                    repaint, so fewer+more-contrasting frames wins).
 //     interrupted -> flash claude-logo-error.svg <-> CC's claude-logo.svg (off-frame)
+//                    at 500 ms on/off (seq%2) — alerts stay intentionally fast.
 //     done        -> steady claude-logo-done.svg; if since older than 5 min -> idle
 //     idle        -> steady claude-logo-idle.svg
 //     missing/unknown -> return (don't fight CC's own pending/done icon)
@@ -373,7 +388,12 @@ function buildIIFE(resDir: string): string {
         `var RES=${resLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         `var DONE_TO_IDLE_MS=5*60*1000;`,
-        `var RUN_FRAMES=["claude-logo-running.svg","claude-logo-running-1.svg","claude-logo-running-2.svg","claude-logo-running-bright.svg","claude-logo-running-2.svg","claude-logo-running-1.svg"];`,
+        // Candidate A (v0.1.2+): 2-frame dim/bright breath. Math.floor(seq/3)
+        // steps every 3 ticks (1500ms per frame at TICK_MS=500); %2 alternates
+        // dim↔bright; full period = 6 ticks = 3000ms. Old 6-frame hue triangle
+        // was discarded — it had 3x the repaints and the small hue shifts read
+        // as flicker, not breathing.
+        `var RUN_FRAMES=["claude-logo-running-dim.svg","claude-logo-running-bright.svg"];`,
         `var seq=0,prevSt=null;`,
         `function notify(st,err){`,
         `var c=vs.workspace.getConfiguration("ccStatusDot");`,
@@ -400,7 +420,7 @@ function buildIIFE(resDir: string): string {
         `if(!t.__ccFocusWired&&t.webview&&t.webview.onDidReceiveMessage){t.__ccFocusWired=true;t.webview.onDidReceiveMessage(function(m){if(m&&m.type==="cc_focus_session"&&m.sessionId){try{vs.commands.executeCommand("claude-vscode.editor.open",m.sessionId)}catch(e){}}})}`,
         `var svg;`,
         `if(st==="interrupted"){svg=(seq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
-        `else if(st==="running"){svg=pth.join(RES,RUN_FRAMES[seq%6])}`,
+        `else if(st==="running"){svg=pth.join(RES,RUN_FRAMES[Math.floor(seq/3)%2])}`,
         `else if(st==="done"){svg=(since&&(now-since>DONE_TO_IDLE_MS))?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-done.svg")}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
         `else{return}`,
@@ -567,7 +587,10 @@ function buildWebviewJsIIFE(): string {
         `var API=window.__ccVsApi;if(!API)return;`,
         `var COLORS={idle:"#808080",running:"#CCA700",done:"#3FB950",interrupted:"#F85149"};`,
         `var bar=document.createElement("div");bar.id="cc-status-bar";`,
-        `bar.style.cssText="position:fixed;bottom:0;right:0;display:flex;gap:4px;padding:4px 6px;z-index:10001;";`,
+        // IMPORTANT: do NOT set position/bottom/right inline here — inline styles
+        // would override the #cc-status-bar stylesheet rule (webview/index.css)
+        // that pins the bar to the chat pane's right gutter above the input row.
+        // Only `display` is toggled inline (show on message, hide after 2s idle).
         `var hideT=null;`,
         `function mount(){if(!document.body){setTimeout(mount,50);return;}document.body.appendChild(bar);hideT=setTimeout(function(){bar.style.display="none";},2000);}`,
         `if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",mount);else mount();`,
@@ -579,14 +602,23 @@ function buildWebviewJsIIFE(): string {
 
 function buildWebviewCss(): string {
     // EOF-append to webview/index.css. z-index 10001 > CC's max 10000.
-    // bottom:0 may overlap the input row — tune to bottom:44px if it does.
+    // Container: rounded red-framed pill wrapping the dots, aligned to the
+    // chat pane's right inner padding and floating just above the input row.
+    //   bottom:56px — clears the input box (~one textarea row + button row).
+    //   right:14px — matches the chat pane's right inner gutter.
+    //   NEEDS VISUAL FINE-TUNE per CC layout revision (icon padding / webview
+    //   chrome height can shift between versions).
+    // Dots: border:none (user feedback — the old black 1px border and white
+    // active outline looked noisy); 12px rounded squares; hover scale stays.
+    // Active: no white outline — a red glow ring (matches container border) +
+    // opacity:1 emphasises the current session without a white halo.
     return [
         `/*${WV_CSS_MARKER}*/`,
-        `#cc-status-bar{position:fixed;bottom:0;right:0;display:flex;flex-direction:row;gap:4px;padding:4px 6px;z-index:10001;background:transparent;pointer-events:none;}`,
-        `#cc-status-bar .cc-status-dot{width:10px;height:10px;border-radius:3px;cursor:pointer;pointer-events:auto;opacity:.85;transition:transform .12s,opacity .12s;border:1px solid rgba(0,0,0,.25);}`,
+        `#cc-status-bar{position:fixed;bottom:56px;right:14px;display:flex;flex-direction:row;gap:7px;padding:6px 8px;z-index:10001;background:rgba(248,81,73,0.08);border:1px solid rgba(248,81,73,0.55);border-radius:12px;pointer-events:none;backdrop-filter:blur(4px);}`,
+        `#cc-status-bar .cc-status-dot{width:12px;height:12px;border-radius:4px;cursor:pointer;pointer-events:auto;opacity:.9;transition:transform .12s,opacity .12s,box-shadow .12s;border:none;}`,
         `#cc-status-bar .cc-status-dot:hover{opacity:1;transform:scale(1.25);}`,
         `#cc-status-bar .cc-status-dot:active{transform:scale(.9);}`,
-        `#cc-status-bar .cc-status-dot-active{outline:2px solid #fff;outline-offset:1px;opacity:1;}`,
+        `#cc-status-bar .cc-status-dot-active{opacity:1;box-shadow:0 0 0 2px rgba(248,81,73,0.6),0 0 6px 1px rgba(248,81,73,0.4);}`,
         `@keyframes cc-breath{0%{filter:brightness(1);}50%{filter:brightness(1.5);}100%{filter:brightness(1);}}`,
         `#cc-status-bar .cc-status-dot[data-state="running"]{animation:cc-breath 1.5s ease-in-out infinite;}`,
     ].join("");

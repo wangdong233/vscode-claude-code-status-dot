@@ -17,11 +17,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourname/claude-code-status-dot.git"
+    "url": "git+https://github.com/wangdong233/vscode-claude-code-status-dot.git"
   },
-  "homepage": "https://github.com/yourname/claude-code-status-dot#readme",
+  "homepage": "https://github.com/wangdong233/vscode-claude-code-status-dot#readme",
   "bugs": {
-    "url": "https://github.com/yourname/claude-code-status-dot/issues"
+    "url": "https://github.com/wangdong233/vscode-claude-code-status-dot/issues"
   },
   "author": "wangdong",
   "engines": {

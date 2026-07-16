@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 /**
  * patch.ts — Claude Code tab status-dot patcher
  * ---------------------------------------------------------------------------
@@ -14,9 +14,10 @@
  * the SVG filenames and the docs must all stay in sync with it.
  *
  * RUN
- *   tsx patch.ts            # install (discover CC, backup, patch, wire hooks)
- *   tsx patch.ts --revert   # undo everything
- *   tsx patch.ts --status   # dry-run report, no changes
+ *   npx claude-code-status-dot            # install (published bin → dist/patch.js)
+ *   tsx patch.ts                          # install from source (dev)
+ *   tsx patch.ts --revert                 # undo everything (also: published bin --revert)
+ *   tsx patch.ts --status                 # dry-run report, no changes
  *   tsx patch.ts --help
  *   # also works: bun run patch.ts  /  npx tsx patch.ts
  *
@@ -36,12 +37,14 @@
  *   only version-sensitive surface is therefore the two anchor strings below,
  *   which are asserted to match exactly once before any byte is written.
  *
- * SVG WIRING (DESIGN §5 — Option A: absolute path to project resources/)
- *   Our 5 SVGs (claude-logo-idle/running/running-bright/done/error.svg) live in
- *   this project's resources/ and are referenced by absolute path — so a CC
- *   auto-update (which wipes the extension dir) only requires re-running this
- *   patcher, never re-copying art. The interrupted "off-frame" reuses CC's own
- *   claude-logo.svg via this.context.extensionPath.
+ * SVG WIRING (DESIGN §5 — absolute path to a PERSISTENT copy, not the project)
+ *   Our 7 SVGs (claude-logo-idle/running/running-1/-2/-bright/done/error.svg)
+ *   are COPIED from this project's resources/ into INSTALL_DIR
+ *   (~/.claude/cc-status-dot/resources/) at install time, and the injected IIFE
+ *   references that absolute path — so it survives BOTH a CC auto-update (which
+ *   wipes the extension dir) AND deletion of the source project / npx cache
+ *   purge. Just re-run the patcher after a CC update. The interrupted
+ *   "off-frame" reuses CC's own claude-logo.svg via this.context.extensionPath.
  *
  * LIMITATIONS (read before extending)
  *   - If the CC extension updates and the minified anchor strings drift, the
@@ -58,16 +61,43 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { fileURLToPath } from "url";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Project root = directory this script lives in (resources/ and hooks/ live here). */
-const PROJECT_ROOT: string =
-    typeof __dirname !== "undefined" && __dirname
-        ? __dirname
-        : path.dirname(path.resolve(process.argv[1] ?? process.cwd()));
+/** Directory this script FILE lives in.
+ *  Works under `tsx` (patch.ts at project root) and compiled ESM
+ *  (dist/patch.js in the published package): this package is always ESM
+ *  (package.json "type":"module" + tsconfig NodeNext), so import.meta.url is
+ *  always available and is the reliable locator (under ESM __dirname is unset). */
+const SCRIPT_DIR: string = (() => {
+    try {
+        const url = (import.meta as { url?: string }).url;
+        if (url) return path.dirname(fileURLToPath(url));
+    } catch {
+        /* import.meta unavailable — extremely unlikely under our ESM setup */
+    }
+    // Last-resort fallback (only if import.meta.url ever surprises us).
+    return path.dirname(path.resolve(process.argv[1] ?? process.cwd()));
+})();
+
+/** Project root = the directory holding the SOURCE `resources/` and `hooks/` we
+ *  copy FROM at install time.
+ *  - Dev (`npx tsx patch.ts`): SCRIPT_DIR is the project root → resources/ and
+ *    hooks/ sit right beside patch.ts.
+ *  - Compiled (`node dist/patch.js`): SCRIPT_DIR is dist/; the published package
+ *    ships resources/ and hooks/ one level up, so resolve to the parent.
+ *  Auto-detect by checking which candidate actually holds BOTH dirs. */
+const PROJECT_ROOT: string = (() => {
+    for (const c of [SCRIPT_DIR, path.dirname(SCRIPT_DIR)]) {
+        if (fs.existsSync(path.join(c, "resources")) && fs.existsSync(path.join(c, "hooks"))) {
+            return c;
+        }
+    }
+    return SCRIPT_DIR;
+})();
 
 /** Substring baked into the injected JS block. Presence in extension.js === "already patched".
  *  MUST be a block comment (/* *​/) — a // line comment would comment out the rest of the
@@ -83,6 +113,22 @@ const TICK_MS = 500;
 
 /** Per-session state directory read by the injected timer. */
 const STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status");
+
+/** Persistent runtime install dir. A copy of resources/*.svg + hooks/cc-status.js
+ *  lives here so the patched extension and the CC hook keep working even if the
+ *  source project dir is removed or the npx cache is purged. The injected IIFE
+ *  references INSTALL_DIR/resources (baked in at patch time), and the wired hook
+ *  command points at INSTALL_DIR/hooks/cc-status.js.
+ *
+ *  Distinct from STATE_DIR (~/.claude/cc-tab-status/) which is per-session USER
+ *  DATA and is NOT touched by install / --revert. */
+const INSTALL_DIR = path.join(os.homedir(), ".claude", "cc-status-dot");
+
+/** Runtime resources dir — the absolute path baked into the injected IIFE.
+ *  A const (not a fn) because INSTALL_DIR is itself a const: the path is fixed
+ *  once the patcher starts and never varies between call sites. Keeps it in
+ *  line with the sibling UPPER_SNAKE path consts. */
+const RUNTIME_RES_DIR = path.join(INSTALL_DIR, "resources");
 
 /** The SVGs the injected timer references from this project's resources/.
  *  MUST stay in sync with docs/STATES.md §1 (single source of truth). */
@@ -349,9 +395,9 @@ function buildIIFE(resDir: string): string {
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||""}catch(e){}`,
         `if(prevSt&&prevSt!==st&&(st==="done"||st==="interrupted")){try{notify(st,err)}catch(e){}}`,
         `if(st)prevSt=st;`,
-        `try{var files=fs.readdirSync(DIR);var arr=[];for(var fi=0;fi<files.length;fi++){if(!files[fi].endsWith(".json"))continue;var fsid=files[fi].slice(0,-5);try{var jj=JSON.parse(fs.readFileSync(pth.join(DIR,files[fi]),"utf8"));arr.push({sid:fsid,state:jj.state,title:jj.title||"",since:jj.since||0})}catch(e){}}if(t.webview&&t.webview.postMessage){t.webview.postMessage({type:"cc_status_bar",currentSid:t.__ccSid,sessions:arr})}}catch(e){}`,
-        `if(!t.__ccFocusWired&&t.webview&&t.webview.onDidReceiveMessage){t.__ccFocusWired=true;t.webview.onDidReceiveMessage(function(m){if(m&&m.type==="cc_focus_session"&&m.sessionId){try{vs.commands.executeCommand("claude-vscode.editor.open",m.sessionId)}catch(e){}}})}`,
         `var now=Date.now();`,
+        `try{var files=fs.readdirSync(DIR);var arr=[];for(var fi=0;fi<files.length;fi++){if(!files[fi].endsWith(".json"))continue;var fsid=files[fi].slice(0,-5);try{var jj=JSON.parse(fs.readFileSync(pth.join(DIR,files[fi]),"utf8"));var jst=jj.state;if(jst==="done"&&jj.since&&(now-jj.since>DONE_TO_IDLE_MS))jst="idle";arr.push({sid:fsid,state:jst,title:jj.title||"",since:jj.since||0})}catch(e){}}if(t.webview&&t.webview.postMessage){t.webview.postMessage({type:"cc_status_bar",currentSid:t.__ccSid,sessions:arr})}}catch(e){}`,
+        `if(!t.__ccFocusWired&&t.webview&&t.webview.onDidReceiveMessage){t.__ccFocusWired=true;t.webview.onDidReceiveMessage(function(m){if(m&&m.type==="cc_focus_session"&&m.sessionId){try{vs.commands.executeCommand("claude-vscode.editor.open",m.sessionId)}catch(e){}}})}`,
         `var svg;`,
         `if(st==="interrupted"){svg=(seq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
         `else if(st==="running"){svg=pth.join(RES,RUN_FRAMES[seq%6])}`,
@@ -373,13 +419,57 @@ function isExtensionPatched(content: string): boolean {
     return content.includes(INJECT_MARKER);
 }
 
+/** Extract the baked `var RES="..."` path from an already-patched extension.js.
+ *  The IIFE bakes `var RES=<JSON.stringify(resDir)>;` once per injection site
+ *  (Anchor A, optionally Anchor B → 1 or 2 occurrences, all identical). We read
+ *  the first to detect a STALE baked path — e.g. a v0.1 install baked
+ *  PROJECT_ROOT/resources; phase1 bakes INSTALL_DIR/resources. Returns null if
+ *  the literal cannot be found/parsed (treat as "not stale, leave alone").
+ *
+ *  The match is anchored on `cc-tab-status");var RES=` — the DIR literal always
+ *  immediately precedes RES inside OUR IIFE — so a coincidental CC-native
+ *  `var RES=` elsewhere in the minified bundle can never be misread. */
+function bakedResPath(content: string): string | null {
+    const m = content.match(/cc-tab-status"\);var RES=("[^"]*");/);
+    if (!m) return null;
+    try {
+        return JSON.parse(m[1]);
+    } catch {
+        return null;
+    }
+}
+
 function patchExtension(extDir: string): void {
     const extJs = path.join(extDir, "extension.js");
     if (!fs.existsSync(extJs)) fail(`extension.js not found in ${extDir}`);
 
     const src = fs.readFileSync(extJs, "utf8");
     if (isExtensionPatched(src)) {
-        log("extension.js already patched — skipping injection");
+        // Already patched. But the baked RES path may be STALE: a v0.1 install
+        // (git clone + tsx patch.ts) baked PROJECT_ROOT/resources into the IIFE,
+        // while phase1 bakes INSTALL_DIR/resources. If the user merely re-runs
+        // the new patcher over an old install, the marker matches and we would
+        // otherwise skip — leaving the IIFE pointing at a path the user is
+        // expected to delete. Surgically rewrite the RES literal in place so the
+        // upgrade takes effect without needing --revert + reinstall.
+        const wantRes = RUNTIME_RES_DIR;
+        const baked = bakedResPath(src);
+        if (baked === null || baked === wantRes) {
+            log("extension.js already patched — skipping injection");
+            return;
+        }
+        const oldLit = JSON.stringify(baked);
+        const newLit = JSON.stringify(wantRes);
+        const needle = `var RES=${oldLit};`;
+        if (!src.includes(needle)) {
+            warn(`extension.js patched but baked RES literal not found (got ${baked}); skipping RES rewrite`);
+            return;
+        }
+        backupOnce(extJs, extJs + ".bak");
+        // split/join replaces ALL occurrences (Anchor A + optional Anchor B).
+        const next = src.split(needle).join(`var RES=${newLit};`);
+        fs.writeFileSync(extJs, next, "utf8");
+        log(`updated stale baked RES path: ${baked} → ${wantRes}`);
         return;
     }
 
@@ -406,7 +496,7 @@ function patchExtension(extDir: string): void {
     // One-time original backup, only after we know injection will succeed.
     backupOnce(extJs, extJs + ".bak");
 
-    const iife = buildIIFE(path.join(PROJECT_ROOT, "resources"));
+    const iife = buildIIFE(RUNTIME_RES_DIR);
 
     // Anchor A: splice side effects into the return expression via the comma operator.
     // IMPORTANT: we must NOT wrap the consequent in a block. The original chain is
@@ -572,7 +662,15 @@ function hookCommand(hookAbs: string): string {
     // CC pipes the hook JSON via stdin; the script reads hook_event_name from
     // stdin, so no positional arg is needed. `# ${HOOK_MARKER}` is a shell
     // comment — harmless at runtime, greppable for idempotent removal.
-    return `node "${hookAbs}"  # ${HOOK_MARKER}`;
+    //
+    // Bake the ABSOLUTE node binary (process.execPath) rather than bare `node`:
+    // when VS Code is launched from Finder/Spotlight (macOS) it inherits a
+    // reduced PATH where nvm/asdf-managed node bins are often absent, which
+    // would make a bare-`node` hook silently no-op (state file never written →
+    // icon never updates, with no error). An absolute execPath resolves
+    // independently of PATH. Falls back to `node` only if execPath is unset.
+    const nodeBin = process.execPath && fs.existsSync(process.execPath) ? process.execPath : "node";
+    return `${nodeBin} "${hookAbs}"  # ${HOOK_MARKER}`;
 }
 
 /** Build our owned hooks entries (one group per event in HOOK_EVENTS). */
@@ -594,7 +692,7 @@ function groupIsOurs(g: unknown): boolean {
 
 function wireHooks(): void {
     const settings = settingsPath();
-    const hookAbs = path.join(PROJECT_ROOT, "hooks", "cc-status.js");
+    const hookAbs = path.join(INSTALL_DIR, "hooks", "cc-status.js");
 
     let raw = "{}";
     if (fs.existsSync(settings)) raw = fs.readFileSync(settings, "utf8");
@@ -610,8 +708,27 @@ function wireHooks(): void {
     } else {
         for (const ev of Object.keys(ourHooks)) {
             const arr = Array.isArray(existing[ev]) ? existing[ev] : (existing[ev] = []);
-            const already = arr.some(groupIsOurs);
-            if (!already) {
+            const oursIdx = arr.findIndex(groupIsOurs);
+            if (oursIdx >= 0) {
+                // Our group already exists for this event. But its command may
+                // point at a STALE path (v0.1 baked PROJECT_ROOT/hooks/cc-status.js;
+                // phase1 wires INSTALL_DIR/hooks/cc-status.js). If so, rewrite the
+                // command in place rather than skipping — otherwise the hook keeps
+                // firing a script under a dir the user is expected to delete, and
+                // the state machine silently stops writing. Only touch commands
+                // carrying our HOOK_MARKER so user-owned hooks are never mutated.
+                const g = arr[oursIdx] as HookGroup;
+                for (const h of g.hooks) {
+                    if (
+                        typeof h?.command === "string" &&
+                        h.command.includes(HOOK_MARKER) &&
+                        !h.command.includes(hookAbs)
+                    ) {
+                        h.command = hookCommand(hookAbs);
+                        changed = true;
+                    }
+                }
+            } else {
                 arr.push(ourHooks[ev][0]);
                 changed = true;
             }
@@ -683,10 +800,95 @@ function ensureStateDir(): void {
     }
 }
 
+/**
+ * Copy our runtime files (resources/*.svg + hooks/cc-status.js) from PROJECT_ROOT
+ * into INSTALL_DIR so the patched extension (IIFE bakes INSTALL_DIR/resources) and
+ * the wired CC hook (INSTALL_DIR/hooks/cc-status.js) keep resolving after the
+ * source project is deleted or the npx cache is purged.
+ *
+ * Idempotent: every install overwrites — updating is just "re-run". Copy failures
+ * are warned, never fatal (so a single unreadable SVG never blocks the whole patch).
+ */
+function installRuntimeFiles(): void {
+    try {
+        fs.mkdirSync(INSTALL_DIR, { recursive: true });
+        const destRes = path.join(INSTALL_DIR, "resources");
+        const destHooks = path.join(INSTALL_DIR, "hooks");
+        fs.mkdirSync(destRes, { recursive: true });
+        fs.mkdirSync(destHooks, { recursive: true });
+        const srcRes = path.join(PROJECT_ROOT, "resources");
+        let copied = 0;
+        for (const svg of OUR_SVGS) {
+            const srcFile = path.join(srcRes, svg);
+            try {
+                if (fs.existsSync(srcFile)) {
+                    fs.copyFileSync(srcFile, path.join(destRes, svg));
+                    copied += 1;
+                } else {
+                    warn(`source SVG missing, not copied: ${svg}`);
+                }
+            } catch {
+                warn(`failed to copy ${svg} (non-fatal)`);
+            }
+        }
+        const srcHook = path.join(PROJECT_ROOT, "hooks", "cc-status.js");
+        try {
+            if (fs.existsSync(srcHook)) {
+                fs.copyFileSync(srcHook, path.join(destHooks, "cc-status.js"));
+            } else {
+                warn("source hook missing, not copied: hooks/cc-status.js");
+            }
+        } catch {
+            warn("failed to copy hooks/cc-status.js (non-fatal)");
+        }
+        log(`installed runtime files → ${INSTALL_DIR} (${copied}/${OUR_SVGS.length} SVGs + hook)`);
+    } catch (e) {
+        warn(`runtime install dir setup failed: ${(e as Error).message}`);
+        warn(`the IIFE/hook will reference ${INSTALL_DIR} — ensure files exist there or re-run.`);
+    }
+}
+
+/**
+ * Remove our persistent runtime install dir (--revert). Per-session STATE_DIR is
+ * USER DATA and is intentionally left untouched.
+ */
+function removeInstallDir(): void {
+    if (!fs.existsSync(INSTALL_DIR)) {
+        log(`runtime install dir absent — nothing to clean: ${INSTALL_DIR}`);
+        return;
+    }
+    try {
+        fs.rmSync(INSTALL_DIR, { recursive: true, force: true });
+        log(`removed runtime install dir: ${INSTALL_DIR}`);
+    } catch (e) {
+        warn(`could not remove ${INSTALL_DIR}: ${(e as Error).message} (remove manually)`);
+    }
+}
+
+/**
+ * Report `.bak` files left behind by --revert. These are kept intentionally as a
+ * safety net (backupOnce never overwrites an existing .bak, so they hold the
+ * PRE-patch originals), but the user should know they exist and how to remove
+ * them once they're confident the revert is good.
+ */
+function reportResidualBaks(extDir: string): void {
+    const candidates = [
+        path.join(extDir, "extension.js.bak"),
+        path.join(extDir, "webview", "index.js.bak"),
+        path.join(extDir, "webview", "index.css.bak"),
+        settingsPath() + ".cc-status-dot.bak",
+    ];
+    const left = candidates.filter((p) => fs.existsSync(p));
+    if (left.length === 0) return;
+    log(`Intentionally kept ${left.length} .bak safety cop${left.length === 1 ? "y" : "ies"} (pre-patch originals):`);
+    for (const p of left) log(`  - ${p}`);
+    log(`Remove manually if you're confident the revert is good.`);
+}
+
 function checkSvgs(resDir: string): void {
     const missing = OUR_SVGS.filter((f) => !fs.existsSync(path.join(resDir, f)));
     if (missing.length === 0) {
-        log(`all ${OUR_SVGS.length} status SVGs present in ${path.relative(PROJECT_ROOT, resDir) || resDir}`);
+        log(`all ${OUR_SVGS.length} status SVGs present in ${resDir}`);
         return;
     }
     warn(`missing SVGs in ${resDir}:`);
@@ -710,13 +912,32 @@ function reportStatus(): void {
     log(`CC extension: v${version}`);
     log(`  ${dir}`);
     const extJs = path.join(dir, "extension.js");
-    const patched = fs.existsSync(extJs) && isExtensionPatched(fs.readFileSync(extJs, "utf8"));
+    const extSrc = fs.existsSync(extJs) ? fs.readFileSync(extJs, "utf8") : "";
+    const patched = isExtensionPatched(extSrc);
     log(`extension.js patched: ${patched ? "YES" : "no"}`);
+    if (patched) {
+        // Surface a stale baked RES (e.g. v0.1 install pointing at PROJECT_ROOT)
+        // so upgrading users can see they need a re-run, not just a reload.
+        const baked = bakedResPath(extSrc);
+        if (baked === null) {
+            log(`  baked RES: (not detectable)`);
+        } else if (baked === RUNTIME_RES_DIR) {
+            log(`  baked RES: ${baked} (matches INSTALL_DIR)`);
+        } else {
+            log(`  baked RES: ${baked} (STALE — expected ${RUNTIME_RES_DIR}; re-run to update)`);
+        }
+    }
     const wvJs = path.join(dir, "webview", "index.js");
     const wvPatched = fs.existsSync(wvJs) && fs.readFileSync(wvJs, "utf8").includes(WV_API_MARKER);
     log(`webview patched (status bar): ${wvPatched ? "YES" : "no"}`);
     log(`hooks wired: ${isHooksWired() ? "YES" : "no"}`);
-    checkSvgs(path.join(PROJECT_ROOT, "resources"));
+    // The injected IIFE references RUNTIME_RES_DIR (INSTALL_DIR/resources).
+    // Check THERE honestly — do NOT silently fall back to the project source
+    // copy, which would hide a real "icons will go blank" risk (a fallback to
+    // PROJECT_ROOT would report "all present" while the baked path points at an
+    // empty/missing INSTALL_DIR). Before install this will (correctly) warn.
+    checkSvgs(RUNTIME_RES_DIR);
+    log(`runtime install dir: ${INSTALL_DIR} ${fs.existsSync(INSTALL_DIR) ? "(exists)" : "(will be created on install)"}`);
     log(`state dir: ${STATE_DIR} ${fs.existsSync(STATE_DIR) ? "(exists)" : "(will be created on first hook fire)"}`);
 }
 
@@ -726,10 +947,15 @@ function printHelp(): void {
             "cc-status-dot patcher",
             "",
             "Usage:",
-            "  tsx patch.ts            install patch + wire hooks (idempotent)",
-            "  tsx patch.ts --revert   restore extension.js, remove hooks",
-            "  tsx patch.ts --status   show detection results, change nothing",
-            "  tsx patch.ts --help     this message",
+            "  claude-code-status-dot            install patch + wire hooks (idempotent)",
+            "  claude-code-status-dot --revert   restore extension.js/webview, remove hooks + runtime copy",
+            "  claude-code-status-dot --status   show detection results, change nothing",
+            "  claude-code-status-dot --help     this message",
+            "",
+            "  (from source, replace the command with: npx tsx patch.ts)",
+            "",
+            "Runtime files (resources/*.svg, hooks/cc-status.js) are copied to:",
+            "  " + INSTALL_DIR,
             "",
             "After install/revert, reload VS Code: Cmd+Shift+P → 'Developer: Reload Window'.",
         ].join("\n"),
@@ -752,7 +978,7 @@ function run(argv: string[]): void {
     }
     if (args.includes("--check-iife")) {
         // Dev: dump the injected IIFE string for syntax verification (node --check).
-        console.log(buildIIFE(path.join(PROJECT_ROOT, "resources")));
+        console.log(buildIIFE(RUNTIME_RES_DIR));
         return;
     }
     if (args.includes("--status")) {
@@ -766,9 +992,11 @@ function run(argv: string[]): void {
         restoreExtension(dir);
         restoreWebview(dir);
         unwireHooks();
-        // Option A (absolute SVG path) copies nothing into CC resources, so there
-        // are no SVGs to delete. State dir left in place (user data).
-        log("No SVGs were copied into the CC extension dir (absolute-path mode) — nothing to remove there.");
+        // Remove our persistent runtime copy (resources + hook). STATE_DIR holds
+        // per-session USER DATA and is intentionally kept.
+        removeInstallDir();
+        log(`Per-session state dir left in place (user data): ${STATE_DIR}`);
+        reportResidualBaks(dir);
         reloadHint();
         return;
     }
@@ -778,10 +1006,13 @@ function run(argv: string[]): void {
     const { dir, version } = discoverExtension();
     log(`CC extension v${version}: ${dir}`);
     ensureStateDir();
+    // Persist runtime files FIRST: the IIFE baked into extension.js references
+    // INSTALL_DIR/resources, and the wired hook references INSTALL_DIR/hooks.
+    installRuntimeFiles();
     patchExtension(dir);
     patchWebview(dir);
     wireHooks();
-    checkSvgs(path.join(PROJECT_ROOT, "resources"));
+    checkSvgs(RUNTIME_RES_DIR);
     reloadHint();
 }
 

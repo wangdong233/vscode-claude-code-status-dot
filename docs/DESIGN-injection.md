@@ -84,6 +84,8 @@ this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)
 
 ## 5. SVG 引用方式：**绝对路径引用本项目 resources/**（推荐）
 
+> **v0.2 演进（见 [STATES.md §3a](STATES.md)）**：A 的"劣"（移动/删除项目目录即失效）已被克服——phase1 在安装时把 7 个 SVG 复制到 `INSTALL_DIR`（`~/.claude/cc-status-dot/resources/`），IIFE bake 的是该**持久绝对路径**而非项目源目录。下面的方案对比保留作设计史；当前实现 = "A 的优" + "无 A 的劣"（删项目源 / npx 缓存被清都不影响）。
+
 | 方案 | 优 | 劣 |
 |---|---|---|
 | **A. 绝对路径 → 本项目 resources/**（推荐） | CC 自动更新只覆盖扩展目录，**SVG 不丢**（只需重 patch extension.js）；iconPath=`Uri.file(abs)` 对任意绝对路径生效（不受 webview `localResourceRoots` 限制）；SVG 单一源头、便于迭代动画 | 用户移动项目目录后需重跑 patcher bake 新路径 |

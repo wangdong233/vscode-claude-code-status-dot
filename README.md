@@ -31,11 +31,21 @@
 
 **前置**：Node.js 18+；Claude Code 的 VSCode 扩展已安装。
 
+**推荐（发布后一行装，无需 clone 源码）**：
+
+```bash
+npx claude-code-status-dot   # patch + 自动接 hooks + 校验（幂等）
+```
+
+**或从源码（开发态）**：
+
 ```bash
 git clone <this-repo> claude-code-status-dot
 cd claude-code-status-dot
-npx tsx patch.ts          # patch + 自动接 hooks + 校验（幂等）
+npx tsx patch.ts
 ```
+
+两种方式等价、幂等，都会把运行时副本（7 个 SVG + hook 脚本）复制到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`），IIFE 与接线的 hook 都引用该绝对路径——**删除项目源目录或 npx 缓存被清都不影响已 patch 的扩展**。
 
 然后 **Reload Window**：`Cmd+Shift+P`（Mac）/ `Ctrl+Shift+P`（Win）→ `Developer: Reload Window`。
 
@@ -45,9 +55,11 @@ npx tsx patch.ts          # patch + 自动接 hooks + 校验（幂等）
 
 | 命令 | 作用 |
 |---|---|
-| `npx tsx patch.ts` | 安装（patch `extension.js` + `webview` + 接 hooks，幂等） |
-| `npx tsx patch.ts --revert` | 还原（从 `.bak` 恢复 `extension.js` + `webview`，移除 hooks） |
-| `npx tsx patch.ts --status` | dry-run 报告，不改任何文件 |
+| `npx claude-code-status-dot` | 安装（patch `extension.js` + `webview` + 接 hooks，幂等） |
+| `npx claude-code-status-dot --revert` | 还原（从 `.bak` 恢复 `extension.js` + `webview`，移除 hooks + 运行时副本） |
+| `npx claude-code-status-dot --status` | dry-run 报告，不改任何文件 |
+
+> 开发态把命令换成 `npx tsx patch.ts`（带同样参数）。
 
 ## 通知配置（可选）
 
@@ -73,8 +85,8 @@ npx tsx patch.ts          # patch + 自动接 hooks + 校验（幂等）
 
 - **`extension.js`**：一个 500ms 定时器（IIFE）——读状态文件设 tab 图标 + 聚合所有会话状态推给 webview + 监听"点击切 tab"消息。
 - **`webview`**：右下角色块条（vanilla DOM，挂在 body，**不进 React 树**，零渲染干扰）+ 点击回传切 tab。
-- **CC hooks** 把每个会话状态写入 `~/.claude/cc-tab-status/<session_id>.json`（`{state, since, error?}`）。
-- **7 个 SVG**（idle / running×4 帧 / done / error）在本项目 `resources/`，按绝对路径引用（CC 更新只覆盖扩展目录，SVG 不丢）。
+- **CC hooks** 把每个会话状态写入 `~/.claude/cc-tab-status/<session_id>.json`（`{state, since, error?}`），hook 脚本接线指向 `INSTALL_DIR/hooks/cc-status.js`。
+- **7 个 SVG**（idle / running×4 帧 / done / error）在安装时复制到 `INSTALL_DIR/resources/`，IIFE 按该绝对路径引用——CC 更新只覆盖扩展目录、删项目源也不丢（重跑 patch 即恢复）。
 
 详见 [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)（图标注入）+ [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md)（色块条注入）。
 
@@ -84,7 +96,9 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 
 ## FAQ
 
-**CC 更新后状态点不亮了？** CC 自动更新整体替换扩展目录，patched 文件被原版覆盖。重跑 `npx tsx patch.ts`（SVG 在本项目目录不丢）。
+**CC 更新后状态点不亮了？** CC 自动更新整体替换扩展目录，patched 文件被原版覆盖。重跑 `npx claude-code-status-dot`（SVG/hook 运行时副本在 `INSTALL_DIR`，CC 更新不碰它；项目源目录删了也不影响）。
+
+**从旧版（git clone 装）升级？** 直接重跑 `npx claude-code-status-dot`——patcher 会检测到旧的 baked 路径过期并原地改写，无需 `--revert` 后重装。
 
 **刚装完图标没变？** 先 `Developer: Reload Window`。还不行跑 `--status` 看报告。
 
@@ -109,10 +123,10 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 ## 卸载
 
 ```bash
-npx tsx patch.ts --revert   # 还原 extension.js + webview + 移除 hooks
+npx claude-code-status-dot --revert   # 还原 extension.js + webview + 移除 hooks + 删 INSTALL_DIR
 ```
 
-然后删除本项目目录。`~/.claude/cc-tab-status/` 是用户数据，可自行删除。
+`--revert` 会保留 `~/.claude/cc-tab-status/`（用户数据）和首次的 `.bak` 安全副本（可手动删）。开发态命令为 `npx tsx patch.ts --revert`。
 
 ## License
 

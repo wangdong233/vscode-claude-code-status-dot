@@ -30,7 +30,7 @@
 | `PreToolUse` | `running` | 心跳，刷新 `since` |
 | `PostToolUse` | `running` | 心跳，刷新 `since` |
 | `SubagentStart` | `running` | **早信号**：subagent 一 spawn 即黄；`activeSubagents` 优先用 `background_tasks` 纠正，否则 +1 |
-| `SubagentStop` | `running`（若仍有在飞任务）/ **不写**（若归零） | `activeSubagents` 优先用 `background_tasks` 纠正，否则 −1（clamp 0）；归零时不抢断，终态交 `Stop` |
+| `SubagentStop` | `running`（若仍有在飞任务）/ **保持 cur.state（归零时不抢断，写回 activeSubagents:0）** | `activeSubagents` 优先用 `background_tasks` 纠正，否则 −1（clamp 0）；**始终写回**（落盘递减后的计数 + cur.state），归零时不抢断终态、交 `Stop` 裁定。绝不返回 null，否则磁盘上残留陈旧非零计数会误导下一条 `Stop` 误判 running |
 | `Stop` | `done`，**除非** `background_tasks`/`activeSubagents > 0` → `running` | 权威裁定：workflow 后台跑期间不假绿（v2.1.145+）；旧版本退化为 `activeSubagents` 计数 |
 | `StopFailure` | `interrupted` | 记 `error` 枚举（rate_limit/overloaded/…）；中断优先，保留 `activeSubagents` |
 | `SessionEnd` | （删除该 session 状态文件） | 清理 |
@@ -52,6 +52,15 @@
   - `background_tasks[]` / `session_crons[]`：**hook payload 字段（CC v2.1.145+），不落盘**——Stop/SubagentStop 时由 writer 就地读取作权威判定（覆盖 workflow/subagent/teammate 等全类型）。
 - 写入：**原子**（`.tmp` + `rename`），目录自动创建；writer 为 **read-modify-write**（读当前 `activeSubagents` → 改 → 原子写回）
 - reader 读失败（文件不存在 / JSON 破损）→ 跳过本帧，**不覆盖**图标（保留 CC 原生 pending/done）
+
+### 3a. `~/.claude/` 路径地图（两个目录，勿混淆）
+
+| 目录 | 内容 | 由谁创建 | `--revert` 是否清理 |
+|---|---|---|---|
+| `~/.claude/cc-tab-status/` | **状态 IPC 文件**（本节 §3，每 session 一个 `<sid>.json`） | writer（hook）首次写入 | **否**（用户数据，保留） |
+| `~/.claude/cc-status-dot/`（`INSTALL_DIR`） | **运行时副本**：`resources/*.svg`（7 个，reader 引用）+ `hooks/cc-status.js`（settings.json 接线的 hook 目标） | patcher 安装时从项目源复制（幂等覆盖） | **是**（删整个目录） |
+
+> **持久化设计（v0.2）**：reader（注入 IIFE）的 `RES` 与 settings.json 接线的 hook 命令都指向 `INSTALL_DIR` 的**绝对路径**，而非项目源目录。这样即使用户删除项目目录或 npx 缓存被清，已 patch 的扩展仍能照常渲染。安装一行：`npx claude-code-status-dot`。`PROJECT_ROOT` 仅用于"复制源"（安装时读一次），编译后从 `dist/patch.js` 运行时自动回溯到包根目录。
 
 ---
 
@@ -103,7 +112,8 @@ RUN_FRAMES = [running, running-1, running-2, running-bright, running-2, running-
 
 - **手动 Esc 中断无 hook**：CC 不触发 Stop/StopFailure（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)），状态会停在 `running`。reader 无 watchdog（当前版本不做主动推断），靠下一次 `UserPromptSubmit`/`Stop` 自然更正。
 - **多 session**：每个 CC panel 实例各自一个 500ms 定时器，按各自 `__ccSid` 读各自状态文件，互不干扰。
-- **CC 自动更新**：覆盖 patched `extension.js` → 静默失效，需重跑 `tsx patch.ts`（SVG 在本项目目录不丢）。
+- **CC 自动更新**：覆盖 patched `extension.js` → 静默失效，需重跑 `npx claude-code-status-dot`（或开发态 `npx tsx patch.ts`）。SVG/hook 运行时副本在 `INSTALL_DIR`（`~/.claude/cc-status-dot/`），CC 更新不碰它；项目源目录删了也不影响已 patch 的扩展。
+- **运行时副本与源解耦**：reader（IIFE 的 `RES`）与 settings.json 接线的 hook 命令都引用 `INSTALL_DIR` 绝对路径。`INSTALL_DIR` 在安装时由 patcher 从 `PROJECT_ROOT`（包根的 `resources/`+`hooks/`）幂等复制；`--revert` 删除整个 `INSTALL_DIR`，但**保留** `~/.claude/cc-tab-status/`（用户数据）。
 - **VSCode 完全关闭时不通知**：IIFE 跑在 CC 扩展宿主进程，VSCode 关闭则 IIFE 不运行 → 不通知（v2 可由 hook 补位）。
 - **系统通知点击不可跳转 CC tab**：osascript 无 click callback；通知仅提醒，回 VSCode 后靠 tab 绿/红点定位。
 - **macOS 首次授权**：首次 osascript 通知会弹"X 想发送通知"授权，一次性。
@@ -117,6 +127,7 @@ RUN_FRAMES = [running, running-1, running-2, running-bright, running-2, running-
 除 tab 图标点外，patch 还在 CC webview 右下角注入一个**聚合色块条**（vanilla DOM `position:fixed`，不进 React 树）：每个 session 一个小色块，颜色同 §1 四态，点击切到对应 session tab。
 
 - **数据源**：复用本表状态文件，由 extension.js IIFE 聚合后 postMessage 推给 webview（webview 沙箱无 fs）。
+- **done→idle 口径与 tab 图标一致**：聚合条在推送前对每个 session 应用与 §1/§4 相同的"done 超 5 分钟→idle"衰减，故同一 session 的 tab 点与色块条永不出现一灰一绿的矛盾。
 - **点击切 tab**：webview postMessage `cc_focus_session` → extension.js `onDidReceiveMessage` → `vscode.commands.executeCommand("claude-vscode.editor.open", sid)`（已存在 panel 走 reveal）。
 - **2 秒无数据自动隐藏**（兼容 sidebar 等无桥 webview）。
 - 详见 [`WEBVIEW-injection.md`](WEBVIEW-injection.md)。

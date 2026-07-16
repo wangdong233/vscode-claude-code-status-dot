@@ -31,11 +31,21 @@ Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](doc
 
 **Prerequisites**: Node.js 18+; Claude Code's VSCode extension installed.
 
+**Recommended (one-liner after publish — no need to clone)**:
+
+```bash
+npx claude-code-status-dot   # patch + auto-wire hooks + verify (idempotent)
+```
+
+**Or from source (dev)**:
+
 ```bash
 git clone <this-repo> claude-code-status-dot
 cd claude-code-status-dot
-npx tsx patch.ts          # patch + auto-wire hooks + verify (idempotent)
+npx tsx patch.ts
 ```
+
+Both are equivalent and idempotent. They copy the runtime files (7 SVGs + the hook script) into `~/.claude/cc-status-dot/` (`INSTALL_DIR`); the injected IIFE and the wired hook both reference that absolute path — **deleting the source project or purging the npx cache does not affect the patched extension**.
 
 Then **Reload Window**: `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win) → `Developer: Reload Window`.
 
@@ -45,9 +55,11 @@ Submit a prompt, watch the tab icon breathe yellow; on completion → green + (i
 
 | Command | Effect |
 |---|---|
-| `npx tsx patch.ts` | Install (patch `extension.js` + `webview` + wire hooks, idempotent) |
-| `npx tsx patch.ts --revert` | Restore (`extension.js` + `webview` from `.bak`, remove hooks) |
-| `npx tsx patch.ts --status` | Dry-run report, changes nothing |
+| `npx claude-code-status-dot` | Install (patch `extension.js` + `webview` + wire hooks, idempotent) |
+| `npx claude-code-status-dot --revert` | Restore (`extension.js` + `webview` from `.bak`, remove hooks + runtime copy) |
+| `npx claude-code-status-dot --status` | Dry-run report, changes nothing |
+
+> For dev, swap the command for `npx tsx patch.ts` (same flags).
 
 ## Notification config (optional)
 
@@ -73,8 +85,8 @@ Add to VSCode's `settings.json`:
 
 - **`extension.js`**: a 500ms timer (IIFE) — reads state files to set tab icons + aggregates all session states and pushes them to the webview + listens for "switch tab" clicks.
 - **`webview`**: the bottom-right status bar (vanilla DOM, attached to body, **outside the React tree** — zero render interference) + click-to-switch messages.
-- **CC hooks** write each session's state to `~/.claude/cc-tab-status/<session_id>.json` (`{state, since, error?}`).
-- **7 SVGs** (idle / running×4 frames / done / error) in this project's `resources/`, referenced by absolute path (a CC update only wipes the extension dir, SVGs are never lost).
+- **CC hooks** write each session's state to `~/.claude/cc-tab-status/<session_id>.json` (`{state, since, error?}`); the wired hook command points at `INSTALL_DIR/hooks/cc-status.js`.
+- **7 SVGs** (idle / running×4 frames / done / error) are copied into `INSTALL_DIR/resources/` at install time and referenced by that absolute path — a CC update only wipes the extension dir and deleting the source project doesn't lose them (re-run the patch to restore).
 
 See [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) (icon injection) + [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md) (status bar injection).
 
@@ -84,7 +96,9 @@ A VSCode `WebviewPanel` tab icon (`iconPath`) is set **exclusively by the extens
 
 ## FAQ
 
-**After a CC update the status dot stopped lighting up?** A CC auto-update replaces the entire extension dir, overwriting the patched files with the originals. Re-run `npx tsx patch.ts` (SVGs live in this project's dir and aren't lost).
+**After a CC update the status dot stopped lighting up?** A CC auto-update replaces the entire extension dir, overwriting the patched files with the originals. Re-run `npx claude-code-status-dot` (the SVG/hook runtime copies live in `INSTALL_DIR`, which a CC update doesn't touch; deleting the source project doesn't matter either).
+
+**Upgrading from an old (git clone) install?** Just re-run `npx claude-code-status-dot` — the patcher detects the stale baked path and rewrites it in place; no need to `--revert` first.
 
 **Just installed and the icon didn't change?** First run `Developer: Reload Window`. If it still doesn't work, run `--status` and read the report.
 
@@ -109,10 +123,10 @@ This project modifies Claude Code's `extension.js` + `webview/index.js` + `webvi
 ## Uninstall
 
 ```bash
-npx tsx patch.ts --revert   # restore extension.js + webview + remove hooks
+npx claude-code-status-dot --revert   # restore extension.js + webview + remove hooks + delete INSTALL_DIR
 ```
 
-Then delete this project's directory. `~/.claude/cc-tab-status/` is user data; delete it yourself if you wish.
+`--revert` keeps `~/.claude/cc-tab-status/` (user data) and the first-run `.bak` safety copies (remove manually if you wish). For dev, the command is `npx tsx patch.ts --revert`.
 
 ## License
 

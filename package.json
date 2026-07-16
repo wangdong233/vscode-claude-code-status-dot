@@ -4,9 +4,16 @@
   "description": "Colorize Claude Code's VSCode tab icon with 4-state status dots (idle/running/done/interrupted) via a minimal, reversible patch.",
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "claude-code-status-dot": "dist/patch.js"
+  },
   "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
     "patch": "npx tsx patch.ts",
-    "revert": "npx tsx patch.ts --revert"
+    "revert": "npx tsx patch.ts --revert",
+    "status": "npx tsx patch.ts --status",
+    "test": "node hooks/test-cc-status.js"
   },
   "keywords": [
     "claude-code",
@@ -28,9 +35,16 @@
     "node": ">=18"
   },
   "files": [
-    "patch.ts",
-    "hooks/**/*",
-    "resources/**/*",
-    "docs/**/*.md"
-  ]
+    "dist/",
+    "resources/*.svg",
+    "hooks/",
+    "docs/",
+    "*.md",
+    "LICENSE",
+    "tsconfig.json"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
 }

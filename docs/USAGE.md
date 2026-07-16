@@ -6,22 +6,32 @@
 
 前置：Node.js 18+、Claude Code 的 VSCode 扩展已安装。
 
+**推荐（发布后一行装，无需 clone 源码）**：
+
+```bash
+npx claude-code-status-dot
+```
+
+**或从源码（开发态）**：
+
 ```bash
 git clone <this-repo> claude-code-status-dot
 cd claude-code-status-dot
 npx tsx patch.ts
 ```
 
+两种方式等价、幂等，都会把运行时副本（7 个 SVG + hook 脚本）复制到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`），注入的 IIFE 与接线的 hook 都引用该**绝对路径**——所以即便删除项目源目录或 npx 缓存被清，已 patch 的扩展仍照常渲染。
+
 `patch.ts` 执行流程：
 
 1. 在 `~/.vscode/extensions`（及 insiders / server / cursor / vscodium）下查找 `anthropic.claude-code-*`，选版本最高的。
 2. 校验 `extension.js` 中两段 anchor 字符串的命中数（Anchor A 必须唯一命中，Anchor B 命中 0 或 1 次）。命中失败则**不写任何文件**并报错。
 3. 备份 `extension.js` → `extension.js.bak`（仅首次）。
-4. 注入 IIFE（含 `setInterval` 500ms 重绘 + done/interrupted 通知逻辑），把 `resources/` 的绝对路径 bake 进注入块。
-5. 把 6 个 hook 事件写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记），首次备份为 `settings.json.cc-status-dot.bak`。
-6. 校验 `resources/` 下 7 个 SVG 齐全（idle/running/running-1/running-2/running-bright/done/error）。
+4. 注入 IIFE（含 `setInterval` 500ms 重绘 + done/interrupted 通知逻辑），把 `INSTALL_DIR/resources` 的绝对路径 bake 进注入块。
+5. 把 **8 个 hook 事件**写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记，命令指向 `INSTALL_DIR/hooks/cc-status.js`），首次备份为 `settings.json.cc-status-dot.bak`。
+6. 校验 `INSTALL_DIR/resources` 下 7 个 SVG 齐全（idle/running/running-1/running-2/running-bright/done/error）。
 
-> hook 接线由 patcher 自动完成。如果你想手工接线，参考 [`../hooks/settings-snippet.json`](../hooks/settings-snippet.json)。
+> **升级**：旧版（git clone 装的）用户直接重跑 `npx claude-code-status-dot` 即可——patcher 会检测到旧的 baked 路径过期并**原地改写** IIFE 的 `RES` 与 hook 命令，无需 `--revert` 后重装。
 
 ## 2. Reload Window
 
@@ -77,10 +87,11 @@ patch 还在 CC 聊天面板右下角注入一个**聚合色块条**：每个 CC
 
 **图标完全没变**
 - 先 `Developer: Reload Window`。
-- 跑 `npx tsx patch.ts --status`：
-  - `extension.js patched: no` → 没装上，重跑 `npx tsx patch.ts`。
-  - `hooks wired: no` → settings.json 接线丢失，重跑 patch。
-  - `missing SVGs` → `resources/` 缺文件，从仓库补齐。
+- 跑 `npx claude-code-status-dot --status`（开发态 `npx tsx patch.ts --status`）：
+  - `extension.js patched: no` → 没装上，重跑。
+  - `baked RES: ... (STALE ...)` → baked 路径过期（通常是旧版升级），重跑会原地改写。
+  - `hooks wired: no` → settings.json 接线丢失，重跑。
+  - `missing SVGs` → `INSTALL_DIR/resources` 缺文件，重跑会从源补齐。
 
 **patch 报 "Anchor mismatch"**
 - CC 的 minified 代码漂移了。patcher 已拒绝写入，扩展未被破坏。到项目 issue 区提 issue 并附 CC 版本号。
@@ -89,21 +100,24 @@ patch 还在 CC 聊天面板右下角注入一个**聚合色块条**：每个 CC
 - 多半是你用 Esc 中断了 CC（无 hook）。下次发 prompt 或等正常完成会自然更正。
 
 **CC 更新后失效**
-- CC 自动更新覆盖了 patched `extension.js`。重跑 `npx tsx patch.ts`（SVG 不丢）。
+- CC 自动更新覆盖了 patched `extension.js`。重跑 `npx claude-code-status-dot`（SVG/hook 运行时副本在 `INSTALL_DIR`，CC 更新不碰它；项目源目录删了也不影响）。
 
 ## 5. 还原
 
 ```bash
-npx tsx patch.ts --revert
+npx claude-code-status-dot --revert
+# 开发态：npx tsx patch.ts --revert
 ```
 
-- 从 `extension.js.bak` 恢复原版 `extension.js`。
+- 从 `extension.js.bak` 恢复原版 `extension.js`（及 webview）。
 - 从 `settings.json` 中基于标记精确移除本项目 hook 条目（不影响你其它 hook）。
+- 删除 `INSTALL_DIR`（运行时副本）；**保留** `~/.claude/cc-tab-status/`（用户数据）。
+- 末尾会列出残留的 `.bak` 安全副本及手动删除命令（可选清理）。
 
 ## 6. 卸载
 
 ```bash
-npx tsx patch.ts --revert
+npx claude-code-status-dot --revert
 ```
 
-然后删除本项目目录。`~/.claude/cc-tab-status/` 是用户数据，可自行删除。
+然后可选删除项目源目录。`~/.claude/cc-tab-status/` 是用户数据，可自行删除。

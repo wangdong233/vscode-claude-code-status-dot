@@ -1,0 +1,31 @@
+# EditorConfig — https://editorconfig.org
+# Cross-editor / cross-IDE baseline that complements .prettierrc.json. Every
+# contributor's editor (VSCode, JetBrains, vim, emacs, …) picks this up
+# automatically; no per-editor setup needed. Prettier remains the authority
+# for final formatting, but this stops editors from fighting it on save.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+# patch.ts follows Prettier's TS default: 4-space indent, double quotes.
+[*.ts]
+indent_size = 4
+
+# hooks/*.js and *.mjs use the Node/JS community convention: 2-space indent,
+# single quotes. Prettier's .prettierrc.json `overrides` section mirrors this
+# so `prettier --write` preserves the split instead of "correcting" it.
+[*.{js,mjs}]
+indent_size = 2
+
+[*.{json,jsonc}]
+indent_size = 2
+
+[*.{md,markdown}]
+indent_size = 2
+trim_trailing_whitespace = false

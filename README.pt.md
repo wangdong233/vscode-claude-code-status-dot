@@ -35,13 +35,13 @@
 
 <div align="center">
 
-<img src="doc/status-dots.png" width="640" alt="Pontos de estado">
+<img src="docs/images/status-dots.png" width="640" alt="Pontos de estado">
 
 *Pontos de estado nas tabs do topo e na vista "Open Editors" — amarelo em execução, verde concluído, vermelho interrompido*
 
 <br>
 
-<img src="doc/completion-notification.png" width="640" alt="Notificação de conclusão">
+<img src="docs/images/completion-notification.png" width="640" alt="Notificação de conclusão">
 
 *Notificação do sistema e som quando a sessão é concluída*
 
@@ -258,7 +258,7 @@ Se o vscode-claude-code-status-dot te ajudou, considere pagar um café para o au
 
 WeChat | Alipay
 :-: | :-:
-<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
 
 
 </div>

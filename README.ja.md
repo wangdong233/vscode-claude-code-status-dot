@@ -35,13 +35,13 @@
 
 <div align="center">
 
-<img src="doc/status-dots.png" width="640" alt="状態ドット">
+<img src="docs/images/status-dots.png" width="640" alt="状態ドット">
 
 **上部タブバーと左の「開いているエディター（Open Editors）」に各セッションの状態ドットを表示**<br>（🟡 実行中 / 🟢 完了 / 🔴 中断）
 
 <br>
 
-<img src="doc/completion-notification.png" width="640" alt="完了通知">
+<img src="docs/images/completion-notification.png" width="640" alt="完了通知">
 
 **セッション完了時の macOS システム通知 + サウンド**
 
@@ -258,7 +258,7 @@ vscode-claude-code-status-dot がお役に立てば、作者にコーヒーを�
 
 WeChat | Alipay
 :-: | :-:
-<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
 
 
 </div>

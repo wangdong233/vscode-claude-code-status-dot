@@ -119,7 +119,7 @@ function checkBoth(name, got, expectedState, expectedActive) {
 // --- scenarios ------------------------------------------------------------
 
 console.log('Phase-2 state machine integration tests');
-console.log('(real hooks/cc-status.js, isolated HOME, method A counting path)\n');
+console.log('(real hooks/cc-status.js, isolated HOME, method A counting + method B payload)\n');
 
 // 1. Baseline: plain turn, no subagent -> done.
 check(
@@ -240,6 +240,78 @@ checkBoth(
   'running',
   0
 );
+
+// 13. PreToolUse/PostToolUse heartbeat path. Both events must:
+//   (a) keep state='running' (per deriveStatus case 'PreToolUse'/'PostToolUse'),
+//   (b) refresh `since` each fire (verified indirectly via the counter rule),
+//   (c) write activeSubagents=0 when no payload is present (the same reset
+//       semantics as UserPromptSubmit — locks the heartbeat against the
+//       drifted-counter bleed-through bug).
+//   No prior test directly exercised this case; a regression that made
+//   PreToolUse carry drift across events would only be caught here.
+checkBoth(
+  '13. UserPromptSubmit -> PreToolUse -> PostToolUse -> Stop = done, counter=0 (heartbeat)',
+  runSeq(['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']),
+  'done',
+  0
+);
+
+// 14. SubagentStop arriving AFTER Stop (late / orphan) must NOT refresh the
+//     terminal `since` timestamp. The reader's notify-dedup keys on the
+//     terminal `since`, so refreshing it would re-fire a duplicate "turn
+//     complete" notification for the SAME turn AND reset the done→idle 5-min
+//     countdown. Locks the M13 fix (preserve cur.since when cur.state is
+//     already terminal AND next===0). Also confirms counter stays 0.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'Stop');
+  const sinceAfterStop = readState(home).since;
+  // Simulate a late SubagentStop arriving after Stop (orphan / race).
+  fire(home, 'SubagentStop');
+  const final = readState(home);
+  const ok = final
+    && final.state === 'done'
+    && final.since === sinceAfterStop
+    && final.activeSubagents === 0;
+  if (ok) {
+    pass++;
+    console.log('  PASS  14. [REGRESSION] SubagentStop after Stop preserves done + since + counter=0');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  14. expected done+preserved since(' + sinceAfterStop + ')+0,' +
+      ' got state=' + (final && final.state) +
+      ' since=' + (final && final.since) +
+      ' active=' + (final && final.activeSubagents)
+    );
+  }
+}
+
+// 15. StopFailure persists the error enum verbatim. The reader maps known
+//     enums (rate_limit/overloaded) to friendlier text; a missing/typed-wrong
+//     error falls back to 'interrupted' (aligned writer/reader default per
+//     STATES.md §4b). Pin the disk-side half: error must be a string and must
+//     equal the payload value when one is supplied. Also assert state.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  // `fire` takes (home, event, extra) — three args, NOT a {event,extra} object.
+  const final = fire(home, 'StopFailure', { error: 'rate_limit' });
+  const okState = final && final.state === 'interrupted';
+  const okError = final && typeof final.error === 'string' && final.error === 'rate_limit';
+  if (okState && okError) {
+    pass++;
+    console.log('  PASS  15. StopFailure w/ error=rate_limit -> interrupted, error="rate_limit" persisted');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  15. expected interrupted+error=rate_limit,' +
+      ' got state=' + (final && final.state) +
+      ' error=' + (final && JSON.stringify(final.error))
+    );
+  }
+}
 
 // --- summary --------------------------------------------------------------
 

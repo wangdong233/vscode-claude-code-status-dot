@@ -8,6 +8,21 @@
 2. **完全可逆**：`--revert` 必须能干净还原 `extension.js` 与 `settings.json`（基于标记的精确移除，不是整体覆盖）。
 3. **版本韧性**：anchor 失配时报错并拒绝写入，绝不留下半改文件。
 
+## 代码风格（quote 风格约定）
+
+**TS 文件用双引号，JS hook/test 用单引号——这是有意的、文件类型各侧自洽的约定**，不是疏漏：
+
+- `patch.ts`（patcher，TS）：双引号 + 4 空格缩进（Prettier TS 默认）。
+- `hooks/*.js` / `hooks/*.mjs`（hook + test，JS）：单引号 + 2 空格缩进（Node/JS 社区惯例）。
+- `*.md`：2 空格，`proseWrap: preserve`（不重排段落）。
+
+**防漂移的工具契约**：
+- `.prettierrc.json` 通过 `overrides` 把每类文件的 quote/缩进偏好固定下来——任何贡献者跑 `prettier --write` 时它**保留**现有 quote 风格而非"纠正"（这是 M6 finding 真正担心的漂移点：TS 文件被 flip 成单引号或 JS 被 flip 成双引号）。
+- `.editorconfig` 提供跨编辑器（VSCode/JetBrains/vim/…）的基线，保存时不与 Prettier 打架。
+- `npm run format:check`（不阻塞 `npm test`，CI 可选接入）当前会对**预先存在的**非-quote 风格选择（多行数组/三元、超出 `printWidth: 120` 的拼接等）报警——这些与 M6 无关，是历史风格，可在后续独立 PR 里逐步收敛或一次性 `prettier --write` 全文 reformat。本轮只引入契约，不改既有代码风格。
+
+**选择契约而非全局 reformat 的理由**：每侧文件内部已经自洽且符合各语言社区惯例，reformat 一侧去迎合另一侧会产生大 diff、污染 `git blame`、徒增审查负担；契约方式 0 行代码改动，未来漂移由工具自动报警。
+
 ## patch anchor 的 CC 版本脆性
 
 整个 patch 的版本敏感面收敛在 `patch.ts` 里的两段 anchor 字符串：

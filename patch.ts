@@ -105,11 +105,12 @@ const PROJECT_ROOT: string = (() => {
  *  MUST be a block comment (/* *​/) — a // line comment would comment out the rest of the
  *  minified single line and brick the extension.
  *
- *  The banner also carries INJECT_VERSION after a colon: `cc-status-dot-injected:v0.1.4`.
- *  The bare marker (no version suffix) is what `isExtensionPatched` greps for (so old
- *  v0.1.2/v0.1.3 injections still match). `injectedVersion` parses the version suffix
- *  to detect an IIFE whose *logic* is stale even though the marker is present — see
- *  patchExtension. */
+ *  The banner also carries INJECT_VERSION after a colon
+ *  (`cc-status-dot-injected:<INJECT_VERSION>`). The bare marker (no version
+ *  suffix) is what `isExtensionPatched` greps for (so injections from any
+ *  version still match). `injectedVersion` parses the version suffix to
+ *  detect an IIFE whose *logic* is stale even though the marker is present —
+ *  see patchExtension. */
 const INJECT_MARKER = "cc-status-dot-injected";
 
 /** Version stamped into the injected IIFE banner comment. Bump this whenever the IIFE
@@ -118,14 +119,14 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  re-injects the current IIFE — otherwise structural IIFE changes (e.g. v0.1.4 reverting
  *  to static running, or v0.1.3 removing the aggregate bar) would be silently swallowed
  *  because the bare marker still matches. */
-const INJECT_VERSION = "v0.1.8";
+const INJECT_VERSION = "v0.1.9";
 
 /** Substring appended (as a shell comment) to every hook command we own in settings.json.
  *  Used for idempotent dedupe on install and surgical removal on --revert. */
 const HOOK_MARKER = "cc-status-dot-managed";
 
 /** Redraw cadence (ms). 500 drives:
- *   - the interrupted on/off flash (seq%2 → ~500 ms on, ~500 ms off — an
+ *   - the interrupted on/off flash (flashSeq%2 → ~500 ms on, ~500 ms off — an
  *     alert-grade fast flash),
  *   - the done→idle 5-min fallback poll, and
  *   - the terminal-`since` dedup that fires done/interrupted notifications.
@@ -160,7 +161,7 @@ const RUNTIME_RES_DIR = path.join(INSTALL_DIR, "resources");
  *  (`claude-logo-running.svg`, fill #CCA700) — the v0.1.3 8-frame breathing
  *  experiment read as discrete flicker because iconPath frame-switching is
  *  inherently jumpy, not smooth. idle/running/done/error are now all static;
- *  only interrupted animates (seq%2 on/off fast-flash between error.svg and
+ *  only interrupted animates (flashSeq%2 on/off fast-flash between error.svg and
  *  CC's default). installRuntimeFiles auto-sweeps the stale v0.1.3
  *  `claude-logo-running-{0..7}.svg` frames on upgrade. */
 const OUR_SVGS = [
@@ -216,12 +217,18 @@ const ANCHOR_A =
  * update_session_state) and so CC's icon assignment is re-asserted within one
  * tick. Exact, must match ONCE.
  *
- * The injected replB ALSO stashes `this.__ccPending=!!e.request.hasPendingPermissions`
- * on every rename_tab fire — the same flag CC uses to paint its native blue
- * pending dot. The IIFE's tick reads this live and yields when set, so the
- * reader stops overriding CC's blue dot during a permission prompt (the
- * PreToolUse heartbeat leaves state=running on disk, which previously caused
- * the yellow running dot to cover the blue pending dot).
+ * The injected replB stashes TWO live flags on every rename_tab fire:
+ *   - this.__ccTitle = e.request.title    — keeps the cached panel title fresh
+ *     so notify()'s "["+__ccTitle+"]" suffix matches the CURRENT tab title
+ *     even after CC fires rename_tab multiple times post-update_session_state
+ *     (truncation, user rename). Without this the title would freeze at the
+ *     last update_session_state value.
+ *   - this.__ccPending = !!e.request.hasPendingPermissions — the same flag CC
+ *     uses to paint its native blue pending dot. The IIFE's tick reads this
+ *     live and yields when set, so the reader stops overriding CC's blue dot
+ *     during a permission prompt (the PreToolUse heartbeat leaves state=running
+ *     on disk, which previously caused the yellow running dot to cover the
+ *     blue pending dot).
  */
 const ANCHOR_B =
     'this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)';
@@ -307,7 +314,16 @@ function parseJsonc(text: string, sourceLabel: string): Record<string, unknown> 
 // ---------------------------------------------------------------------------
 
 function cmpVer(a: number[], b: number[]): number {
-    for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+    // Compare semver-style numeric arrays component-wise, treating a missing
+    // component as 0 (so [1,2] === [1,2,0]). Robust to future 4-segment
+    // version schemes without a magic count; coupled to but not hard-tied to
+    // the 3-capture regex in discoverExtension.
+    const len = Math.max(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+        const ai = a[i] ?? 0;
+        const bi = b[i] ?? 0;
+        if (ai !== bi) return ai - bi;
+    }
     return 0;
 }
 
@@ -347,6 +363,13 @@ function discoverExtension(): DiscoveredExt {
     const top = candidates[0];
     if (candidates.length > 1) {
         log(`Multiple CC extensions found; using highest version ${top.version.join(".")} at ${top.dir}`);
+        // Surface every other detected install so users with simultaneous
+        // stable + insiders (or .cursor / .vscodium) installs can see why
+        // the other CC tab isn't getting a status dot. Re-running install
+        // after the lower-version one updates will pick the new top.
+        for (let i = 1; i < candidates.length; i++) {
+            log(`  skipping lower version ${candidates[i].version.join(".")} at ${candidates[i].dir} (only one CC install is patched per run)`);
+        }
     }
     return { dir: top.dir, version: top.version.join(".") };
 }
@@ -440,7 +463,7 @@ function assertCompiles(code: string, label: string): void {
 //                    idle/done/error). The 500 ms timer still ticks but running
 //                    reassigns the same path each tick (cheap no-op).
 //     interrupted -> flash claude-logo-error.svg <-> CC's claude-logo.svg (off-frame)
-//                    at ~500 ms on/off (seq%2) — alerts stay intentionally fast.
+//                    at ~500 ms on/off (flashSeq%2) — alerts stay intentionally fast.
 //     done        -> steady claude-logo-done.svg; if since older than 5 min -> idle
 //     idle        -> steady claude-logo-idle.svg
 //     missing/unknown -> return (don't fight CC's own pending/done icon)
@@ -452,13 +475,24 @@ function assertCompiles(code: string, label: string): void {
 //                    where a PreToolUse heartbeat leaves state=running on disk
 //                    during a permission prompt and the reader overrides CC's
 //                    blue dot with the yellow running dot.
-//   On a NEW terminal `since` (done/interrupted): notify once (VSCode msg +
-//   macOS osascript when unfocused). Config: ccStatusDot.{notify,notifyWhenFocused,notifySound}.
+//   On a NEW terminal `since` (done/interrupted): notify once.
+//   Config: ccStatusDot.{notify,notifyWhenFocused,notifySound}.
 //   notifyWhenFocused defaults to true (foreground still notifies — "window
 //   focused" ≠ "watching the CC tab"). Dedup is keyed on the terminal `since`
-//   timestamp (refreshed by Stop/StopFailure), seeded on the first poll so a
-//   reload into a stale done does not fire. This catches fast turns that finish
-//   between two 500 ms polls (the old prevSt transition check missed them).
+//   timestamp (refreshed by Stop/StopFailure; SubagentStop on an already-terminal
+//   state with next=0 preserves cur.since to avoid spurious re-notify — see
+//   cc-status.js SubagentStop), seeded on the first poll so a reload into a
+//   stale done does not fire. This catches fast turns that finish between two
+//   500 ms polls (the old prevSt transition check missed them).
+//   macOS notify path: osascript system notification, with a callback that
+//   falls back to vs.window.show{Information,Warning}Message if osascript
+//   itself fails (permission denied / binary missing / escape bug) — so the
+//   "completion/interruption notification" feature stays observable even on
+//   the failure path. Non-macOS always uses VSCode messages.
+//   Timer lifecycle: setInterval is captured into `timer` and cleared via
+//   t.panelTab.onDidDispose so closing the CC panel releases the 500 ms tick
+//   (otherwise the interval + its closed-over `t`/`panelTab` refs leak for
+//   the lifetime of the VSCode window).
 // ---------------------------------------------------------------------------
 
 function buildIIFE(resDir: string): string {
@@ -476,7 +510,7 @@ function buildIIFE(resDir: string): string {
         `var RES=${resLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         `var DONE_TO_IDLE_MS=5*60*1000;`,
-        `var seq=0,lastTermSince=null,seeded=false;`,
+        `var flashSeq=0,lastTermSince=null,seeded=false;/*flashSeq: interrupted on/off frame index (flashSeq%2)*/`,
         `function notify(st,err){`,
         `var c=vs.workspace.getConfiguration("ccStatusDot");`,
         `if(!c.get("notify",true))return;`,
@@ -486,10 +520,11 @@ function buildIIFE(resDir: string): string {
         `if(st==="done"){sev="info";msg="Claude Code: turn complete"}`,
         `else{sev="warn";var m={rate_limit:"rate limit reached",overloaded:"server overloaded"}[err]||err||"interrupted";msg="Claude Code: "+m}`,
         `if(t.__ccTitle)msg+=" ["+t.__ccTitle+"]";`,
-        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var sndStr=snd?(' sound name "'+snd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr])}catch(e){}}`,
+        `/*macOS: osascript system notification; on async OR sync failure fall through to VSCode message so the notification feature stays observable when osascript is denied / missing / mis-escaped.*/`,
+        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var sndStr=snd?(' sound name "'+snd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var vsMsg=function(){if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);};try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr],function(e){if(e)vsMsg()})}catch(e){vsMsg()}}`,
         `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);}`,
         `}`,
-        `setInterval(function(){`,
+        `var timer=setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
         `var sid=t.__ccSid;if(!sid)return;`,
         `var st=null,since=null,err="";`,
@@ -499,14 +534,16 @@ function buildIIFE(resDir: string): string {
         `/*permission pending:yield to CC native blue dot*/if(t.__ccPending)return;`,
         `var now=Date.now();`,
         `var svg;`,
-        `if(st==="interrupted"){svg=(seq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
+        `if(st==="interrupted"){svg=(flashSeq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
         `else if(st==="running"){svg=pth.join(RES,"claude-logo-running.svg")}`,
         `else if(st==="done"){svg=(since&&(now-since>DONE_TO_IDLE_MS))?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-done.svg")}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
         `else{return}`,
-        `seq++;`,
+        `flashSeq++;`,
         `try{p.iconPath=vs.Uri.file(svg)}catch(e){}`,
         `},${TICK_MS});`,
+        `/*release the 500 ms tick + its closed-over refs when the panel closes*/`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer)})}catch(e){}`,
         `})(this)`,
     ].join("");
 }
@@ -520,9 +557,9 @@ function isExtensionPatched(content: string): boolean {
 }
 
 /** Parse the version stamp from an already-patched extension.js.
- *  Returns the stamped version (e.g. "v0.1.3"), or null when the marker is
- *  present but has no version suffix (pre-v0.1.3 injection) — null is treated
- *  as "stale, re-inject" by patchExtension. */
+ *  Returns the stamped version (e.g. "v<INJECT_VERSION>"), or null when the
+ *  marker is present but has no version suffix (pre-v0.1.3 injection) — null
+ *  is treated as "stale, re-inject" by patchExtension. */
 function injectedVersion(content: string): string | null {
     const m = content.match(/cc-status-dot-injected:v(\d+\.\d+\.\d+)\*/);
     return m ? "v" + m[1] : null;
@@ -576,7 +613,13 @@ function injectFresh(extJs: string, src: string): void {
 
     // Anchor B (optional hardening): start the same guarded timer from rename_tab too.
     if (bCount === 1) {
-        const replB = "this.panelTab.title=e.request.title;this.__ccPending=!!e.request.hasPendingPermissions;" + iife + ";let r;if(e.request.hasPendingPermissions)";
+        // replB also refreshes this.__ccTitle from the live rename_tab title —
+        // CC may fire rename_tab multiple times AFTER update_session_state
+        // (truncation, user rename, panel title reassignment) and replA's
+        // stashed value would otherwise go stale. notify() appends
+        // "["+__ccTitle+"]" to the notification body, so keeping it fresh
+        // matters for the message shown to the user.
+        const replB = "this.panelTab.title=e.request.title;this.__ccTitle=e.request.title;this.__ccPending=!!e.request.hasPendingPermissions;" + iife + ";let r;if(e.request.hasPendingPermissions)";
         next = next.replace(ANCHOR_B, replB);
         if (countOccurrences(next, INJECT_MARKER) < 2) {
             fail("Anchor B replacement did not apply. No files were modified.");
@@ -1005,6 +1048,61 @@ function isHooksWired(): boolean {
     }
 }
 
+/**
+ * Detect hook commands whose baked absolute node binary no longer exists on
+ * disk (typical trigger: the node used at install time was later removed by an
+ * nvm/asdf version switch, a Node.app uninstall, or an npx cache purge). When
+ * that binary disappears, CC's hook spawn fails with ENOENT BEFORE our script
+ * gets a chance to run its own silent-exit(0) fallback, so the writer→reader
+ * chain silently stops and every status dot freezes on its last frame.
+ *
+ * The `nodeBin === "node"` fallback path (used only when execPath is missing
+ * at install time) is taken to be present-by-definition and skipped. Otherwise
+ * we stat the baked path; on miss we tell the user to re-run install (which
+ * re-bakes the current process.execPath). Wrapper-script / multi-path search
+ * would be more robust but is a larger architectural change; this diagnostic
+ * at least makes the failure mode visible in `--status` instead of silent.
+ */
+function reportBakedNodeHealth(): void {
+    const settings = settingsPath();
+    if (!fs.existsSync(settings)) return;
+    let obj: Record<string, unknown>;
+    try {
+        obj = parseJsonc(fs.readFileSync(settings, "utf8"), settings);
+    } catch {
+        return; // malformed settings — discoverExtension etc. will surface this
+    }
+    const hooks = obj.hooks as HooksMap | undefined;
+    if (!hooks || typeof hooks !== "object") return;
+    const seen = new Set<string>();
+    let warnedAny = false;
+    for (const ev of Object.keys(hooks)) {
+        const arr = hooks[ev];
+        if (!Array.isArray(arr)) continue;
+        for (const g of arr) {
+            if (!groupIsOurs(g)) continue;
+            for (const h of (g as HookGroup).hooks) {
+                const cmd = typeof h?.command === "string" ? h.command : "";
+                // cmd shape: `<nodeBin> "<hookAbs>"  # cc-status-dot-managed`
+                const m = cmd.match(/^(\S+)\s+"[^"]*cc-status\.js"\s+#\s*cc-status-dot-managed/);
+                if (!m) continue;
+                const nodeBin = m[1];
+                if (seen.has(nodeBin)) continue;
+                seen.add(nodeBin);
+                if (nodeBin === "node") continue; // already a bare PATH fallback
+                if (!fs.existsSync(nodeBin)) {
+                    warn(`hook command bakes a node binary that no longer exists: ${nodeBin}`);
+                    warn(`  hooks will fail to spawn (ENOENT) — re-run install to re-bake the current node path.`);
+                    warnedAny = true;
+                }
+            }
+        }
+    }
+    if (!warnedAny && seen.size > 0) {
+        log(`hook baked node binary: present (${[...seen].join(", ")})`);
+    }
+}
+
 function reportStatus(): void {
     const { dir, version } = discoverExtension();
     log(`CC extension: v${version}`);
@@ -1046,6 +1144,7 @@ function reportStatus(): void {
     checkSvgs(RUNTIME_RES_DIR);
     log(`runtime install dir: ${INSTALL_DIR} ${fs.existsSync(INSTALL_DIR) ? "(exists)" : "(will be created on install)"}`);
     log(`state dir: ${STATE_DIR} ${fs.existsSync(STATE_DIR) ? "(exists)" : "(will be created on first hook fire)"}`);
+    reportBakedNodeHealth();
 }
 
 function printHelp(): void {

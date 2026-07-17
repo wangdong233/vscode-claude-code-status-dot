@@ -35,13 +35,13 @@
 
 <div align="center">
 
-<img src="doc/status-dots.png" alt="状态点展示" width="640">
+<img src="docs/images/status-dots.png" alt="状态点展示" width="640">
 
 **顶部 tab 与左侧"打开的编辑器"侧边栏里的 CC 会话状态点**——🟡 运行中 · 🟢 完成 · 🔴 中断
 
 <br>
 
-<img src="doc/completion-notification.png" alt="完成通知展示" width="640">
+<img src="docs/images/completion-notification.png" alt="完成通知展示" width="640">
 
 **会话完成时弹出的 macOS 系统通知 + 提示音**（前台后台都弹）
 
@@ -260,7 +260,7 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 
 微信 | 支付宝
 :-: | :-:
-<img src="doc/support-wechat.jpg" height="200" alt="微信"> | <img src="doc/support-alipay.jpg" height="200" alt="支付宝">
+<img src="docs/images/support-wechat.jpg" height="200" alt="微信"> | <img src="docs/images/support-alipay.jpg" height="200" alt="支付宝">
 
 
 </div>

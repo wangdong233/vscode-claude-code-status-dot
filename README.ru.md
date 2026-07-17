@@ -52,13 +52,13 @@
 
 <div align="center">
 
-<img src="doc/status-dots.png" width="640" alt="Статус-точки вкладок">
+<img src="docs/images/status-dots.png" width="640" alt="Статус-точки вкладок">
 
 **Цветные статус-точки на вкладках CC** — и в верхней панели вкладок, и в боковой панели «Открытые редакторы»: 🟡 выполняется / 🟢 завершено / 🔴 прервано.
 
 <br>
 
-<img src="doc/completion-notification.png" width="640" alt="Системное уведомление о завершении">
+<img src="docs/images/completion-notification.png" width="640" alt="Системное уведомление о завершении">
 
 **Системное уведомление macOS** при завершении сессии — выпадает из правого верхнего угла со звуком `Glass`, без кнопок, исчезает само.
 
@@ -258,7 +258,7 @@ vscode-claude-code-status-dot        # после установки запус�
 
 WeChat | Alipay
 :-: | :-:
-<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
 
 
 </div>

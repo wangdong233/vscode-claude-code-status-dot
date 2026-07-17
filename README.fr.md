@@ -35,13 +35,13 @@
 
 <div align="center">
 
-<img src="doc/status-dots.png" width="640" alt="Points d'état des sessions Claude Code">
+<img src="docs/images/status-dots.png" width="640" alt="Points d'état des sessions Claude Code">
 
 *Les points d'état sur l'onglet CC (en haut) et dans la vue « Open Editors » — chaque session porte sa propre couleur : 🟡 en cours / 🟢 terminé / 🔴 interrompu.*
 
 <br>
 
-<img src="doc/completion-notification.png" width="640" alt="Notification de fin de session">
+<img src="docs/images/completion-notification.png" width="640" alt="Notification de fin de session">
 
 *Notification système macOS à la fin d'une session, accompagnée du son `Glass`.*
 
@@ -258,7 +258,7 @@ Si vscode-claude-code-status-dot vous est utile, offrez un café à l'auteur ☕
 
 WeChat | Alipay
 :-: | :-:
-<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
 
 
 </div>

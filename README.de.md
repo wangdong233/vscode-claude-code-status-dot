@@ -35,13 +35,13 @@
 
 <div align="center">
 
-<img src="doc/status-dots.png" width="640" alt="Zustands-Punkte auf Tabs und in „Offene Editoren"">
+<img src="docs/images/status-dots.png" width="640" alt="Zustands-Punkte auf Tabs und in „Offene Editoren"">
 
 *Oben auf dem Session-Tab und links in der Ansicht „Offene Editoren" trägt jede CC-Session ihren eigenen Farbpunkt – 🟡 läuft / 🟢 fertig / 🔴 unterbrochen.*
 
 <br>
 
-<img src="doc/completion-notification.png" width="640" alt="Fertig-Benachrichtigung mit Ton">
+<img src="docs/images/completion-notification.png" width="640" alt="Fertig-Benachrichtigung mit Ton">
 
 *macOS-Systembenachrichtigung mit Glass-Ton, wenn die Session fertig wird oder unterbrochen wird.*
 
@@ -258,7 +258,7 @@ Wenn vscode-claude-code-status-dot dir hilft, lade den Autor gern auf einen Kaff
 
 WeChat | Alipay
 :-: | :-:
-<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
 
 
 </div>

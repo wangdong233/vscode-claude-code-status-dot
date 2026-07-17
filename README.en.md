@@ -35,13 +35,13 @@
 
 <div align="center">
 
-<img src="doc/status-dots.png" width="640" alt="Four-state status dots">
+<img src="docs/images/status-dots.png" width="640" alt="Four-state status dots">
 
 **Four-state status dots on every CC session** — shown in both the top tab bar and the left-side "Open Editors" view: 🟡 yellow = running, 🟢 green = done, 🔴 red = interrupted, ⚪ gray = idle.
 
 <br>
 
-<img src="doc/completion-notification.png" width="640" alt="Completion notification">
+<img src="docs/images/completion-notification.png" width="640" alt="Completion notification">
 
 **Session-completion notification** — a native macOS system notification (with sound) drops down the moment a turn finishes.
 
@@ -258,7 +258,7 @@ If vscode-claude-code-status-dot helps you, consider buying the author a coffee 
 
 WeChat | Alipay
 :-: | :-:
-<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
 
 
 </div>

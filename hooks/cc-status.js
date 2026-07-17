@@ -100,6 +100,14 @@ function inflightFromPayload(payload) {
  *
  * `cur` is the currently-on-disk status (defaulted on missing/corrupt file).
  *
+ * Field-name note (v2): `activeSubagents` is a v0.x name retained on disk for
+ *   IPC-shape backward compatibility. Since v2 / STATES.md §5 it is
+ *   AUTHORITATIVELY OVERWRITTEN by `payload.background_tasks.length` on every
+ *   event that carries it (Stop / SubagentStop), so its semantics are "any
+ *   in-flight background task", not just subagents. The reader never reads it,
+ *   so a rename would be a breaking IPC change for zero benefit — keep the
+ *   name, read the comment.
+ *
  * Returns:
  *   - { state, since, error?, activeSubagents } -> write it (atomic)
  *   - null                                      -> ignore this event (don't write)
@@ -109,7 +117,13 @@ function deriveStatus(payload, cur) {
   const event = payload.hook_event_name;
   const now = Date.now();
   const inflight = inflightFromPayload(payload);
-  const a = Number.isFinite(cur && cur.activeSubagents) ? cur.activeSubagents : 0;
+  // Clamp non-finite AND negative to 0 — a corrupt/hand-edited file must not
+  // propagate a negative counter (SubagentStart would then write a+1 = -N+1,
+  // persisting the negative across events). See STATES.md §3 "activeSubagents:
+  // <int> (>= 0)".
+  const a = Number.isFinite(cur && cur.activeSubagents) && cur.activeSubagents >= 0
+    ? cur.activeSubagents
+    : 0;
 
   switch (event) {
     // A new turn just began: CC is working on the user's prompt.
@@ -137,12 +151,31 @@ function deriveStatus(payload, cur) {
     // preempt — let Stop decide the terminal state (null = no write).
     case 'SubagentStop': {
       const next = inflight != null ? inflight : Math.max(a - 1, 0);
+      // Bound the fallback state to writer-emitted values ONLY. cur may carry
+      // 'idle' (default cur on missing/corrupt file, or a hand-edited file) —
+      // the writer contract (file header) says we only write
+      // running | done | interrupted, so never persist 'idle'. 'idle' is a
+      // reader-inferred state (no file / done > 5 min), not something we paint.
+      const curState = (cur && (cur.state === 'running' || cur.state === 'done' || cur.state === 'interrupted'))
+        ? cur.state
+        : 'running';
+      // When cur.state is ALREADY terminal (done/interrupted — typically a
+      // late/orphan SubagentStop arriving AFTER Stop already wrote done) AND
+      // next just zeroed, preserve cur.since instead of writing `now`. The
+      // reader's notify-dedup keys on the terminal `since` (STATES.md §4b),
+      // so refreshing it here would (a) re-fire a duplicate "turn complete"
+      // notification for the same turn, and (b) reset the done→idle 5-min
+      // countdown. When next>0 we DO flip state to running and refresh since
+      // (a remaining task re-arms the yellow dot).
+      const preserveSince = (curState === 'done' || curState === 'interrupted')
+        && next === 0
+        && cur
+        && typeof cur.since === 'number';
       // Always persist the decremented count. Returning null would leave a stale
       // activeSubagents on disk and mislead the following Stop into running.
-      // Don't preempt the terminal state — keep cur.state, let Stop decide done.
       return {
-        state: next > 0 ? 'running' : (cur && cur.state) || 'running',
-        since: now,
+        state: next > 0 ? 'running' : curState,
+        since: preserveSince ? cur.since : now,
         activeSubagents: next,
       };
     }
@@ -165,8 +198,19 @@ function deriveStatus(payload, cur) {
 
     // Turn was aborted/interrupted; preserve the failure reason enum.
     // Interrupt wins regardless of subagent count; keep the count for resume.
+    // Force error to a string (STATES.md §3 "error?: '<StopFailure enum>'"):
+    // payload.error may be a non-string truthy (number/array/object) on a
+    // broken/malformed payload, which would JSON.stringify to "[object Object]"
+    // and surface as an unreadable notification. Default 'interrupted' (not
+    // 'unknown') matches the reader IIFE's own fallback wording so writer and
+    // reader agree on the message shown for missing error enums.
     case 'StopFailure':
-      return { state: 'interrupted', since: now, error: payload.error || 'unknown', activeSubagents: a };
+      return {
+        state: 'interrupted',
+        since: now,
+        error: (typeof payload.error === 'string' && payload.error) ? payload.error : 'interrupted',
+        activeSubagents: a,
+      };
 
     // Session is over: clean up its status file.
     case 'SessionEnd':
@@ -197,17 +241,28 @@ async function main() {
     process.exit(0);
   }
 
-  // One status file per session lives here.
-  const STATUS_DIR = path.join(os.homedir(), '.claude', 'cc-tab-status');
+  // One status file per session lives here. Named STATE_DIR to mirror patch.ts
+  // (single shared path contract — grep lands both files with one token).
+  const STATE_DIR = path.join(os.homedir(), '.claude', 'cc-tab-status');
 
   /**
    * Atomically write `obj` as JSON to `filePath`.
    * Writes a sibling .tmp file first, then renames over the target so a
    * reader never observes a half-written file.
+   *
+   * Concurrency: the tmp name is suffixed with `process.pid + Date.now()` so
+   * two hook processes racing on the same session (e.g. SubagentStart and
+   * PreToolUse firing in the same ms window from a multi-subagent workflow)
+   * do NOT share the same `<sid>.json.tmp` path. POSIX O_TRUNC by B over
+   * A's in-progress writes would otherwise interleave two JSON payloads into
+   * the same tmp and "promote" whichever rename fires first — breaking the
+   * atomic-write contract. The pid suffix does NOT fix the read-modify-write
+   * lost-update on `activeSubagents` (see STATES.md §5 known limitation); it
+   * only guarantees each rename carries one process's complete JSON.
    */
   const writeJsonAtomic = (filePath, obj) => {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const tmp = filePath + '.tmp';
+    const tmp = filePath + '.' + process.pid + '.' + Date.now() + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
     fs.renameSync(tmp, filePath);
   };
@@ -224,21 +279,40 @@ async function main() {
   }
 
   // Without a session id there is nothing to key a status file on.
+  // Defensive: session_id should be a bare opaque token. Reject anything that
+  // could escape STATE_DIR via path traversal (CC never sends these, but a
+  // hook is a passive receiver of arbitrary stdin — `path.join` would happily
+  // climb out of STATE_DIR for `'../etc/foo'`, creating a JSON file outside
+  // ~/.claude/cc-tab-status/). Reject path separators and the `.`/`..`
+  // sentinels; allow everything else (CC's session_id is uuid-ish).
   const sid = payload && payload.session_id;
-  if (!sid) process.exit(0);
+  if (typeof sid !== 'string' || /[\\/]/.test(sid) || sid === '.' || sid === '..') process.exit(0);
 
-  const filePath = path.join(STATUS_DIR, sid + '.json');
+  const filePath = path.join(STATE_DIR, sid + '.json');
 
   // --- Read current on-disk status (read-modify-write for activeSubagents) ---
   // Missing/corrupt file or any read error -> benign defaults, stay silent.
-  let cur = { state: 'idle', activeSubagents: 0, since: 0 };
+  // Default state='running' (NOT 'idle') because a SubagentStop arriving with
+  // no prior file should fall back to 'running' — subagents only exist within
+  // a running turn. The writer contract (header line 13) forbids persisting
+  // 'idle'; the explicit curState bound in deriveStatus enforces it regardless.
+  let cur = { state: 'running', activeSubagents: 0, since: 0 };
   try {
     const prev = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     cur = {
-      state: prev.state || 'idle',
-      since: prev.since || 0,
+      state: prev.state || 'running',
+      // since must be a finite non-negative number — reject negative numbers
+      // (would make `now - since` huge and instantly false-aged done to idle)
+      // and strings/other types from a hand-edited / corrupt file (would make
+      // `now - since` NaN, which fails the >DONE_TO_IDLE_MS check silently).
+      since: (typeof prev.since === 'number' && Number.isFinite(prev.since) && prev.since >= 0)
+        ? prev.since
+        : 0,
       error: prev.error,
-      activeSubagents: Number.isFinite(prev.activeSubagents) ? prev.activeSubagents : 0,
+      // Reject negative and non-finite counters (see deriveStatus note).
+      activeSubagents: (Number.isFinite(prev.activeSubagents) && prev.activeSubagents >= 0)
+        ? prev.activeSubagents
+        : 0,
     };
   } catch {
     /* no file / corrupt JSON -> default cur */

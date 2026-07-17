@@ -35,13 +35,13 @@
 
 <div align="center">
 
-<img src="doc/status-dots.png" width="640" alt="Puntos de estado">
+<img src="docs/images/status-dots.png" width="640" alt="Puntos de estado">
 
 **Puntos de estado de cuatro estados en las pestañas y en la vista "Editores abiertos"** — 🟡 en ejecución · 🟢 completado · 🔴 interrumpido
 
 <br>
 
-<img src="doc/completion-notification.png" width="640" alt="Notificación de completado">
+<img src="docs/images/completion-notification.png" width="640" alt="Notificación de completado">
 
 **Notificación del sistema + sonido al completarse la sesión** — avisa aunque estés en otra aplicación
 
@@ -258,7 +258,7 @@ Si vscode-claude-code-status-dot te resulta útil, invita al autor a un café �
 
 WeChat | Alipay
 :-: | :-:
-<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
 
 
 </div>

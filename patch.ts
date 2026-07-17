@@ -59,6 +59,7 @@
  *     Each tick is one tiny readFileSync; acceptable for normal use.
  * ------------------------------------------------------------------------- */
 
+import * as cp from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -117,7 +118,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  re-injects the current IIFE — otherwise structural IIFE changes (e.g. v0.1.4 reverting
  *  to static running, or v0.1.3 removing the aggregate bar) would be silently swallowed
  *  because the bare marker still matches. */
-const INJECT_VERSION = "v0.1.5";
+const INJECT_VERSION = "v0.1.7";
 
 /** Substring appended (as a shell comment) to every hook command we own in settings.json.
  *  Used for idempotent dedupe on install and surgical removal on --revert. */
@@ -372,6 +373,55 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// Syntax gate — refuse to write a malformed extension.js. Validates the FINAL
+// spliced bytes the way Node/VSCode actually load CC's bundle (`node --check`),
+// so a typo in buildIIFE's template-literal array — e.g. a missing `}` that
+// turns the whole 2.6 MB bundle into a SyntaxError and bricks the CC extension
+// (its commands, incl. claude-vscode.editor.openLast, vanish and new sessions
+// refuse to open) — is caught BEFORE any byte reaches disk. Catches anchor/
+// replace mistakes too, since it checks the assembled `next`, not just the IIFE.
+//
+// `node --check` parses CJS at module top level (matching CC's loader). We do
+// NOT use `new Function(code)` / `new vm.Script(code)` here: both would
+// false-positive on a top-level `return`, which a bundled CJS extension may
+// legitimately contain. If node can't be spawned at all (broken execPath), we
+// warn and skip rather than block install on an environment issue.
+// ---------------------------------------------------------------------------
+
+function assertCompiles(code: string, label: string): void {
+    const tmp = path.join(os.tmpdir(), `cc-status-dot-syntax-${process.pid}.js`);
+    try {
+        fs.writeFileSync(tmp, code, "utf8");
+        try {
+            cp.execFileSync(process.execPath, ["--check", tmp], {
+                stdio: ["ignore", "pipe", "pipe"],
+                encoding: "utf8",
+            });
+        } catch (e) {
+            const err = e as { status?: number; stderr?: string; code?: string; message?: string };
+            // Spawn failure (e.g. execPath unusable) — don't block install on environment.
+            if (typeof err.status !== "number") {
+                warn(`could not run 'node --check' to validate ${label} (${err.message}); skipping syntax gate`);
+                return;
+            }
+            const stderr = (err.stderr || err.message || "").trim();
+            fail(
+                `${label} would be a SyntaxError — refusing to write (would brick the CC extension).\n` +
+                    `This is a bug in the injected code, not a Claude Code update — fix buildIIFE, then re-run. No files were changed.\n` +
+                    `node --check output:\n` +
+                    stderr.split("\n").map((l) => "    " + l).join("\n"),
+            );
+        }
+    } finally {
+        try {
+            fs.unlinkSync(tmp);
+        } catch {
+            /* best-effort cleanup of the probe file */
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Build the injected IIFE. Single line, version-robust, no minified refs.
 //   t = the `ts` panel instance (has panelTab, context.extensionPath).
 //   Reads ~/.claude/cc-tab-status/<sid>.json -> {state, since, error?}
@@ -421,9 +471,8 @@ function buildIIFE(resDir: string): string {
         `if(st==="done"){sev="info";msg="Claude Code: turn complete"}`,
         `else{sev="warn";var m={rate_limit:"rate limit reached",overloaded:"server overloaded"}[err]||err||"interrupted";msg="Claude Code: "+m}`,
         `if(t.__ccTitle)msg+=" ["+t.__ccTitle+"]";`,
-        `if(focused){if(sev==="info")vs.window.showInformationMessage(msg,"Dismiss");else vs.window.showWarningMessage(msg,"Dismiss")}`,
-        `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);`,
-        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var sndStr=snd?(' sound name "'+snd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr])}catch(e){}}}`,
+        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var sndStr=snd?(' sound name "'+snd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr])}catch(e){}}`,
+        `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);}`,
         `}`,
         `setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
@@ -518,6 +567,7 @@ function injectFresh(extJs: string, src: string): void {
         }
     }
 
+    assertCompiles(next, "patched extension.js");
     fs.writeFileSync(extJs, next, "utf8");
     log(`patched extension.js (anchors injected: A${bCount === 1 ? "+B" : " only"})`);
 }
@@ -593,6 +643,7 @@ function patchExtension(extDir: string): void {
     backupOnce(extJs, extJs + ".bak");
     // split/join replaces ALL occurrences (Anchor A + optional Anchor B).
     const next = src.split(needle).join(`var RES=${newLit};`);
+    assertCompiles(next, "patched extension.js (RES path rewrite)");
     fs.writeFileSync(extJs, next, "utf8");
     log(`updated stale baked RES path: ${baked} → ${wantRes}`);
 }

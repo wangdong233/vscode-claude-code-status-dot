@@ -5,9 +5,9 @@
  * Patches the installed Claude Code VS Code extension so each session's tab icon
  * reflects per-session state (idle / running / done / interrupted) read from
  * `~/.claude/cc-tab-status/<session_id>.json`, which is written by the hook at
- * `hooks/cc-status.js`. Breathing (running) and fast-flash (interrupted) animations
- * are driven by a self-injected 500 ms redraw timer, because CC itself only
- * redraws the icon on sparse rename_tab events (see DESIGN §2).
+ * `hooks/cc-status.js`. The interrupted fast-flash animation is driven by a
+ * self-injected 500 ms redraw timer (running/idle/done are static), because CC
+ * itself only redraws the icon on sparse rename_tab events (see DESIGN §2).
  *
  * STATE CONTRACT: the four states, their events, colors and SVGs are defined
  * once in docs/STATES.md (single source of truth). This file, cc-status.js,
@@ -38,13 +38,14 @@
  *   which are asserted to match exactly once before any byte is written.
  *
  * SVG WIRING (DESIGN §5 — absolute path to a PERSISTENT copy, not the project)
- *   Our 7 SVGs (claude-logo-idle/running/running-1/-2/-bright/done/error.svg)
- *   are COPIED from this project's resources/ into INSTALL_DIR
- *   (~/.claude/cc-status-dot/resources/) at install time, and the injected IIFE
- *   references that absolute path — so it survives BOTH a CC auto-update (which
- *   wipes the extension dir) AND deletion of the source project / npx cache
- *   purge. Just re-run the patcher after a CC update. The interrupted
- *   "off-frame" reuses CC's own claude-logo.svg via this.context.extensionPath.
+ *   Our SVGs (claude-logo-idle.svg + 8× claude-logo-running-{0..7}.svg breathing
+ *   frames + claude-logo-done.svg + claude-logo-error.svg = 11 files) are COPIED
+ *   from this project's resources/ into INSTALL_DIR (~/.claude/cc-status-dot/resources/)
+ *   at install time, and the injected IIFE references that absolute path — so
+ *   it survives BOTH a CC auto-update (which wipes the extension dir) AND
+ *   deletion of the source project / npx cache purge. Just re-run the patcher
+ *   after a CC update. The interrupted "off-frame" reuses CC's own
+ *   claude-logo.svg via this.context.extensionPath.
  *
  * LIMITATIONS (read before extending)
  *   - If the CC extension updates and the minified anchor strings drift, the
@@ -101,15 +102,36 @@ const PROJECT_ROOT: string = (() => {
 
 /** Substring baked into the injected JS block. Presence in extension.js === "already patched".
  *  MUST be a block comment (/* *​/) — a // line comment would comment out the rest of the
- *  minified single line and brick the extension. */
+ *  minified single line and brick the extension.
+ *
+ *  The banner also carries INJECT_VERSION after a colon: `cc-status-dot-injected:v0.1.3`.
+ *  The bare marker (no version suffix) is what `isExtensionPatched` greps for (so old
+ *  v0.1.2 injections still match). `injectedVersion` parses the version suffix to detect
+ *  an IIFE whose *logic* is stale even though the marker is present — see patchExtension. */
 const INJECT_MARKER = "cc-status-dot-injected";
+
+/** Version stamped into the injected IIFE banner comment. Bump this whenever the IIFE
+ *  *logic* changes (NOT just the baked RES path). On install, if the marker is present
+ *  but the stamped version differs, patchExtension restores extension.js from .bak and
+ *  re-injects the current IIFE — otherwise structural IIFE changes (e.g. v0.1.3 removing
+ *  the breathing frames) would be silently swallowed because the bare marker still matches. */
+const INJECT_VERSION = "v0.1.3";
 
 /** Substring appended (as a shell comment) to every hook command we own in settings.json.
  *  Used for idempotent dedupe on install and surgical removal on --revert. */
 const HOOK_MARKER = "cc-status-dot-managed";
 
-/** Redraw cadence (ms). 500 = smooth breathing without meaningful fs overhead. */
-const TICK_MS = 500;
+/** Redraw cadence (ms). 450 drives:
+ *   - the running breathing (14-step triangle wave over 8 sine-eased yellow
+ *     frames → ~6.3 s per breath cycle; each per-frame channel delta stays
+ *     ≤ ~10% so it reads as a smooth fade rather than the 0.1.2 2-frame
+ *     flicker),
+ *   - the interrupted on/off flash (seq%2 → ~450 ms on, ~450 ms off — still
+ *     an alert-grade fast flash, only 10% faster than the old 500 ms),
+ *   - the done→idle 5-min fallback poll, and
+ *   - the prevSt transition check that fires done/interrupted notifications.
+ *   One tiny readFileSync per tick. */
+const TICK_MS = 450;
 
 /** Per-session state directory read by the injected timer. */
 const STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status");
@@ -132,19 +154,38 @@ const RUNTIME_RES_DIR = path.join(INSTALL_DIR, "resources");
 
 /** The SVGs the injected timer references from this project's resources/.
  *  MUST stay in sync with docs/STATES.md §1 (single source of truth).
- *  Running breath (candidate A, v0.1.2+): 2-frame dim/bright wave over
- *  running-dim (#8A6A00 dark) ↔ running-bright (#FFD60A lit) — strong
- *  light/dark swing reads like a slow LED breath, and 2 frames halve the
- *  per-period iconPath redraws vs the old 6-step hue triangle (which
- *  stuttered because tab icons cannot animate via CSS — every frame is
- *  a discrete VSCode icon repaint). */
-const OUR_SVGS = [
-    "claude-logo-idle.svg",
-    "claude-logo-running.svg",
-    "claude-logo-running-dim.svg",
+ *
+ *  Since v0.1.3 running is a **smooth 8-frame breathing animation** (not the
+ *  v0.1.2 2-frame flicker): 8 sine-eased frames interpolate the dot fill from
+ *  dark `#8A6A00` (claude-logo-running-0.svg) to bright `#FFD60A`
+ *  (claude-logo-running-7.svg). The IIFE plays them via a 14-step triangle
+ *  wave (`RUN_IDX` below) at TICK_MS=450 → ~6.3 s per breath. Each per-frame
+ *  channel delta stays ≤ ~10%, so the eye reads a continuous fade rather
+ *  than the old discrete dim↔bright jump that read as flicker. Interrupted
+ *  still fast-flashes (it carries real alert semantics). */
+const RUN_FRAMES = [
+    "claude-logo-running-0.svg",
     "claude-logo-running-1.svg",
     "claude-logo-running-2.svg",
-    "claude-logo-running-bright.svg",
+    "claude-logo-running-3.svg",
+    "claude-logo-running-4.svg",
+    "claude-logo-running-5.svg",
+    "claude-logo-running-6.svg",
+    "claude-logo-running-7.svg",
+] as const;
+
+/** Triangle-wave playback index over RUN_FRAMES (14 steps/cycle): 0,1,...,7
+ *  ramp up, then 6,5,...,1 ramp down — the peak (frame 7) and trough (frame 0)
+ *  each appear once per cycle, every other frame appears twice. Lookup table
+ *  (not computed) so tuning the cycle is a one-line edit. The IIFE bakes a
+ *  JSON.stringify'd copy of this array. */
+const RUN_IDX = [0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1] as const;
+
+/** All SVGs the IIFE can reference + installRuntimeFiles copies + cleanup
+ *  keeps. The 8 breathing frames replace the old single static running.svg. */
+const OUR_SVGS = [
+    "claude-logo-idle.svg",
+    ...RUN_FRAMES,
     "claude-logo-done.svg",
     "claude-logo-error.svg",
 ];
@@ -356,16 +397,15 @@ function countOccurrences(haystack: string, needle: string): number {
 //   t = the `ts` panel instance (has panelTab, context.extensionPath).
 //   Reads ~/.claude/cc-tab-status/<sid>.json -> {state, since, error?}
 //   State machine + notification mirror docs/STATES.md §1/§4/§4b — keep in sync.
-//     running     -> 2-frame dim/bright wave over running-dim ↔ running-bright,
-//                    step every 3 ticks (Math.floor(seq/3)%2 → 1500ms per frame,
-//                    3000ms period). Strong dark↔light swing reads as a slow LED
-//                    breath; only 2 iconPath repaints per cycle (down from 6 in
-//                    the old hue triangle) — minimises the stutter that comes
-//                    from VSCode redrawing the tab icon on every iconPath swap
-//                    (tab icons cannot animate via CSS; each swap is a discrete
-//                    repaint, so fewer+more-contrasting frames wins).
+//     running     -> smooth 8-frame breathing: a 14-step triangle wave over 8
+//                    sine-eased yellow frames (dark #8A6A00 ↔ bright #FFD60A)
+//                    at TICK_MS=450 → ~6.3 s per breath. Per-frame channel
+//                    delta ≤ ~10% so it reads as a continuous fade (NOT the
+//                    v0.1.2 2-frame dim↔bright flicker). Implemented as a
+//                    baked lookup table (RUN_IDX) of frame indices into
+//                    RUN_FRAMES; svg = RES/RUN_FRAMES[RUN_IDX[seq%14]].
 //     interrupted -> flash claude-logo-error.svg <-> CC's claude-logo.svg (off-frame)
-//                    at 500 ms on/off (seq%2) — alerts stay intentionally fast.
+//                    at ~450 ms on/off (seq%2) — alerts stay intentionally fast.
 //     done        -> steady claude-logo-done.svg; if since older than 5 min -> idle
 //     idle        -> steady claude-logo-idle.svg
 //     missing/unknown -> return (don't fight CC's own pending/done icon)
@@ -377,23 +417,25 @@ function buildIIFE(resDir: string): string {
     // JSON.stringify yields a safely-quoted, escaped JS string literal for the path
     // (also handles the non-ASCII chars in the project path correctly).
     const resLiteral = JSON.stringify(resDir);
+    // JSON.stringify the frame list + triangle-wave index so the injected IIFE
+    // carries them as plain JS array literals (no minified-identifier refs, no
+    // runtime regex). Keep these in lock-step with the RUN_FRAMES / RUN_IDX
+    // consts above and with docs/STATES.md §4 (single source of truth).
+    const runFramesLiteral = JSON.stringify([...RUN_FRAMES]);
+    const runIdxLiteral = JSON.stringify([...RUN_IDX]);
     // State machine + notification mirror docs/STATES.md §1/§4/§4b. Keep in sync.
     return [
-        `/*${INJECT_MARKER}*/`,
+        `/*${INJECT_MARKER}:${INJECT_VERSION}*/`,
         `(function(t){`,
         `if(t.__ccDotStarted||!t.panelTab)return;`,
         `t.__ccDotStarted=true;`,
         `var fs=require("fs"),pth=require("path"),vs=require("vscode"),os=require("os");`,
         `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");`,
         `var RES=${resLiteral};`,
+        `var RUN_FRAMES=${runFramesLiteral};`,
+        `var RUN_IDX=${runIdxLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         `var DONE_TO_IDLE_MS=5*60*1000;`,
-        // Candidate A (v0.1.2+): 2-frame dim/bright breath. Math.floor(seq/3)
-        // steps every 3 ticks (1500ms per frame at TICK_MS=500); %2 alternates
-        // dim↔bright; full period = 6 ticks = 3000ms. Old 6-frame hue triangle
-        // was discarded — it had 3x the repaints and the small hue shifts read
-        // as flicker, not breathing.
-        `var RUN_FRAMES=["claude-logo-running-dim.svg","claude-logo-running-bright.svg"];`,
         `var seq=0,prevSt=null;`,
         `function notify(st,err){`,
         `var c=vs.workspace.getConfiguration("ccStatusDot");`,
@@ -416,11 +458,9 @@ function buildIIFE(resDir: string): string {
         `if(prevSt&&prevSt!==st&&(st==="done"||st==="interrupted")){try{notify(st,err)}catch(e){}}`,
         `if(st)prevSt=st;`,
         `var now=Date.now();`,
-        `try{var files=fs.readdirSync(DIR);var arr=[];for(var fi=0;fi<files.length;fi++){if(!files[fi].endsWith(".json"))continue;var fsid=files[fi].slice(0,-5);try{var jj=JSON.parse(fs.readFileSync(pth.join(DIR,files[fi]),"utf8"));var jst=jj.state;if(jst==="done"&&jj.since&&(now-jj.since>DONE_TO_IDLE_MS))jst="idle";arr.push({sid:fsid,state:jst,title:jj.title||"",since:jj.since||0})}catch(e){}}if(t.webview&&t.webview.postMessage){t.webview.postMessage({type:"cc_status_bar",currentSid:t.__ccSid,sessions:arr})}}catch(e){}`,
-        `if(!t.__ccFocusWired&&t.webview&&t.webview.onDidReceiveMessage){t.__ccFocusWired=true;t.webview.onDidReceiveMessage(function(m){if(m&&m.type==="cc_focus_session"&&m.sessionId){try{vs.commands.executeCommand("claude-vscode.editor.open",m.sessionId)}catch(e){}}})}`,
         `var svg;`,
         `if(st==="interrupted"){svg=(seq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
-        `else if(st==="running"){svg=pth.join(RES,RUN_FRAMES[Math.floor(seq/3)%2])}`,
+        `else if(st==="running"){svg=pth.join(RES,RUN_FRAMES[RUN_IDX[seq%14]])}`,
         `else if(st==="done"){svg=(since&&(now-since>DONE_TO_IDLE_MS))?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-done.svg")}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
         `else{return}`,
@@ -439,60 +479,20 @@ function isExtensionPatched(content: string): boolean {
     return content.includes(INJECT_MARKER);
 }
 
-/** Extract the baked `var RES="..."` path from an already-patched extension.js.
- *  The IIFE bakes `var RES=<JSON.stringify(resDir)>;` once per injection site
- *  (Anchor A, optionally Anchor B → 1 or 2 occurrences, all identical). We read
- *  the first to detect a STALE baked path — e.g. a v0.1 install baked
- *  PROJECT_ROOT/resources; phase1 bakes INSTALL_DIR/resources. Returns null if
- *  the literal cannot be found/parsed (treat as "not stale, leave alone").
- *
- *  The match is anchored on `cc-tab-status");var RES=` — the DIR literal always
- *  immediately precedes RES inside OUR IIFE — so a coincidental CC-native
- *  `var RES=` elsewhere in the minified bundle can never be misread. */
-function bakedResPath(content: string): string | null {
-    const m = content.match(/cc-tab-status"\);var RES=("[^"]*");/);
-    if (!m) return null;
-    try {
-        return JSON.parse(m[1]);
-    } catch {
-        return null;
-    }
+/** Parse the version stamp from an already-patched extension.js.
+ *  Returns the stamped version (e.g. "v0.1.3"), or null when the marker is
+ *  present but has no version suffix (pre-v0.1.3 injection) — null is treated
+ *  as "stale, re-inject" by patchExtension. */
+function injectedVersion(content: string): string | null {
+    const m = content.match(/cc-status-dot-injected:v(\d+\.\d+\.\d+)\*/);
+    return m ? "v" + m[1] : null;
 }
 
-function patchExtension(extDir: string): void {
-    const extJs = path.join(extDir, "extension.js");
-    if (!fs.existsSync(extJs)) fail(`extension.js not found in ${extDir}`);
-
-    const src = fs.readFileSync(extJs, "utf8");
-    if (isExtensionPatched(src)) {
-        // Already patched. But the baked RES path may be STALE: a v0.1 install
-        // (git clone + tsx patch.ts) baked PROJECT_ROOT/resources into the IIFE,
-        // while phase1 bakes INSTALL_DIR/resources. If the user merely re-runs
-        // the new patcher over an old install, the marker matches and we would
-        // otherwise skip — leaving the IIFE pointing at a path the user is
-        // expected to delete. Surgically rewrite the RES literal in place so the
-        // upgrade takes effect without needing --revert + reinstall.
-        const wantRes = RUNTIME_RES_DIR;
-        const baked = bakedResPath(src);
-        if (baked === null || baked === wantRes) {
-            log("extension.js already patched — skipping injection");
-            return;
-        }
-        const oldLit = JSON.stringify(baked);
-        const newLit = JSON.stringify(wantRes);
-        const needle = `var RES=${oldLit};`;
-        if (!src.includes(needle)) {
-            warn(`extension.js patched but baked RES literal not found (got ${baked}); skipping RES rewrite`);
-            return;
-        }
-        backupOnce(extJs, extJs + ".bak");
-        // split/join replaces ALL occurrences (Anchor A + optional Anchor B).
-        const next = src.split(needle).join(`var RES=${newLit};`);
-        fs.writeFileSync(extJs, next, "utf8");
-        log(`updated stale baked RES path: ${baked} → ${wantRes}`);
-        return;
-    }
-
+/** Validate anchors, back up once, and write the IIFE into extension.js.
+ *  `src` is the CURRENT unpatched content of extension.js (must NOT contain
+ *  INJECT_MARKER — pre-v0.1.3 originals never do; restoreExtension yields one
+ *  from .bak). Throws on anchor mismatch without writing anything. */
+function injectFresh(extJs: string, src: string): void {
     // Validate anchors BEFORE creating any backup or writing anything, so a
     // failed run leaves zero footprint on disk (no half-written file, no .bak).
     const aCount = countOccurrences(src, ANCHOR_A);
@@ -547,6 +547,81 @@ function patchExtension(extDir: string): void {
     log(`patched extension.js (anchors injected: A${bCount === 1 ? "+B" : " only"})`);
 }
 
+/** Extract the baked `var RES="..."` path from an already-patched extension.js.
+ *  The IIFE bakes `var RES=<JSON.stringify(resDir)>;` once per injection site
+ *  (Anchor A, optionally Anchor B → 1 or 2 occurrences, all identical). We read
+ *  the first to detect a STALE baked path — e.g. a v0.1 install baked
+ *  PROJECT_ROOT/resources; phase1 bakes INSTALL_DIR/resources. Returns null if
+ *  the literal cannot be found/parsed (treat as "not stale, leave alone").
+ *
+ *  The match is anchored on `cc-tab-status");var RES=` — the DIR literal always
+ *  immediately precedes RES inside OUR IIFE — so a coincidental CC-native
+ *  `var RES=` elsewhere in the minified bundle can never be misread. */
+function bakedResPath(content: string): string | null {
+    const m = content.match(/cc-tab-status"\);var RES=("[^"]*");/);
+    if (!m) return null;
+    try {
+        return JSON.parse(m[1]);
+    } catch {
+        return null;
+    }
+}
+
+function patchExtension(extDir: string): void {
+    const extJs = path.join(extDir, "extension.js");
+    if (!fs.existsSync(extJs)) fail(`extension.js not found in ${extDir}`);
+
+    const src = fs.readFileSync(extJs, "utf8");
+    if (!isExtensionPatched(src)) {
+        injectFresh(extJs, src);
+        return;
+    }
+
+    // Already patched. Two independent staleness axes:
+    //   (1) IIFE *logic* version — the marker matches but the stamped version is
+    //       absent (pre-v0.1.3) or older than INJECT_VERSION. The bare marker
+    //       match alone cannot detect this, so a re-run would otherwise skip and
+    //       leave the old IIFE body (e.g. v0.1.2 breathing frames) in place.
+    //       Fix: restore extension.js from .bak and re-inject the current IIFE.
+    //   (2) baked RES path — a v0.1 install baked PROJECT_ROOT/resources; we
+    //       surgically rewrite that one literal in place (cheaper than full re-inject).
+    const ver = injectedVersion(src);
+    if (ver !== INJECT_VERSION) {
+        const bak = extJs + ".bak";
+        if (fs.existsSync(bak)) {
+            const original = fs.readFileSync(bak, "utf8");
+            if (!isExtensionPatched(original)) {
+                log(`stale injected IIFE (${ver ?? "pre-v0.1.3"}) — re-injecting from extension.js.bak`);
+                injectFresh(extJs, original);
+                return;
+            }
+            warn(`extension.js.bak is itself patched — cannot cleanly re-inject; falling back to RES rewrite`);
+        } else {
+            warn(`stale injected IIFE (${ver ?? "pre-v0.1.3"}) but no extension.js.bak — cannot re-inject; falling back to RES rewrite`);
+        }
+        // Fall through to baked-RES check as a best-effort refresh.
+    }
+
+    const wantRes = RUNTIME_RES_DIR;
+    const baked = bakedResPath(src);
+    if (baked === null || baked === wantRes) {
+        log("extension.js already patched — skipping injection");
+        return;
+    }
+    const oldLit = JSON.stringify(baked);
+    const newLit = JSON.stringify(wantRes);
+    const needle = `var RES=${oldLit};`;
+    if (!src.includes(needle)) {
+        warn(`extension.js patched but baked RES literal not found (got ${baked}); skipping RES rewrite`);
+        return;
+    }
+    backupOnce(extJs, extJs + ".bak");
+    // split/join replaces ALL occurrences (Anchor A + optional Anchor B).
+    const next = src.split(needle).join(`var RES=${newLit};`);
+    fs.writeFileSync(extJs, next, "utf8");
+    log(`updated stale baked RES path: ${baked} → ${wantRes}`);
+}
+
 function restoreExtension(extDir: string): void {
     const extJs = path.join(extDir, "extension.js");
     const bak = extJs + ".bak";
@@ -560,105 +635,37 @@ function restoreExtension(extDir: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Webview patch — aggregate status bar (see docs/WEBVIEW-injection.md)
-//   Patches webview/index.js (stash acquireVsCodeApi + inject bar IIFE) and
-//   webview/index.css (bar styles). Different files from extension.js, zero
-//   overlap with the iconPath patch.
+// Webview restore — removes the legacy aggregate status bar injected by
+//   v0.1.2 (ACQUIRE_RE / WV_JS_MARKER / WV_API_MARKER / WV_CSS_MARKER).
+//   The injection itself was removed in v0.1.3 (the bar was more noise than
+//   signal — the per-tab dot already tells you every session's state). We keep
+//   this restore so (a) --revert still undoes a v0.1.2 install, and (b) install
+//   auto-detects a leftover v0.1.2 webview patch and cleans it (see run()).
+//
+//   Detection uses the `cc-status-bar-injected` comment tombstone — a string
+//   CC's minified webview bundle will never produce (it's our v0.1.2 banner
+//   comment), so the check is forward-safe against future CC versions. We do
+//   NOT use v0.1.2's `window.__ccVsApi=` literal here: that name follows CC's
+//   own `__cc*` convention and could one day be re-used by CC natively, which
+//   would cause a false positive and clobber a fresh CC webview with a stale
+//   .bak. Defined locally in this restore section (not hoisted to the top
+//   Constants block) on purpose — it's a tombstone scoped to the removed
+//   injection code.
 // ---------------------------------------------------------------------------
 
-/** Regex matching CC's single acquireVsCodeApi() call site. Captures the
- *  minified var names so we only depend on the stable API name. Must hit 1x. */
-const ACQUIRE_RE = /let (\w+)=acquireVsCodeApi\(\),(\w+)=new (\w+)\(\1\)/;
+/** Literal marker baked into webview/index.js by v0.1.2's patchWebview (the
+ *  banner comment at the head of the injected block). Presence === "legacy
+ *  aggregate bar present, please clean". */
+const LEGACY_WV_MARKER = "cc-status-bar-injected";
 
-/** Idempotency markers (presence === already patched). */
-const WV_JS_MARKER = "cc-status-bar-injected";
-const WV_API_MARKER = "window.__ccVsApi=";
-const WV_CSS_MARKER = "cc-status-bar-css";
-
-function buildWebviewJsIIFE(): string {
-    // Vanilla DOM bar, mounted on document.body (outside React tree → zero
-    // reconcile interference). Reads state via postMessage bridge from the
-    // extension.js IIFE. See docs/WEBVIEW-injection.md §6.B.
-    return [
-        `/*${WV_JS_MARKER}*/`,
-        `(function(){`,
-        `if(window.__ccBarStarted)return;window.__ccBarStarted=true;`,
-        `if(window.IS_SESSION_LIST_ONLY)return;`,
-        `var API=window.__ccVsApi;if(!API)return;`,
-        `var COLORS={idle:"#808080",running:"#CCA700",done:"#3FB950",interrupted:"#F85149"};`,
-        `var bar=document.createElement("div");bar.id="cc-status-bar";`,
-        // IMPORTANT: do NOT set position/bottom/right inline here — inline styles
-        // would override the #cc-status-bar stylesheet rule (webview/index.css)
-        // that pins the bar to the chat pane's right gutter above the input row.
-        // Only `display` is toggled inline (show on message, hide after 2s idle).
-        `var hideT=null;`,
-        `function mount(){if(!document.body){setTimeout(mount,50);return;}document.body.appendChild(bar);hideT=setTimeout(function(){bar.style.display="none";},2000);}`,
-        `if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",mount);else mount();`,
-        `function render(p){if(hideT){clearTimeout(hideT);hideT=null;}bar.style.display="flex";bar.innerHTML="";var ss=p.sessions||[];var cur=p.currentSid;ss.sort(function(a,b){return (b.since||0)-(a.since||0);});for(var i=0;i<ss.length;i++){var s=ss[i];var d=document.createElement("div");d.className="cc-status-dot";d.style.background=COLORS[s.state]||COLORS.idle;d.dataset.state=s.state||"";d.dataset.sid=s.sid;if(s.sid===cur)d.classList.add("cc-status-dot-active");d.title=(s.title||s.sid)+" ["+(s.state||"?")+"]";d.addEventListener("click",function(ev){var sid=ev.currentTarget.dataset.sid;try{API.postMessage({type:"cc_focus_session",sessionId:sid});}catch(e){}});bar.appendChild(d);}}`,
-        `window.addEventListener("message",function(ev){var d=ev.data;if(d&&d.type==="cc_status_bar"){try{render(d);}catch(e){}}});`,
-        `})();`,
-    ].join("");
-}
-
-function buildWebviewCss(): string {
-    // EOF-append to webview/index.css. z-index 10001 > CC's max 10000.
-    // Container: rounded red-framed pill wrapping the dots, aligned to the
-    // chat pane's right inner padding and floating just above the input row.
-    //   bottom:56px — clears the input box (~one textarea row + button row).
-    //   right:14px — matches the chat pane's right inner gutter.
-    //   NEEDS VISUAL FINE-TUNE per CC layout revision (icon padding / webview
-    //   chrome height can shift between versions).
-    // Dots: border:none (user feedback — the old black 1px border and white
-    // active outline looked noisy); 12px rounded squares; hover scale stays.
-    // Active: no white outline — a red glow ring (matches container border) +
-    // opacity:1 emphasises the current session without a white halo.
-    return [
-        `/*${WV_CSS_MARKER}*/`,
-        `#cc-status-bar{position:fixed;bottom:56px;right:14px;display:flex;flex-direction:row;gap:7px;padding:6px 8px;z-index:10001;background:rgba(248,81,73,0.08);border:1px solid rgba(248,81,73,0.55);border-radius:12px;pointer-events:none;backdrop-filter:blur(4px);}`,
-        `#cc-status-bar .cc-status-dot{width:12px;height:12px;border-radius:4px;cursor:pointer;pointer-events:auto;opacity:.9;transition:transform .12s,opacity .12s,box-shadow .12s;border:none;}`,
-        `#cc-status-bar .cc-status-dot:hover{opacity:1;transform:scale(1.25);}`,
-        `#cc-status-bar .cc-status-dot:active{transform:scale(.9);}`,
-        `#cc-status-bar .cc-status-dot-active{opacity:1;box-shadow:0 0 0 2px rgba(248,81,73,0.6),0 0 6px 1px rgba(248,81,73,0.4);}`,
-        `@keyframes cc-breath{0%{filter:brightness(1);}50%{filter:brightness(1.5);}100%{filter:brightness(1);}}`,
-        `#cc-status-bar .cc-status-dot[data-state="running"]{animation:cc-breath 1.5s ease-in-out infinite;}`,
-    ].join("");
-}
-
-function patchWebview(extDir: string): void {
+/** Does webview/index.js still carry the v0.1.2 aggregate-bar injection? */
+function hasLegacyWebviewPatch(extDir: string): boolean {
     const wvJs = path.join(extDir, "webview", "index.js");
-    const wvCss = path.join(extDir, "webview", "index.css");
-    if (!fs.existsSync(wvJs)) { warn("webview/index.js not found — skipping webview patch"); return; }
-    if (!fs.existsSync(wvCss)) { warn("webview/index.css not found — skipping webview CSS"); return; }
-
-    // --- index.js: stash acquireVsCodeApi + append bar IIFE ---
-    let js = fs.readFileSync(wvJs, "utf8");
-    if (js.includes(WV_API_MARKER)) {
-        log("webview/index.js already patched — skipping");
-    } else {
-        const acquireCount = (js.match(/acquireVsCodeApi\(\)/g) || []).length;
-        if (acquireCount !== 1) {
-            fail(`Expected exactly 1 acquireVsCodeApi() call in webview/index.js, found ${acquireCount}. No files were modified.`);
-        }
-        const m = js.match(ACQUIRE_RE);
-        if (!m) {
-            fail(`acquireVsCodeApi() call site regex did not match in webview/index.js (anchor drift). No files were modified.`);
-        }
-        const repl = `let ${m![1]}=acquireVsCodeApi();window.__ccVsApi=${m![1]};let ${m![2]}=new ${m![3]}(${m![1]})`;
-        backupOnce(wvJs, wvJs + ".bak");
-        js = js.replace(ACQUIRE_RE, repl) + buildWebviewJsIIFE();
-        fs.writeFileSync(wvJs, js, "utf8");
-        log("patched webview/index.js (stashed vscode API + injected status bar)");
-    }
-
-    // --- index.css: append bar styles ---
-    let css = fs.readFileSync(wvCss, "utf8");
-    if (css.includes(WV_CSS_MARKER)) {
-        log("webview/index.css already patched — skipping");
-    } else {
-        backupOnce(wvCss, wvCss + ".bak");
-        css = css + buildWebviewCss();
-        fs.writeFileSync(wvCss, css, "utf8");
-        log("patched webview/index.css (status bar styles)");
+    if (!fs.existsSync(wvJs)) return false;
+    try {
+        return fs.readFileSync(wvJs, "utf8").includes(LEGACY_WV_MARKER);
+    } catch {
+        return false;
     }
 }
 
@@ -863,6 +870,23 @@ function installRuntimeFiles(): void {
                 warn(`failed to copy ${svg} (non-fatal)`);
             }
         }
+        // Sweep stale SVGs from older versions (e.g. v0.1.2 breathing frames:
+        // running-dim/-1/-2/-bright.svg). Only touches our own claude-logo-*.svg
+        // namespace — never other files in destRes.
+        try {
+            for (const name of fs.readdirSync(destRes)) {
+                if (!name.startsWith("claude-logo-") || !name.endsWith(".svg")) continue;
+                if (OUR_SVGS.includes(name)) continue;
+                try {
+                    fs.unlinkSync(path.join(destRes, name));
+                    log(`removed stale SVG: ${name}`);
+                } catch {
+                    // Non-fatal — best-effort cleanup.
+                }
+            }
+        } catch {
+            // Non-fatal.
+        }
         const srcHook = path.join(PROJECT_ROOT, "hooks", "cc-status.js");
         try {
             if (fs.existsSync(srcHook)) {
@@ -948,6 +972,16 @@ function reportStatus(): void {
     const patched = isExtensionPatched(extSrc);
     log(`extension.js patched: ${patched ? "YES" : "no"}`);
     if (patched) {
+        // Surface a stale injected IIFE first: a pre-v0.1.3 (or older) IIFE has
+        // the marker but old logic (breathing frames etc.) — re-run re-injects.
+        const ver = injectedVersion(extSrc);
+        if (ver === null) {
+            log(`  injected IIFE: pre-v0.1.3 (STALE — re-run to re-inject)`);
+        } else if (ver !== INJECT_VERSION) {
+            log(`  injected IIFE: ${ver} (STALE — expected ${INJECT_VERSION}; re-run to re-inject)`);
+        } else {
+            log(`  injected IIFE: ${ver} (up to date)`);
+        }
         // Surface a stale baked RES (e.g. v0.1 install pointing at PROJECT_ROOT)
         // so upgrading users can see they need a re-run, not just a reload.
         const baked = bakedResPath(extSrc);
@@ -959,9 +993,8 @@ function reportStatus(): void {
             log(`  baked RES: ${baked} (STALE — expected ${RUNTIME_RES_DIR}; re-run to update)`);
         }
     }
-    const wvJs = path.join(dir, "webview", "index.js");
-    const wvPatched = fs.existsSync(wvJs) && fs.readFileSync(wvJs, "utf8").includes(WV_API_MARKER);
-    log(`webview patched (status bar): ${wvPatched ? "YES" : "no"}`);
+    const legacyBar = hasLegacyWebviewPatch(dir);
+    log(`legacy webview bar (v0.1.2): ${legacyBar ? "detected — re-run install to clean" : "clean"}`);
     log(`hooks wired: ${isHooksWired() ? "YES" : "no"}`);
     // The injected IIFE references RUNTIME_RES_DIR (INSTALL_DIR/resources).
     // Check THERE honestly — do NOT silently fall back to the project source
@@ -980,7 +1013,7 @@ function printHelp(): void {
             "",
             "Usage:",
             "  vscode-claude-code-status-dot            install patch + wire hooks (idempotent)",
-            "  vscode-claude-code-status-dot --revert   restore extension.js/webview, remove hooks + runtime copy",
+            "  vscode-claude-code-status-dot --revert   restore extension.js (and legacy v0.1.2 webview), remove hooks + runtime copy",
             "  vscode-claude-code-status-dot --status   show detection results, change nothing",
             "  vscode-claude-code-status-dot --help     this message",
             "",
@@ -1041,8 +1074,16 @@ function run(argv: string[]): void {
     // Persist runtime files FIRST: the IIFE baked into extension.js references
     // INSTALL_DIR/resources, and the wired hook references INSTALL_DIR/hooks.
     installRuntimeFiles();
+    // Auto-clean: a v0.1.2 install left an aggregate status bar baked into
+    // webview/index.js (+index.css). v0.1.3 dropped that feature, so if we see
+    // the legacy marker, restore webview from .bak before patching. Users
+    // upgrading just re-run `npx vscode-claude-code-status-dot` and the bar is
+    // removed for them — no manual --revert needed.
+    if (hasLegacyWebviewPatch(dir)) {
+        log("detected legacy aggregate bar (v0.1.2) in webview — removing");
+        restoreWebview(dir);
+    }
     patchExtension(dir);
-    patchWebview(dir);
     wireHooks();
     checkSvgs(RUNTIME_RES_DIR);
     reloadHint();

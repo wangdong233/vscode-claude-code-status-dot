@@ -20,16 +20,17 @@ cd vscode-claude-code-status-dot
 npx tsx patch.ts
 ```
 
-两种方式等价、幂等，都会把运行时副本（7 个 SVG + hook 脚本）复制到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`），注入的 IIFE 与接线的 hook 都引用该**绝对路径**——所以即便删除项目源目录或 npx 缓存被清，已 patch 的扩展仍照常渲染。
+两种方式等价、幂等，都会把运行时副本（11 个 SVG = idle + 8 running 呼吸帧 + done + error，加 hook 脚本）复制到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`），注入的 IIFE 与接线的 hook 都引用该**绝对路径**——所以即便删除项目源目录或 npx 缓存被清，已 patch 的扩展仍照常渲染。
 
 `patch.ts` 执行流程：
 
 1. 在 `~/.vscode/extensions`（及 insiders / server / cursor / vscodium）下查找 `anthropic.claude-code-*`，选版本最高的。
-2. 校验 `extension.js` 中两段 anchor 字符串的命中数（Anchor A 必须唯一命中，Anchor B 命中 0 或 1 次）。命中失败则**不写任何文件**并报错。
-3. 备份 `extension.js` → `extension.js.bak`（仅首次）。
-4. 注入 IIFE（含 `setInterval` 500ms 重绘 + done/interrupted 通知逻辑），把 `INSTALL_DIR/resources` 的绝对路径 bake 进注入块。
-5. 把 **8 个 hook 事件**写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记，命令指向 `INSTALL_DIR/hooks/cc-status.js`），首次备份为 `settings.json.cc-status-dot.bak`。
-6. 校验 `INSTALL_DIR/resources` 下 7 个 SVG 齐全（idle/running/running-1/running-2/running-bright/done/error）。
+2. 若检测到 v0.1.2 装的 webview 聚合色块条残留，**自动从 `.bak` 还原 webview**（升级即清理，无需先 `--revert`）。
+3. 校验 `extension.js` 中两段 anchor 字符串的命中数（Anchor A 必须唯一命中，Anchor B 命中 0 或 1 次）。命中失败则**不写任何文件**并报错。
+4. 备份 `extension.js` → `extension.js.bak`（仅首次）。
+5. 注入 IIFE（含 `setInterval` 450ms 重绘：running 走 8 帧呼吸切帧 + done/interrupted 通知逻辑），把 `INSTALL_DIR/resources` 的绝对路径 bake 进注入块。
+6. 把 **8 个 hook 事件**写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记，命令指向 `INSTALL_DIR/hooks/cc-status.js`），首次备份为 `settings.json.cc-status-dot.bak`。
+7. 校验 `INSTALL_DIR/resources` 下 11 个 SVG 齐全（idle + 8 个 running 呼吸帧 + done + error）。
 
 > **升级**：旧版（git clone 装的）用户直接重跑 `npx vscode-claude-code-status-dot` 即可——patcher 会检测到旧的 baked 路径过期并**原地改写** IIFE 的 `RES` 与 hook 命令，无需 `--revert` 后重装。
 
@@ -41,7 +42,7 @@ npx tsx patch.ts
 
 | 想测的状态 | 怎么触发 | 预期图标 |
 |---|---|---|
-| `running` | 在 CC 里发一条 prompt | 黄色呼吸 |
+| `running` | 在 CC 里发一条 prompt | 🟡 黄色**呼吸**（8 帧正弦渐变暗↔亮，~6.3s 周期） |
 | `done` | 等 CC 本轮正常完成 | 绿色静态 |
 | `idle` | `done` 后等超过 5 分钟（reader 自动把 done 渲染为 idle） | 灰色静态 |
 | `interrupted` | 触发 `StopFailure`（如限速 / 过载）——较难主动模拟，可跳过 | 红色快闪 |
@@ -72,17 +73,6 @@ npx tsx patch.ts
 
 > 限制：VSCode 完全关闭时不通知（IIFE 不运行）；系统通知点击不能跳转到 CC tab（仅提醒，回 VSCode 靠 tab 点定位）。详见 [`STATES.md` §4b/§5](STATES.md)。
 
-## 3.6 聚合状态条（webview 右下角）
-
-patch 还在 CC 聊天面板右下角注入一个**聚合色块条**：每个 CC session 一个小色块，颜色同 tab 图标四态（灰空闲/黄运行/绿完成/红中断），点击某色块切换到对应 session tab。
-
-- **位置**：webview 右下角浮层（`position:fixed`），不进 React 树，React 重渲染无影响。
-- **当前 session 高亮**：白色描边。
-- **2 秒无数据自动隐藏**（如会话列表侧栏 webview 收不到桥推送）。
-- **点击切 tab**：点色块 → 切到该 session（已开的走 reveal，不新建）。
-
-> 若色块条压住输入框发送按钮，可调 CSS `bottom` 偏移（见 [`WEBVIEW-injection.md` §5.2](WEBVIEW-injection.md)）。布局定位需真实 webview 目测。
-
 ## 4. 排错
 
 **图标完全没变**
@@ -109,7 +99,7 @@ npx vscode-claude-code-status-dot --revert
 # 开发态：npx tsx patch.ts --revert
 ```
 
-- 从 `extension.js.bak` 恢复原版 `extension.js`（及 webview）。
+- 从 `extension.js.bak` 恢复原版 `extension.js`。若 webview 残留 v0.1.2 装的聚合色块条，也一并从 `.bak` 还原。
 - 从 `settings.json` 中基于标记精确移除本项目 hook 条目（不影响你其它 hook）。
 - 删除 `INSTALL_DIR`（运行时副本）；**保留** `~/.claude/cc-tab-status/`（用户数据）。
 - 末尾会列出残留的 `.bak` 安全副本及手动删除命令（可选清理）。

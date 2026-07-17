@@ -1,5 +1,7 @@
 # CC Webview 聚合状态色块条注入设计（WEBVIEW-injection）
 
+> **⚠️ v0.1.3 已废弃（DEPRECATED）**：本文描述的"右下角聚合色块条"webview 注入在 v0.1.3 被移除。tab 图标四态点 + 完成/中断通知已把每 session 状态表达清楚，色块条更多是冗余而非增量信息，且它在 `webview/index.js`/`index.css` 上独立打补丁，维护成本与脆弱性都高于 extension.js 的 iconPath 注入。代码侧：`patchWebview`/`buildWebviewJsIIFE`/`buildWebviewCss` 与 `ACQUIRE_RE`/`WV_*_MARKER` 常量已删；`restoreWebview` 保留，用于安装时自动清理 v0.1.2 残留 + `--revert` 还原旧版安装。下文保留为历史设计决策记录，**不再代表当前实现**。
+
 > 逆向目标：`anthropic.claude-code-2.1.206-darwin-x64`
 > 　· `webview/index.js`（minified, 4.81 MB, 单行）
 > 　· `webview/index.css`（minified, 383 KB, 单行）

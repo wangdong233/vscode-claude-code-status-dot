@@ -1,0 +1,257 @@
+<div align="center">
+
+# vscode-claude-code-status-dot
+
+[![npm](https://img.shields.io/npm/v/vscode-claude-code-status-dot?style=flat-square&color=CCA700)](https://www.npmjs.com/package/vscode-claude-code-status-dot)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](#licence)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Type](https://img.shields.io/badge/Type-VSCode%20Patch-CCA700?style=flat-square)](#-principe--documentation)
+
+**Patche l'extension VSCode de Claude Code pour transformer l'icône d'onglet de chaque session en point d'état à quatre états**
+
+🟡 En cours · 🟢 Terminé · 🔴 Interruption (clignotement rapide) · ⚪ Inactif — plus des notifications de fin / interruption
+
+[简体中文](README.md) | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | **Français** | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
+
+</div>
+
+---
+
+## ✨ Caractéristiques
+
+- 🔧 **Installation en une ligne** — `npx vscode-claude-code-status-dot` patche automatiquement l'extension CC, câble 8 hooks, copie les fichiers d'exécution ; idempotent, relançable à volonté
+- 🛡️ **Persistant, sans crainte de supprimer la source** — l'exécutable de lecture est copié vers `~/.claude/cc-status-dot/` ; supprimer le projet source, vider le cache npx ou une mise à jour automatique de CC n'affecte pas l'extension déjà patchée
+- 🎨 **Couverture totale des quatre états** — plus complet que le CC natif (qui n'a que deux points bleu/orange) : idle / running / done / interrupted tous visualisés
+- 🔔 **Notifications de fin / interruption** — supprimées au premier plan ; bascule de fenêtre → message VSCode + notification système macOS + son, sans devoir fixer l'écran
+- ⚙️ **Reste jaune running pendant l'exécution d'un workflow** — pas de faux vert tant que des subagents/cron tournent en arrière-plan, `Stop` est l'arbitre
+- 📂 **Synchronisation de la vue Open Editors** — l'onglet CC dans la vue « Open Editors » en haut à gauche porte aussi le point d'état (`iconPath` est une propriété d'onglet, partagée entre les deux emplacements)
+- ↩️ **Restauration en un clic, sans effet de bord** — `--revert` restaure `extension.js` depuis `.bak`, retire les hooks chirurgicalement et conserve vos données utilisateur
+
+> ⚠️ **Avertissement honnête** : ce projet est un **patch, pas une extension autonome** — VSCode ne permet pas à une extension tierce de modifier l'icône d'onglet webview d'une autre extension. La seule voie possible est de patcher le `extension.js` de CC lui-même. Conséquence : les mises à jour automatiques de CC écrasent le patch, il faut relancer la commande.
+
+---
+
+## 💬 Que pouvez-vous obtenir ?
+
+Une fois installé, pendant que Claude Code travaille, **voyez en un coup d'œil ce que fait chaque session** :
+
+| Scénario | Ce que vous voyez / obtenez |
+|---|---|
+| CC se lance (vous envoyez un prompt) | 🟡 l'icône d'onglet devient un **point jaune statique** `#CCA700` (pas d'animation, comme idle/done — le changement d'images via `iconPath` est par nature discret, le statique est le plus propre) |
+| CC termine normalement ce tour | 🟢 l'onglet passe au vert + **quand la fenêtre est quittée** vous recevez une notification système + son (pas de dérangement au premier plan) |
+| CC interrompu par limite de débit / surcharge | 🔴 l'onglet clignote rapidement en rouge + notification (le texte précise `rate limit reached` et autres causes) |
+| Un workflow / subagent en arrière-plan tourne encore | L'onglet de la session principale **reste jaune** (pas de faux vert), `Stop` tranche en arbitre sans fausse fin |
+| Regarder la vue « Open Editors » en haut à gauche | L'onglet CC s'y affiche **aussi avec le point d'état**, parfaitement synchronisé avec la barre d'onglets supérieure |
+| CC affiche une demande d'autorisation | 🔵 point bleu (**natif à CC, ce projet ne le remplace pas**) |
+
+> **Tout fonctionne dès l'installation, sans rien configurer.** Ce n'est que pour désactiver les notifications / changer le son qu'il faudra toucher à la configuration.
+
+---
+
+## 🚀 Démarrage rapide
+
+### ① Vérifier les prérequis
+
+- **Node.js 18+**
+- **L'extension VSCode de Claude Code est installée** (vous pouvez ouvrir le panneau de discussion CC dans VSCode)
+
+### ② Installation en une ligne
+
+```bash
+npx vscode-claude-code-status-dot
+```
+
+Cette ligne effectue automatiquement :
+1. Trouver `anthropic.claude-code-*` dans `~/.vscode/extensions` (ainsi que insiders / cursor / vscodium, etc.) et choisir la version la plus récente ;
+2. Si un résidu de la barre d'agrégation webview (présent dans l'ancienne v0.1.2) est détecté, **restaurer automatiquement le webview** (la mise à niveau nettoie, pas besoin de `--revert` d'abord) ;
+3. Valider les ancres puis **sauvegarder** `extension.js` → `extension.js.bak` (première fois seulement) ;
+4. Injecter une IIFE de redessin toutes les 500 ms (réglage de l'icône d'onglet + notifications done/interrupted) ;
+5. Écrire les **8 événements hook** dans `~/.claude/settings.json` (marqués `# cc-status-dot-managed`, idempotents) ;
+6. Copier les fichiers d'exécution (4 SVG = idle + running + done + error, plus les scripts de hook) vers `~/.claude/cc-status-dot/` (`INSTALL_DIR`).
+
+> **Ou depuis la source (mode développement)** :
+> ```bash
+> git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
+> cd vscode-claude-code-status-dot
+> npx tsx patch.ts
+> ```
+> Les deux méthodes sont équivalentes et idempotentes. L'IIFE et les hooks référencent le chemin absolu de `INSTALL_DIR` — **supprimer le projet source ou vider le cache npx n'affecte pas l'extension déjà patchée**.
+
+### ③ Recharger la fenêtre
+
+`Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux) → saisir `Developer: Reload Window`.
+
+### ④ Envoyer un prompt et observer
+
+Dans CC, envoyez un prompt :
+- L'icône d'onglet devient 🟡 **point jaune statique** → CC termine → devient 🟢 vert
+- **Basculez de la fenêtre VSCode** en attendant la fin de CC → recevez une notification système + son
+
+---
+
+## 🎨 Couleurs d'état
+
+| Couleur | Signification | Déclencheur |
+|---|---|---|
+| 🟡 Jaune `#CCA700` (**statique**, pas d'animation) | En cours | Envoi d'un prompt, avant/après un appel d'outil (heartbeat), spawn de subagent |
+| 🟢 Vert `#3FB950` (statique) | Tour terminé | CC déclenche `Stop` (**au-delà de 5 minutes, retour au gris automatiquement**) |
+| 🔴 Rouge `#F85149` (clignotement rapide) | Interruption / erreur | CC déclenche `StopFailure` (limite de débit, surcharge, etc.) |
+| ⚪ Gris `#808080` (statique) | Inactif | Initial / terminé depuis plus de 5 minutes / aucun fichier d'état |
+| 🔵 Bleu (natif CC) | En attente d'autorisation | Point bleu natif de CC, **ce projet ne le remplace pas** |
+
+> Depuis v0.1.4, running revient au **point jaune statique** `#CCA700` (comme idle/done/error, sans animation). v0.1.3 avait essayé une respiration sinusoïdale à 8 images, mais le changement d'images via `iconPath` est par nature discret (VSCode redessine l'icône après chaque affectation), les transitions entre images n'étant pas continues et se lisant à l'œil comme un clignotement plutôt qu'un fondu — d'où le retour au statique, le plus propre. L'interruption conserve son clignotement rapide d'alerte d'environ 500 ms. Le contrat d'état complet (événements / SVG / IPC / notifications) se trouve dans [`docs/STATES.md`](docs/STATES.md).
+
+---
+
+## 🛠️ Détail des capacités
+
+### 🟡 Point d'icône d'onglet à quatre états
+
+L'icône d'onglet de chaque session CC change de couleur selon l'état, **affichée à la fois dans la barre d'onglets supérieure et dans la vue « Open Editors » en haut à gauche** (`iconPath` est une propriété d'onglet, partagée entre les deux). Le minuteur injecté toutes les 500 ms lit `~/.claude/cc-tab-status/<session_id>.json` et redessine — car CC lui-même ne redessine l'icône qu'à l'événement clairsemé `rename_tab`, ce qui n'est pas fluide. running/idle/done sont tous des **points statiques** (depuis v0.1.4, running est revenu au jaune statique `#CCA700`, pour la raison que le changement d'images via `iconPath` est discret et discontinu, l'animation de respiration se lisant comme un clignotement) ; interrupted utilise un clignotement rapide seq%2.
+
+### 🔔 Notifications de fin / interruption
+
+Quand une session passe à `done` ou `interrupted` (uniquement à cette transition, sans répétition) :
+
+- **VSCode au premier plan** : supprimé par défaut (l'icône qui devient verte / clignote rouge suffit) ;
+- **VSCode pas au premier plan** : message VSCode (dock bounce) + notification système macOS (centre de notifications + son).
+
+done et interruption jouent tous deux `ccStatusDot.notifySound` (`Glass` par défaut). À la première notification système, macOS affichera une fois « Script Editor veut envoyer des notifications » — autorisez-la.
+
+### ⚙️ Reste jaune running pendant l'exécution d'un workflow
+
+Après que l'agent principal a répondu « démarré », `Stop` **n'écrit plus par erreur done (faux vert)** : à `Stop` / `SubagentStop`, lecture en priorité du `background_tasks[]` du payload du hook (source autoritaire CC v2.1.145+, couvre workflow/subagent/teammate de tous types), avec repli sur le comptage `activeSubagents` + signal précoce `SubagentStart` en cas d'absence. Le reader ne lit pas le compteur, l'état reste à quatre états.
+
+### 📂 Synchronisation de la vue Open Editors
+
+L'onglet CC dans la vue « Open Editors » en haut à gauche **porte aussi le point d'état** — car `iconPath` est une propriété au niveau de l'onglet, partagée entre la barre d'onglets supérieure et Open Editors, sans injection supplémentaire.
+
+<details>
+<summary>📖 Mécanisme de persistance (pourquoi supprimer la source n'a pas d'impact)</summary>
+
+Les chemins SVG référencés par le reader (IIFE injecté) et les commandes de hook câblées dans settings.json pointent tous vers le chemin absolu de `INSTALL_DIR` (`~/.claude/cc-status-dot/`), et non vers le répertoire source du projet. À l'installation, le patcher copie de façon idempotente une copie depuis la source du projet (`resources/` + `hooks/`). Ainsi, même si vous :
+- supprimez le répertoire source du projet
+- videz le cache npx
+- une mise à jour automatique de CC (qui ne remplace que le répertoire d'extension, sans toucher à `~/.claude/`)
+
+…l'extension déjà patchée continue de s'afficher normalement. Il suffit de **relancer une fois** `npx vscode-claude-code-status-dot` après une mise à jour de CC pour restaurer le patch.
+
+</details>
+
+<details>
+<summary>📖 Parcours de mise à niveau (comment monter d'une ancienne version installée via git clone)</summary>
+
+Les utilisateurs de l'ancienne version peuvent relancer directement `npx vscode-claude-code-status-dot` — les deux couches d'obsolescence sont traitées automatiquement, **sans `--revert` préalable** :
+
+1. **Version logique IIFE obsolète** — le bloc injecté porte l'horodatage de version `cc-status-dot-injected:v0.1.4`. Quand le patcher détecte que la version du marqueur ne correspond pas à la version courante (ex. IIFE respiration 8 images de v0.1.3 → IIFE statique de v0.1.4), il restaure le fichier original depuis `extension.js.bak` puis réinjecte le nouvel IIFE.
+2. **Chemin baked obsolète** — l'ancienne version (v0.1 installée via git clone) bake le répertoire source du projet ; le patcher réécrit sur place le littéral `RES` dans l'IIFE et les commandes de hook dans settings.json pour pointer vers `INSTALL_DIR`.
+
+</details>
+
+<details>
+<summary>📖 Pourquoi un patch (et non une extension autonome)</summary>
+
+L'icône d'onglet d'un `WebviewPanel` VSCode (`iconPath`) est définie de façon **exclusive par l'extension qui crée ce panel** ; aucune API publique ne permet à une extension tierce de la modifier. L'onglet de session CC est précisément un WebviewPanel créé par l'extension CC, son icône ne peut être définie qu'à l'intérieur du `extension.js` de CC. Toutes les alternatives envisagées (extension autonome, API proposed, interception webview, etc.) sont injoignables — le patch est la seule voie possible. Conséquence : les mises à jour automatiques de CC écrasent le patch, il faut relancer le patch.
+
+</details>
+
+<details>
+<summary>📖 Aperçu des commandes</summary>
+
+| Commande | Rôle |
+|---|---|
+| `npx vscode-claude-code-status-dot` | Installer (patch extension.js + câbler les hooks, idempotent ; nettoie automatiquement un résidu webview v0.1.2 détecté) |
+| `npx vscode-claude-code-status-dot --revert` | Restaurer (depuis `.bak` + retirer les hooks + supprimer INSTALL_DIR, conserve les données utilisateur) |
+| `npx vscode-claude-code-status-dot --status` | dry-run, ne modifie aucun fichier |
+
+En mode développement, remplacez la commande par `npx tsx patch.ts` (mêmes paramètres).
+
+</details>
+
+---
+
+## ⚙️ Configuration (optionnelle)
+
+À écrire dans le `settings.json` de VSCode (laissez les valeurs par défaut si vous ne configurez rien) :
+
+```json
+{
+  "ccStatusDot.notify": true,
+  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifySound": "Glass"
+}
+```
+
+| Clé | Défaut | Description |
+|---|---|---|
+| `ccStatusDot.notify` | `true` | Interrupteur général des notifications |
+| `ccStatusDot.notifyWhenFocused` | `false` | Afficher aussi un message VSCode au premier plan (garder false quand l'icône suffit) |
+| `ccStatusDot.notifySound` | `"Glass"` | Son de notification système macOS (partagé entre done et interruption ; `""` pour muet ; Basso/Ping/Hero, etc. possibles) |
+
+---
+
+## ❓ FAQ
+
+**Le point d'état ne s'allume plus après une mise à jour de CC ?**
+La mise à jour automatique de CC remplace complètement le répertoire d'extension, le fichier patché est écrasé par l'original. Relancez `npx vscode-claude-code-status-dot` (les copies d'exécution SVG/hook sont dans `~/.claude/cc-status-dot/`, que CC ne touche pas ; supprimer le projet source n'a pas d'impact non plus).
+
+**L'icône ne change pas juste après l'installation ?**
+D'abord `Developer: Reload Window`. Si cela ne marche toujours pas, lancez `npx vscode-claude-code-status-dot --status` : `patched: no` → relancez ; `baked RES ... (STALE)` → relancez pour réécrire sur place ; `hooks wired: no` → relancez ; `missing SVGs` → relancez pour compléter.
+
+**Monter depuis une ancienne version (installée via git clone) ?**
+Relancez simplement `npx vscode-claude-code-status-dot` — le patcher détecte l'obsolescence du chemin baked et réécrit sur place, sans `--revert` préalable.
+
+**L'état reste bloqué à running ?**
+C'est probablement que vous avez interrompu CC avec Esc (CC ne déclenche pas Stop/StopFailure, pas de hook). Le prochain prompt ou une fin normale corrigera l'état tout seul.
+
+**`npx` ne se connecte pas ?**
+Solution de repli — installation globale :
+```bash
+npm i -g vscode-claude-code-status-dot
+vscode-claude-code-status-dot        # lancez directement la commande après installation
+```
+
+---
+
+## ⚠️ Limites connues
+
+- **Interruption manuelle par Esc sans hook** : CC ne déclenche pas Stop/StopFailure ([#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)), l'état reste à running, corrigé naturellement au prochain prompt/Stop.
+- **Mise à jour automatique de CC écrase le patch** : le `extension.js` patché est écrasé par l'original → échec silencieux, relancez la commande pour restaurer.
+- **Fragilité des ancres minified** : le patch s'appuie sur deux chaînes précises dans le code CC ; en cas de dérive de version, le patcher signale « Anchor mismatch » et refuse d'écrire (l'extension n'est pas corrompue).
+- **Aucune notification quand VSCode est complètement fermé** : l'IIFE s'exécute dans le processus hôte de l'extension ; VSCode fermé, rien ne tourne → pas de notification.
+- **Le clic sur la notification système ne saute pas à l'onglet** : osascript n'a pas de callback de clic, la notification ne fait que rappeler ; pour revenir à VSCode, repérez l'onglet via le point vert/rouge.
+
+---
+
+## 🏗️ Principe + Documentation
+
+**Patche le `extension.js` de CC (injecte une IIFE toutes les 500 ms : lit le fichier d'état pour régler l'icône d'onglet, running jaune statique + notifications done/interrupted) + 8 hooks CC (écrivent l'état vers `~/.claude/cc-tab-status/`).** Documentation complète :
+
+- [`docs/STATES.md`](docs/STATES.md) — **Contrat d'état (source unique de vérité)** : quatre états / mapping d'événements / IPC / notifications
+- [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — Principe d'injection de l'icône (ancre / IIFE / liaison SVG)
+- [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md) — Principe d'injection de la barre de couleur (**obsolète depuis v0.1.3**, conservé comme enregistrement de conception historique)
+- [`docs/USAGE.md`](docs/USAGE.md) — Guide d'utilisation (installation / dépannage / restauration)
+
+> Ce projet modifie le `extension.js` de l'extension CC (sauvegarde effectuée, `--revert` pour restauration complète) et écrit dans `~/.claude/settings.json` (sauvegarde à la première exécution). Les scripts de hook sont conçus pour **ne jamais bloquer ni interrompre CC** — toute erreur se termine silencieusement par `exit(0)`.
+
+---
+
+## 💝 Soutenir l'auteur
+
+Si vscode-claude-code-status-dot vous est utile, offrez un café à l'auteur ☕
+
+<div align="center">
+
+WeChat | Alipay
+:-: | :-:
+<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+
+> Image du QR code de don à compléter
+
+</div>
+
+Ou ⭐ Star, ouvrez une Issue / PR — ce sont toutes des façons de soutenir l'auteur.
+
+## Licence
+
+[MIT](LICENSE) (c) wangdong

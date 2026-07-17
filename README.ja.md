@@ -1,0 +1,257 @@
+<div align="center">
+
+# vscode-claude-code-status-dot
+
+[![npm](https://img.shields.io/npm/v/vscode-claude-code-status-dot?style=flat-square&color=CCA700)](https://www.npmjs.com/package/vscode-claude-code-status-dot)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](#license)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Type](https://img.shields.io/badge/Type-VSCode%20Patch-CCA700?style=flat-square)](#-原理--ドキュメント)
+
+**Claude Code の VSCode 拡張にパッチを当て、各セッションのタブアイコンを4状態ドットに変える**
+
+🟡 実行中 · 🟢 完了 · 🔴 中断（速ブリンク） · ⚪ アイドル —— 完了 / 中断通知も
+
+[简体中文](README.md) | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | **日本語** | [Português](README.pt.md) | [Русский](README.ru.md)
+
+</div>
+
+---
+
+## ✨ 特徴
+
+- 🔧 **1行でインストール**——`npx vscode-claude-code-status-dot` が CC 拡張へのパッチ適用、8 つの hooks 接続、ランタイムファイルのコピーを自動化。冪等で再実行可能
+- 🛡️ **ソースを消しても持続**——ランタイムコピーは `~/.claude/cc-status-dot/` に配置。プロジェクト削除 / npx キャッシュクリア / CC 自動更新のいずれでも patched 済み拡張には影響しない
+- 🎨 **4状態を完全カバー**——CC ネイティブ（青/オレンジの2点のみ）より完全：idle / running / done / interrupted をすべて可視化
+- 🔔 **完了 / 中断通知**——フォアグラウンドでは抑制、ウィンドウを切り替えると VSCode メッセージ + macOS システム通知 + サウンドをポップアップ。見守り続ける必要なし
+- ⚙️ **workflow 実行中は running を維持**——バックグラウンド subagent / cron が動いているとき誤って緑にせず、`Stop` が権威判定
+- 📂 **Open Editors と同期**——左上の「開いているエディター」ビューの CC タブにも状態ドットが付く（iconPath はタブ属性、両方で共有）
+- ↩️ **副作用ゼロの1行復元**——`--revert` が `.bak` から extension.js を完全復元、hooks を外科的に除去、ユーザーデータは保持
+
+> ⚠️ **正直な声明**: 本プロジェクトは **patch（パッチ）であり、独立した拡張ではありません**——VSCode はサードパーティ拡張が別の拡張の webview タブアイコンを変更することを許可しない。唯一現実的な経路は CC 自身の `extension.js` にパッチを当てること。代償：CC の自動更新で上書きされるため、コマンドの再実行が必要。
+
+---
+
+## 💬 何が得られる?
+
+インストール後、Claude Code が動いているとき、**各セッションが今何をしているかひと目で把握**:
+
+| シーン | 見える / 得られるもの |
+|---|---|
+| CC が起動（prompt を送信） | 🟡 タブアイコンが**静的な黄ドット** `#CCA700` に（アニメなし、idle/done と同じ——iconPath のフレーム切替は本質的に離散で、静的が最もシンプル） |
+| CC が当ターン正常に完了 | 🟢 タブが緑に + **ウィンドウを切り替えたとき**システム通知 + サウンドを受信（フォアグラウンドでは邪魔しない） |
+| CC がレート制限 / 過負荷で中断 | 🔴 タブが赤の速ブリンク + 通知（文言に `rate limit reached` などの理由を含む） |
+| workflow / バックグラウンド subagent が実行中 | メインセッションのタブは**黄のまま**（誤って緑に表示されない）、`Stop` が権威判定して偽の完了を出さない |
+| 左上の「開いているエディター」ビューを見る | CC のタブはここでも**状態ドットを表示**、上部タブバーと完全同期 |
+| CC が権限リクエストをポップアップ | 🔵 青ドット（**CC ネイティブ、本プロジェクトは上書きしない**） |
+
+> **全部インストールするだけで手に入る、何も設定しなくてよい。** 通知をオフにしたい / サウンドを変えたいときだけ設定変更が必要。
+
+---
+
+## 🚀 クイックスタート
+
+### ① 前提を確認
+
+- **Node.js 18+**
+- **Claude Code の VSCode 拡張がインストール済み**（VSCode で CC チャットパネルを開ける状態）
+
+### ② 1行でインストール
+
+```bash
+npx vscode-claude-code-status-dot
+```
+
+この1行で自動的に:
+1. `~/.vscode/extensions`（および insiders / cursor / vscodium など）で `anthropic.claude-code-*` を探し、最も新しいバージョンを選択；
+2. 旧版（v0.1.2）がインストールした webview の集計色ブロックバーの残留を検出した場合、**webview を自動復元**（アップグレード即クリーンアップ、先に `--revert` する必要なし）；
+3. anchor を検証したあと `extension.js` を **バックアップ** → `extension.js.bak`（初回のみ）；
+4. 500ms 再描画 IIFE を注入（タブアイコン設定 + done/interrupted 通知）；
+5. **8 つの hook イベント**を `~/.claude/settings.json` に書き込み（`# cc-status-dot-managed` マーク付き、冪等）；
+6. ランタイムコピー（4 個の SVG = idle + running + done + error、+ hook スクリプト）を `~/.claude/cc-status-dot/`（`INSTALL_DIR`）にコピー。
+
+> **またはソースから（開発用）**:
+> ```bash
+> git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
+> cd vscode-claude-code-status-dot
+> npx tsx patch.ts
+> ```
+> どちらも等価・冪等。IIFE も hook も `INSTALL_DIR` の絶対パスを参照——**プロジェクトのソースを削除 / npx キャッシュをクリアしても patched 済み拡張には影響しない**。
+
+### ③ ウィンドウをリロード
+
+`Cmd+Shift+P`（Mac）/ `Ctrl+Shift+P`（Win/Linux）→ `Developer: Reload Window` を入力。
+
+### ④ prompt を送って観察
+
+CC で prompt をひとつ送る:
+- タブアイコンが 🟡 **静的黄ドット** に → CC 完了 → 🟢 緑に変わる
+- **VSCode ウィンドウを切り替えて** CC の完了を待つ → システム通知 + サウンドを受信
+
+---
+
+## 🎨 状態色
+
+| 色 | 意味 | トリガー |
+|---|---|---|
+| 🟡 黄 `#CCA700`（**静的**、アニメなし） | 実行中 | prompt 送信、ツール呼び出し前後（ハートビート）、subagent spawn |
+| 🟢 緑 `#3FB950`（静的） | 当ターン完了 | CC が `Stop` をトリガー（**5 分超過で自動的に灰に**） |
+| 🔴 赤 `#F85149`（速ブリンク） | 中断 / エラー | CC が `StopFailure` をトリガー（レート制限、過負荷など） |
+| ⚪ 灰 `#808080`（静的） | アイドル | 初期 / 完了から 5 分超過 / ステータスファイルなし |
+| 🔵 青（CC ネイティブ） | 承認待ち | CC ネイティブの青ドット、**本プロジェクトは上書きしない** |
+
+> v0.1.4 より running は**静的黄ドット** `#CCA700` に回帰（idle/done/error と同じくアニメなし）。v0.1.3 では8フレームのサインス呼吸を試したが、`iconPath` のフレーム切替は本質的に離散（VSCode は各代入後にアイコンを再描画する）、フレーム間の遷移が不連続で、目にはグラデーションではなくフリッカーとして読めるため、最もシンプルな静的に戻した。interrupted は ~500ms の速ブリンク警告を維持。完全な状態契約（イベント / SVG / IPC / 通知）は [`docs/STATES.md`](docs/STATES.md) を参照。
+
+---
+
+## 🛠️ 機能詳細
+
+### 🟡 4状態タブアイコンドット
+
+各 CC セッションのタブアイコンが状態に応じて変色、**上部タブバーと左上の「開いているエディター」ビューの両方に同時表示**（iconPath はタブ属性、両方で共有）。注入された 500ms タイマーが `~/.claude/cc-tab-status/<session_id>.json` を読んで再描画——CC 自身は疎な `rename_tab` イベントでしかアイコンを再描画しないため、滑らかさが足りない。running/idle/done はすべて**静的ドット**（v0.1.4 より running は静的黄 `#CCA700` に回帰、理由：iconPath のフレーム切替は離散不連続で、呼吸アニメがフリッカーに読めるため）、interrupted は seq%2 の速ブリンク。
+
+### 🔔 完了 / 中断通知
+
+セッションが `done` または `interrupted` に転換したとき（状態転換のその一瞬のみ、繰り返さない）:
+
+- **VSCode がフォアグラウンド**: デフォルトで抑制（アイコンが緑 / 赤の速ブリンクになれば十分）；
+- **VSCode がフォアグラウンドにない**: VSCode メッセージをポップアップ（dock bounce をトリガー）+ macOS システム通知（通知センター + サウンド）。
+
+done と中断はどちらも `ccStatusDot.notifySound`（デフォルト `Glass`）を再生。初回システム通知で macOS が「Script Editor が通知を送信したい」認証を一度ポップアップ、許可すれば OK。
+
+### ⚙️ workflow 実行中は running を維持
+
+メイン agent が「起動済み」と返答したあと `Stop` は**誤って done を書かない（偽緑）**: `Stop` / `SubagentStop` 時に hook payload の `background_tasks[]`（CC v2.1.145+ の権威、workflow/subagent/teammate 全タイプをカバー）を優先読み取り、欠損時は `activeSubagents` カウント + `SubagentStart` の早期シグナルにフォールバック。reader はカウントを読まず、state は4状態のまま。
+
+### 📂 Open Editors と同期
+
+VSCode 左上の「開いているエディター」ビューの CC タブも**状態ドットを表示**——`iconPath` はタブレベル属性で、上部タブバーと Open Editors が共有、追加の注入は不要。
+
+<details>
+<summary>📖 持続化の仕組み（なぜソースを消しても大丈夫か）</summary>
+
+reader（注入 IIFE）が参照する SVG パスと settings.json に接続された hook コマンドはどちらも `INSTALL_DIR`（`~/.claude/cc-status-dot/`）の**絶対パス**を指し、プロジェクトのソースディレクトリではない。インストール時に patcher がプロジェクトソース（`resources/` + `hooks/`）から冪等的にコピーする。なので以下のいずれでも:
+- プロジェクトのソースディレクトリを削除
+- npx キャッシュがクリアされる
+- CC が自動更新（拡張ディレクトリのみ上書き、`~/.claude/` には触れない）
+
+patched 済み拡張は正常に描画し続ける。CC 更新後に**一度だけ** `npx vscode-claude-code-status-dot` を再実行してパッチを復元すればよい。
+
+</details>
+
+<details>
+<summary>📖 アップグレードパス（旧版の git clone インストールからのアップグレード）</summary>
+
+旧版ユーザーはそのまま `npx vscode-claude-code-status-dot` を再実行すればよい。2 層の期限切れを自動処理、**`--revert` 後の再インストールは不要**:
+
+1. **IIFE ロジックバージョンの期限切れ**——注入ブロックにバージョンスタンプ `cc-status-dot-injected:v0.1.4` を持つ。patcher がスタンプバージョンと現行の不一致を検出すると（例：v0.1.3 の8フレーム呼吸 IIFE → v0.1.4 の静的 IIFE）、`extension.js.bak` からオリジナルファイルを復元してから新 IIFE を再注入する。
+2. **baked パスの期限切れ**——旧版（v0.1 の git clone インストール）はプロジェクトソースディレクトリを bake していた；patcher は IIFE 内の `RES` リテラルと settings.json の hook コマンドをその場で書き換え、`INSTALL_DIR` を指す。
+
+</details>
+
+<details>
+<summary>📖 なぜ patch なのか（独立した拡張ではない理由）</summary>
+
+VSCode の `WebviewPanel` タブアイコン（`iconPath`）は**その panel を生成した拡張が独占的に設定**する。サードパーティ拡張がそれを変更する公開 API は存在しない。CC の session タブはまさに CC 拡張自身が生成した WebviewPanel で、そのアイコンは CC の `extension.js` 内部でしか代入できない。代替案（独立拡張、proposed API、webview インターセプトなど）をすべて尽了くしたが到達不能、唯一の現実的経路が patch。代償：CC の自動更新で上書きされる、patch の再実行が必要。
+
+</details>
+
+<details>
+<summary>📖 コマンド一覧</summary>
+
+| コマンド | 役割 |
+|---|---|
+| `npx vscode-claude-code-status-dot` | インストール（extension.js にパッチ + hooks 接続、冪等；v0.1.2 webview 残留を検出すると自動クリーンアップ） |
+| `npx vscode-claude-code-status-dot --revert` | 復元（`.bak` から復元 + hooks 削除 + INSTALL_DIR 削除、ユーザーデータは保持） |
+| `npx vscode-claude-code-status-dot --status` | dry-run レポート、ファイルを一切変更しない |
+
+開発時はコマンドを `npx tsx patch.ts` に置き換える（同じ引数）。
+
+</details>
+
+---
+
+## ⚙️ 設定（任意）
+
+VSCode の `settings.json` に書く（設定しなければデフォルト値）:
+
+```json
+{
+  "ccStatusDot.notify": true,
+  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifySound": "Glass"
+}
+```
+
+| 設定項目 | デフォルト | 説明 |
+|---|---|---|
+| `ccStatusDot.notify` | `true` | 通知のメインスイッチ |
+| `ccStatusDot.notifyWhenFocused` | `false` | フォアグラウンドでも VSCode メッセージをポップアップ（アイコンで十分なら false を維持） |
+| `ccStatusDot.notifySound` | `"Glass"` | macOS システム通知サウンド（done と中断で共有；`""` でミュート；Basso/Ping/Hero なども選択可） |
+
+---
+
+## ❓ FAQ
+
+**CC 更新後に状態ドットが点かない?**
+CC の自動更新が拡張ディレクトリを全体置換し、patched ファイルがオリジナルで上書きされる。`npx vscode-claude-code-status-dot` を再実行（SVG/hook のランタイムコピーは `~/.claude/cc-status-dot/` にあり、CC 更新は触れない；プロジェクトのソースを削除しても影響しない）。
+
+**インストール直後にアイコンが変わらない?**
+まず `Developer: Reload Window`。それでもダメなら `npx vscode-claude-code-status-dot --status` を実行: `patched: no` は再実行；`baked RES ... (STALE)` は再実行でその場で書き換え；`hooks wired: no` は再実行；`missing SVGs` は再実行で補完。
+
+**旧版（git clone インストール）からアップグレード?**
+そのまま `npx vscode-claude-code-status-dot` を再実行——patcher が古い baked パスの期限切れを検出してその場で書き換える、`--revert` 後の再インストールは不要。
+
+**状態が running のまま固まる?**
+多くの場合 Esc で CC を中断したのが原因（CC は Stop/StopFailure をトリガーしない、hook なし）。次回 prompt 送信時か正常完了時に自然に修正される。
+
+**`npx` で接続できない?**
+フォールバックとしてグローバルインストール:
+```bash
+npm i -g vscode-claude-code-status-dot
+vscode-claude-code-status-dot        # インストール後そのままコマンド実行
+```
+
+---
+
+## ⚠️ 既知の制限
+
+- **手動 Esc 中断には hook がない**: CC は Stop/StopFailure をトリガーしない（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)）、状態は running で止まり、次回 prompt/Stop で自然修正される。
+- **CC 自動更新で上書き**: patched `extension.js` がオリジナルで上書き → サイレント無効化、コマンド再実行で復元。
+- **minified anchor の脆さ**: patch は CC コードの2箇所の正確な文字列に依存。バージョンずれが生じると patcher は "Anchor mismatch" を報告して書き込みを拒否（拡張は破壊されない）。
+- **VSCode 完全終了時は通知しない**: IIFE は拡張ホストプロセスで動く、VSCode 終了時には動かない → 通知しない。
+- **システム通知のクリックでタブに飛ばない**: osascript に click callback がなく、通知はリマインドのみ。VSCode に戻ってから tab の緑 / 赤ドットで位置を特定。
+
+---
+
+## 🏗️ 原理 + ドキュメント
+
+**CC の `extension.js` にパッチ（500ms IIFE を注入: 状態ファイルを読んでタブアイコンを設定、running は静的黄 + done/interrupted 通知）+ 8 個の CC hooks（`~/.claude/cc-tab-status/` に状態を書き込む）。** 完全なドキュメント:
+
+- [`docs/STATES.md`](docs/STATES.md)——**状態契約（唯一の真実源）**: 4状態 / イベントマッピング / IPC / 通知
+- [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)——アイコン注入の原理（anchor / IIFE / SVG バインディング）
+- [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md)——色ブロックバー注入の原理（**v0.1.3 で廃止**、歴史デザイン記録として保留）
+- [`docs/USAGE.md`](docs/USAGE.md)——使用ガイド（インストール / トラブルシューティング / 復元）
+
+> 本プロジェクトは CC 拡張の `extension.js` を変更し（バックアップ済み、`--revert` で完全復元）、`~/.claude/settings.json` に書き込む（初回バックアップ）。hook スクリプトは**決して CC をブロック / 中断しない**設計——いかなるエラーもサイレントに `exit(0)`。
+
+---
+
+## 💝 作者を支援する
+
+vscode-claude-code-status-dot がお役に立てば、作者にコーヒーをおごっていただけると嬉しいです ☕
+
+<div align="center">
+
+WeChat | Alipay
+:-: | :-:
+<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+
+> 投げ銭用QRコード画像は後日補充
+
+</div>
+
+または ⭐ Star、Issue / PR の提出 —— どれも作者へのサポートです。
+
+## License
+
+[MIT](LICENSE) (c) wangdong

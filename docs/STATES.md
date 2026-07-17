@@ -11,9 +11,9 @@
 | state | 含义 | 颜色 (hex) | SVG 文件（项目 `resources/`） | 动效 |
 |---|---|---|---|---|
 | `idle` | 空闲（初始 / 无状态文件 / 完成超 5 分钟） | 灰 `#808080` | `claude-logo-idle.svg` | 静态 |
-| `running` | 运行中 | 黄 `#8A6A00`↔`#FFD60A` | `claude-logo-running-0.svg` … `claude-logo-running-7.svg`（8 帧正弦渐变） | 呼吸（8 帧正弦渐变，三角波 14 步/周期 ≈ 6.3s） |
+| `running` | 运行中 | 黄 `#CCA700` | `claude-logo-running.svg` | 静态（无动画；v0.1.3 的 8 帧呼吸因 `iconPath` 切帧本质离散、读作闪烁，v0.1.4 回归静态） |
 | `done` | 完成 | 绿 `#3FB950` | `claude-logo-done.svg` | 静态；**reader 在 done 超 5 分钟后渲染为 idle** |
-| `interrupted` | 中断（限速 / 出错） | 红 `#F85149` | `claude-logo-error.svg` ↔ CC 默认 `claude-logo.svg` | 快闪（~450ms 切换，on/off） |
+| `interrupted` | 中断（限速 / 出错） | 红 `#F85149` | `claude-logo-error.svg` ↔ CC 默认 `claude-logo.svg` | 快闪（~500ms 切换，on/off） |
 | — (permission) | 待用户授权 | 蓝（CC 原生） | CC 原生 `claude-logo-pending.svg` | **reader 不覆盖**，CC 原生蓝点照常显示 |
 
 > 设计决策：`permission` 态不纳入我们的渲染——CC 已有原生蓝点处理 `hasPendingPermissions`，reader 在"无外部状态文件 / state 未知"时 `return`（不覆盖图标），CC 蓝点自然生效。避免重复造一套 waiting 态。
@@ -58,15 +58,15 @@
 | 目录 | 内容 | 由谁创建 | `--revert` 是否清理 |
 |---|---|---|---|
 | `~/.claude/cc-tab-status/` | **状态 IPC 文件**（本节 §3，每 session 一个 `<sid>.json`） | writer（hook）首次写入 | **否**（用户数据，保留） |
-| `~/.claude/cc-status-dot/`（`INSTALL_DIR`） | **运行时副本**：`resources/*.svg`（11 个 = idle + 8 running 呼吸帧 + done + error，reader 引用）+ `hooks/cc-status.js`（settings.json 接线的 hook 目标） | patcher 安装时从项目源复制（幂等覆盖） | **是**（删整个目录） |
+| `~/.claude/cc-status-dot/`（`INSTALL_DIR`） | **运行时副本**：`resources/*.svg`（4 个 = idle + running + done + error，reader 引用）+ `hooks/cc-status.js`（settings.json 接线的 hook 目标） | patcher 安装时从项目源复制（幂等覆盖） | **是**（删整个目录） |
 
 > **持久化设计（v0.2）**：reader（注入 IIFE）的 `RES` 与 settings.json 接线的 hook 命令都指向 `INSTALL_DIR` 的**绝对路径**，而非项目源目录。这样即使用户删除项目目录或 npx 缓存被清，已 patch 的扩展仍能照常渲染。安装一行：`npx vscode-claude-code-status-dot`。`PROJECT_ROOT` 仅用于"复制源"（安装时读一次），编译后从 `dist/patch.js` 运行时自动回溯到包根目录。
 
 ---
 
-## 4. reader 渲染逻辑（patch.ts 注入 IIFE，每 450ms 一帧）
+## 4. reader 渲染逻辑（patch.ts 注入 IIFE，每 500ms 一帧）
 
-> **reader 只读 `state`（仍四态）+ `since` + `error`**；`activeSubagents` 是 writer 内部记账字段，reader 不读、不渲染。workflow 跑期间保持 running 完全由 writer 在 `Stop`/`SubagentStop` 时改写 `state` 实现。v0.1.3 起 running 渲染为**流畅呼吸**（8 帧正弦渐变 + 14 步三角波，约 6.3s 周期；取代 0.1.2 的 2 帧大跳变），interrupted 仍快闪。
+> **reader 只读 `state`（仍四态）+ `since` + `error`**；`activeSubagents` 是 writer 内部记账字段，reader 不读、不渲染。workflow 跑期间保持 running 完全由 writer 在 `Stop`/`SubagentStop` 时改写 `state` 实现。v0.1.4 起 running 渲染为**静态黄点** `#CCA700`（v0.1.3 的 8 帧正弦呼吸因 `iconPath` 切帧本质离散、帧间不连续，肉眼读作闪烁而非渐变，故回归静态；和 idle/done/error 一样无动画）。500ms 定时器仍在跑——interrupted 的 seq%2 快闪需要它，静态态每 tick 重新赋同一个路径（廉价 no-op）。
 
 ```
 读 <sid>.json → state, since, error
@@ -74,15 +74,14 @@ if prevSt && prevSt != state && state ∈ {done, interrupted}:  notify(state, er
 prevSt = state
 if state == "done" and now - since > 5min:  视为 idle
 switch state:
-  running:     RES/RUN_FRAMES[RUN_IDX[seq%14]]   # 8 帧正弦渐变，三角波 0,1,2,3,4,5,6,7,6,5,4,3,2,1
-                                                                  # 暗 #8A6A00 ↔ 亮 #FFD60A，~6.3s 周期
-  interrupted: seq 偶 → claude-logo-error.svg / seq 奇 → CC claude-logo.svg（快闪 on/off）
+  running:     RES/claude-logo-running.svg   # 静态黄 #CCA700（无动画）
+  interrupted: seq 偶 → claude-logo-error.svg / seq 奇 → CC claude-logo.svg（快闪 on/off，~500ms）
   idle:        claude-logo-idle.svg
   done:        claude-logo-done.svg
   其它/无文件:  return（不覆盖，让 CC 原生图标显示）
 ```
 
-> **8 帧色阶**（正弦 ease-in-out，暗→亮）：`#8A6A00` `#A48202` `#BD9904` `#D3AD06` `#E5BE08` `#F3CB09` `#FCD30A` `#FFD60A`。相邻帧每通道 Δ ≤ ~10%，肉眼读为连续渐变而非 0.1.2 的 2 帧离散跳变（dim↔bright 像闪烁）。三角波让峰（亮）/谷（暗）各出现一次，其余帧各出现两次/周期——流畅且周期可调（改 `RUN_IDX` 或 `TICK_MS`）。
+> **为什么 v0.1.4 回归静态**：VSCode 的 `tab.iconPath` 在每次赋值后触发一次图标重渲染，帧间没有插值/过渡——所以"呼吸动画"本质是一串离散静态图被快速切换，相邻帧色差再小也读作闪烁（flicker），而非连续渐变（fade）。静态黄点和 idle/done/error 视觉语言一致，最干净。interrupted 保留快闪是因为它携带真实的"告警"语义（出错 / 限速），值得打破静态。`seq` 仍保留并每 tick 自增，仅供 interrupted 的 seq%2 判定。
 
 ---
 
@@ -113,7 +112,7 @@ switch state:
 **v2 新特性 — workflow / 后台 subagent 跑期间保持 running**：主 agent 回复"已启动"后 `Stop` 不再误写 `done`（假绿）。实现 = hybrid：`Stop`/`SubagentStop` 时优先读 payload 的 `background_tasks[]`（CC v2.1.145+ 权威，覆盖 workflow/subagent/teammate 全类型），缺失时退化为 `activeSubagents` 计数 + `SubagentStart` 早信号。reader 不读 `activeSubagents`，state 仍四态。详见 [`SUBAGENT-design.md`](SUBAGENT-design.md)。
 
 - **手动 Esc 中断无 hook**：CC 不触发 Stop/StopFailure（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)），状态会停在 `running`。reader 无 watchdog（当前版本不做主动推断），靠下一次 `UserPromptSubmit`/`Stop` 自然更正。
-- **多 session**：每个 CC panel 实例各自一个 450ms 定时器，按各自 `__ccSid` 读各自状态文件，互不干扰。
+- **多 session**：每个 CC panel 实例各自一个 500ms 定时器，按各自 `__ccSid` 读各自状态文件，互不干扰。
 - **CC 自动更新**：覆盖 patched `extension.js` → 静默失效，需重跑 `npx vscode-claude-code-status-dot`（或开发态 `npx tsx patch.ts`）。SVG/hook 运行时副本在 `INSTALL_DIR`（`~/.claude/cc-status-dot/`），CC 更新不碰它；项目源目录删了也不影响已 patch 的扩展。
 - **运行时副本与源解耦**：reader（IIFE 的 `RES`）与 settings.json 接线的 hook 命令都引用 `INSTALL_DIR` 绝对路径。`INSTALL_DIR` 在安装时由 patcher 从 `PROJECT_ROOT`（包根的 `resources/`+`hooks/`）幂等复制；`--revert` 删除整个 `INSTALL_DIR`，但**保留** `~/.claude/cc-tab-status/`（用户数据）。
 - **VSCode 完全关闭时不通知**：IIFE 跑在 CC 扩展宿主进程，VSCode 关闭则 IIFE 不运行 → 不通知（v2 可由 hook 补位）。

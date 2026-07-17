@@ -11,7 +11,7 @@
 
 🟡 running · 🟢 done · 🔴 interrupted flashes · ⚪ idle — plus completion/interruption notifications
 
-**English** | [简体中文](README.md)
+[简体中文](README.md) | **English** | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
 </div>
 
@@ -37,7 +37,7 @@ After installing, while Claude Code is working, **see at a glance what every ses
 
 | Scenario | What you see / get |
 |---|---|
-| CC starts running (you sent a prompt) | 🟡 tab icon turns yellow and **breathes smoothly** (8-frame sine gradient dark↔bright, ~6.3s cycle, reads as a continuous fade) |
+| CC starts running (you sent a prompt) | 🟡 tab icon turns to a **static yellow dot** `#CCA700` (no animation, same as idle/done — iconPath frame-switching is inherently discrete, static is cleanest) |
 | CC finishes a turn normally | 🟢 tab turns green + **if you've switched away** a system notification + sound (no bother when focused) |
 | CC is rate-limited / overloaded | 🔴 tab red fast-flash + notification (text carries the cause like `rate limit reached`) |
 | workflow / background subagent still running | The main session tab **stays yellow** (no false green); `Stop` authoritatively avoids a false done |
@@ -65,9 +65,9 @@ This single line automatically:
 1. Finds `anthropic.claude-code-*` under `~/.vscode/extensions` (and insiders / cursor / vscodium), picks the highest version;
 2. If a v0.1.2 install left a leftover aggregate status bar in `webview/`, **auto-restores webview** from `.bak` (upgrade cleans it, no `--revert` needed first);
 3. Asserts anchors, then **backs up** `extension.js` → `extension.js.bak` (first run only);
-4. Injects the 450ms redraw IIFE (sets tab icon + done/interrupted notifications);
+4. Injects the 500ms redraw IIFE (sets tab icon + done/interrupted notifications);
 5. Writes **8 hook events** into `~/.claude/settings.json` (tagged `# cc-status-dot-managed`, idempotent);
-6. Copies runtime files (11 SVGs = idle + 8 running breath frames + done + error, plus the hook script) to `~/.claude/cc-status-dot/` (`INSTALL_DIR`).
+6. Copies runtime files (4 SVGs = idle + running + done + error, plus the hook script) to `~/.claude/cc-status-dot/` (`INSTALL_DIR`).
 
 > **Or from source (dev)**:
 > ```bash
@@ -84,7 +84,7 @@ This single line automatically:
 ### ④ Send a prompt and watch
 
 Send a prompt in CC:
-- the tab icon turns 🟡 yellow and **breathes smoothly** (dark↔bright gradient) → on completion → 🟢 green
+- the tab icon turns to a 🟡 **static yellow dot** → on completion → 🟢 green
 - **switch away from VSCode** and wait for CC to finish → you get a system notification + sound
 
 ---
@@ -93,13 +93,13 @@ Send a prompt in CC:
 
 | Color | Meaning | Trigger |
 |---|---|---|
-| 🟡 Yellow `#8A6A00`↔`#FFD60A` (**breathing**, ~6.3s cycle) | Running | Prompt submitted, around tool calls (heartbeat), subagent spawn |
+| 🟡 Yellow `#CCA700` (**static**, no animation) | Running | Prompt submitted, around tool calls (heartbeat), subagent spawn |
 | 🟢 Green `#3FB950` (static) | Turn done | CC fires `Stop` (**turns gray after 5 min**) |
 | 🔴 Red `#F85149` (fast flash) | Interrupted / errored | CC fires `StopFailure` (rate limit, overload, etc.) |
 | ⚪ Gray `#808080` (static) | Idle | Initial / done > 5 min ago / no state file |
 | 🔵 Blue (CC native) | Awaiting approval | CC's native blue dot, **not overridden** |
 
-> As of v0.1.3 running is a **smooth breathing**: 8 sine-eased frames (dark `#8A6A00` → bright `#FFD60A`) played via a 14-step triangle wave, with each per-frame channel delta ≤ ~10% so the eye reads a continuous fade — replacing the 0.1.2 2-frame scheme (dim↔bright discrete toggle that read as flicker). Interrupted still fast-flashes at ~450ms for alert semantics. Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](docs/STATES.md).
+> As of v0.1.4 running is again a **static yellow dot** `#CCA700` (no animation, same as idle/done/error). v0.1.3 tried an 8-frame sine breathing, but `iconPath` frame-switching is inherently discrete — VSCode re-renders the icon on each assignment, so the inter-frame transition is not continuous and the eye reads it as flicker rather than a fade. Reverted to the cleanest static form. Interrupted still fast-flashes at ~500ms for alert semantics. Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](docs/STATES.md).
 
 ---
 
@@ -107,7 +107,7 @@ Send a prompt in CC:
 
 ### 🟡 Four-state tab icon dots
 
-Each CC session's tab icon changes color by state, **shown in both the top tab bar and the top-left "Open Editors" view** (iconPath is a tab property, shared by both). The injected 450ms timer reads `~/.claude/cc-tab-status/<session_id>.json` and redraws — because CC itself only redraws the icon on sparse `rename_tab` events, which isn't smooth enough. The running state plays an 8-frame sine-gradient breath (one dark↔bright cycle every ~6.3s across 14 ticks); interrupted uses seq%2 fast-flash.
+Each CC session's tab icon changes color by state, **shown in both the top tab bar and the top-left "Open Editors" view** (iconPath is a tab property, shared by both). The injected 500ms timer reads `~/.claude/cc-tab-status/<session_id>.json` and redraws — because CC itself only redraws the icon on sparse `rename_tab` events, which isn't smooth enough. running/idle/done are all **static dots** (as of v0.1.4 running reverted to a static yellow `#CCA700` — reason: iconPath frame-switching is discrete and non-continuous, so the breathing animation read as flicker); interrupted uses seq%2 fast-flash.
 
 ### 🔔 Completion / interruption notifications
 
@@ -141,7 +141,10 @@ the patched extension keeps rendering normally. You only need to **re-run** `npx
 <details>
 <summary>📖 Upgrade path (for old git-clone installs)</summary>
 
-Old-version users can just re-run `npx vscode-claude-code-status-dot` — the patcher detects the stale baked path and **rewrites it in place** (both the IIFE's SVG path and the hook command); no need to `--revert` first.
+Old-version users can just re-run `npx vscode-claude-code-status-dot` — both staleness axes are handled automatically, **no need to `--revert` first**:
+
+1. **IIFE logic version stale** — the injected block carries a version stamp `cc-status-dot-injected:v0.1.4`. If the patcher detects a mismatched stamp (e.g. v0.1.3's 8-frame breathing IIFE vs. v0.1.4's static IIFE), it restores the original from `extension.js.bak` and re-injects the current IIFE.
+2. **Baked path stale** — old (v0.1 git-clone) installs baked the project source dir; the patcher rewrites the `RES` literal inside the IIFE and the hook command in settings.json in place, pointing at `INSTALL_DIR`.
 
 </details>
 
@@ -222,7 +225,7 @@ vscode-claude-code-status-dot        # run the command directly after install
 
 ## 🏗️ How it works + docs
 
-**Patches CC's `extension.js` (injects a 450ms IIFE: reads state files to set tab icons, with running doing an 8-frame breath + done/interrupted notifications) + 8 CC hooks (write state to `~/.claude/cc-tab-status/`).** Full docs:
+**Patches CC's `extension.js` (injects a 500ms IIFE: reads state files to set tab icons, with running as a static yellow dot + done/interrupted notifications) + 8 CC hooks (write state to `~/.claude/cc-tab-status/`).** Full docs:
 
 - [`docs/STATES.md`](docs/STATES.md) — **state contract (single source of truth)**: four states / event mapping / IPC / notifications
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — icon injection rationale (anchors / IIFE / SVG wiring)
@@ -232,6 +235,22 @@ vscode-claude-code-status-dot        # run the command directly after install
 > This project modifies CC's `extension.js` (backed up; `--revert` fully restores) and writes to `~/.claude/settings.json` (backed up on first run). The hook script is designed to **never block or break CC** — any error exits silently with code 0.
 
 ---
+
+## 💝 Support the author
+
+If vscode-claude-code-status-dot helps you, consider buying the author a coffee ☕
+
+<div align="center">
+
+WeChat | Alipay
+:-: | :-:
+<img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
+
+> Tip jar images to be added
+
+</div>
+
+Or ⭐ Star, open an Issue / PR — all of it supports the author.
 
 ## License
 

@@ -38,14 +38,14 @@
  *   which are asserted to match exactly once before any byte is written.
  *
  * SVG WIRING (DESIGN §5 — absolute path to a PERSISTENT copy, not the project)
- *   Our SVGs (claude-logo-idle.svg + 8× claude-logo-running-{0..7}.svg breathing
- *   frames + claude-logo-done.svg + claude-logo-error.svg = 11 files) are COPIED
- *   from this project's resources/ into INSTALL_DIR (~/.claude/cc-status-dot/resources/)
- *   at install time, and the injected IIFE references that absolute path — so
- *   it survives BOTH a CC auto-update (which wipes the extension dir) AND
- *   deletion of the source project / npx cache purge. Just re-run the patcher
- *   after a CC update. The interrupted "off-frame" reuses CC's own
- *   claude-logo.svg via this.context.extensionPath.
+ *   Our SVGs (claude-logo-idle.svg + claude-logo-running.svg + claude-logo-done.svg
+ *   + claude-logo-error.svg = 4 files, ALL STATIC) are COPIED from this project's
+ *   resources/ into INSTALL_DIR (~/.claude/cc-status-dot/resources/) at install
+ *   time, and the injected IIFE references that absolute path — so it survives
+ *   BOTH a CC auto-update (which wipes the extension dir) AND deletion of the
+ *   source project / npx cache purge. Just re-run the patcher after a CC update.
+ *   The interrupted "off-frame" reuses CC's own claude-logo.svg via
+ *   this.context.extensionPath.
  *
  * LIMITATIONS (read before extending)
  *   - If the CC extension updates and the minified anchor strings drift, the
@@ -104,34 +104,36 @@ const PROJECT_ROOT: string = (() => {
  *  MUST be a block comment (/* *​/) — a // line comment would comment out the rest of the
  *  minified single line and brick the extension.
  *
- *  The banner also carries INJECT_VERSION after a colon: `cc-status-dot-injected:v0.1.3`.
+ *  The banner also carries INJECT_VERSION after a colon: `cc-status-dot-injected:v0.1.4`.
  *  The bare marker (no version suffix) is what `isExtensionPatched` greps for (so old
- *  v0.1.2 injections still match). `injectedVersion` parses the version suffix to detect
- *  an IIFE whose *logic* is stale even though the marker is present — see patchExtension. */
+ *  v0.1.2/v0.1.3 injections still match). `injectedVersion` parses the version suffix
+ *  to detect an IIFE whose *logic* is stale even though the marker is present — see
+ *  patchExtension. */
 const INJECT_MARKER = "cc-status-dot-injected";
 
 /** Version stamped into the injected IIFE banner comment. Bump this whenever the IIFE
  *  *logic* changes (NOT just the baked RES path). On install, if the marker is present
  *  but the stamped version differs, patchExtension restores extension.js from .bak and
- *  re-injects the current IIFE — otherwise structural IIFE changes (e.g. v0.1.3 removing
- *  the breathing frames) would be silently swallowed because the bare marker still matches. */
-const INJECT_VERSION = "v0.1.3";
+ *  re-injects the current IIFE — otherwise structural IIFE changes (e.g. v0.1.4 reverting
+ *  to static running, or v0.1.3 removing the aggregate bar) would be silently swallowed
+ *  because the bare marker still matches. */
+const INJECT_VERSION = "v0.1.4";
 
 /** Substring appended (as a shell comment) to every hook command we own in settings.json.
  *  Used for idempotent dedupe on install and surgical removal on --revert. */
 const HOOK_MARKER = "cc-status-dot-managed";
 
-/** Redraw cadence (ms). 450 drives:
- *   - the running breathing (14-step triangle wave over 8 sine-eased yellow
- *     frames → ~6.3 s per breath cycle; each per-frame channel delta stays
- *     ≤ ~10% so it reads as a smooth fade rather than the 0.1.2 2-frame
- *     flicker),
- *   - the interrupted on/off flash (seq%2 → ~450 ms on, ~450 ms off — still
- *     an alert-grade fast flash, only 10% faster than the old 500 ms),
+/** Redraw cadence (ms). 500 drives:
+ *   - the interrupted on/off flash (seq%2 → ~500 ms on, ~500 ms off — an
+ *     alert-grade fast flash),
  *   - the done→idle 5-min fallback poll, and
  *   - the prevSt transition check that fires done/interrupted notifications.
- *   One tiny readFileSync per tick. */
-const TICK_MS = 450;
+ *   running/idle/done are STATIC (no animation) — iconPath frame-switching is
+ *   inherently discrete and reads as flicker, so v0.1.4 reverted running to a
+ *   steady yellow dot. The timer still ticks at 500 ms because interrupted
+ *   needs it and the static states are a cheap no-op read. One tiny
+ *   readFileSync per tick. */
+const TICK_MS = 500;
 
 /** Per-session state directory read by the injected timer. */
 const STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status");
@@ -152,40 +154,17 @@ const INSTALL_DIR = path.join(os.homedir(), ".claude", "cc-status-dot");
  *  line with the sibling UPPER_SNAKE path consts. */
 const RUNTIME_RES_DIR = path.join(INSTALL_DIR, "resources");
 
-/** The SVGs the injected timer references from this project's resources/.
- *  MUST stay in sync with docs/STATES.md §1 (single source of truth).
- *
- *  Since v0.1.3 running is a **smooth 8-frame breathing animation** (not the
- *  v0.1.2 2-frame flicker): 8 sine-eased frames interpolate the dot fill from
- *  dark `#8A6A00` (claude-logo-running-0.svg) to bright `#FFD60A`
- *  (claude-logo-running-7.svg). The IIFE plays them via a 14-step triangle
- *  wave (`RUN_IDX` below) at TICK_MS=450 → ~6.3 s per breath. Each per-frame
- *  channel delta stays ≤ ~10%, so the eye reads a continuous fade rather
- *  than the old discrete dim↔bright jump that read as flicker. Interrupted
- *  still fast-flashes (it carries real alert semantics). */
-const RUN_FRAMES = [
-    "claude-logo-running-0.svg",
-    "claude-logo-running-1.svg",
-    "claude-logo-running-2.svg",
-    "claude-logo-running-3.svg",
-    "claude-logo-running-4.svg",
-    "claude-logo-running-5.svg",
-    "claude-logo-running-6.svg",
-    "claude-logo-running-7.svg",
-] as const;
-
-/** Triangle-wave playback index over RUN_FRAMES (14 steps/cycle): 0,1,...,7
- *  ramp up, then 6,5,...,1 ramp down — the peak (frame 7) and trough (frame 0)
- *  each appear once per cycle, every other frame appears twice. Lookup table
- *  (not computed) so tuning the cycle is a one-line edit. The IIFE bakes a
- *  JSON.stringify'd copy of this array. */
-const RUN_IDX = [0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1] as const;
-
 /** All SVGs the IIFE can reference + installRuntimeFiles copies + cleanup
- *  keeps. The 8 breathing frames replace the old single static running.svg. */
+ *  keeps. Since v0.1.4 running is again a **single static yellow dot**
+ *  (`claude-logo-running.svg`, fill #CCA700) — the v0.1.3 8-frame breathing
+ *  experiment read as discrete flicker because iconPath frame-switching is
+ *  inherently jumpy, not smooth. idle/running/done/error are now all static;
+ *  only interrupted animates (seq%2 on/off fast-flash between error.svg and
+ *  CC's default). installRuntimeFiles auto-sweeps the stale v0.1.3
+ *  `claude-logo-running-{0..7}.svg` frames on upgrade. */
 const OUR_SVGS = [
     "claude-logo-idle.svg",
-    ...RUN_FRAMES,
+    "claude-logo-running.svg",
     "claude-logo-done.svg",
     "claude-logo-error.svg",
 ];
@@ -397,15 +376,14 @@ function countOccurrences(haystack: string, needle: string): number {
 //   t = the `ts` panel instance (has panelTab, context.extensionPath).
 //   Reads ~/.claude/cc-tab-status/<sid>.json -> {state, since, error?}
 //   State machine + notification mirror docs/STATES.md §1/§4/§4b — keep in sync.
-//     running     -> smooth 8-frame breathing: a 14-step triangle wave over 8
-//                    sine-eased yellow frames (dark #8A6A00 ↔ bright #FFD60A)
-//                    at TICK_MS=450 → ~6.3 s per breath. Per-frame channel
-//                    delta ≤ ~10% so it reads as a continuous fade (NOT the
-//                    v0.1.2 2-frame dim↔bright flicker). Implemented as a
-//                    baked lookup table (RUN_IDX) of frame indices into
-//                    RUN_FRAMES; svg = RES/RUN_FRAMES[RUN_IDX[seq%14]].
+//     running     -> steady claude-logo-running.svg (static yellow #CCA700).
+//                    v0.1.3 tried an 8-frame breathing animation, but iconPath
+//                    frame-switching is inherently discrete and read as flicker,
+//                    so v0.1.4 reverted to a single static dot (same shape as
+//                    idle/done/error). The 500 ms timer still ticks but running
+//                    reassigns the same path each tick (cheap no-op).
 //     interrupted -> flash claude-logo-error.svg <-> CC's claude-logo.svg (off-frame)
-//                    at ~450 ms on/off (seq%2) — alerts stay intentionally fast.
+//                    at ~500 ms on/off (seq%2) — alerts stay intentionally fast.
 //     done        -> steady claude-logo-done.svg; if since older than 5 min -> idle
 //     idle        -> steady claude-logo-idle.svg
 //     missing/unknown -> return (don't fight CC's own pending/done icon)
@@ -417,12 +395,6 @@ function buildIIFE(resDir: string): string {
     // JSON.stringify yields a safely-quoted, escaped JS string literal for the path
     // (also handles the non-ASCII chars in the project path correctly).
     const resLiteral = JSON.stringify(resDir);
-    // JSON.stringify the frame list + triangle-wave index so the injected IIFE
-    // carries them as plain JS array literals (no minified-identifier refs, no
-    // runtime regex). Keep these in lock-step with the RUN_FRAMES / RUN_IDX
-    // consts above and with docs/STATES.md §4 (single source of truth).
-    const runFramesLiteral = JSON.stringify([...RUN_FRAMES]);
-    const runIdxLiteral = JSON.stringify([...RUN_IDX]);
     // State machine + notification mirror docs/STATES.md §1/§4/§4b. Keep in sync.
     return [
         `/*${INJECT_MARKER}:${INJECT_VERSION}*/`,
@@ -432,8 +404,6 @@ function buildIIFE(resDir: string): string {
         `var fs=require("fs"),pth=require("path"),vs=require("vscode"),os=require("os");`,
         `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");`,
         `var RES=${resLiteral};`,
-        `var RUN_FRAMES=${runFramesLiteral};`,
-        `var RUN_IDX=${runIdxLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         `var DONE_TO_IDLE_MS=5*60*1000;`,
         `var seq=0,prevSt=null;`,
@@ -460,7 +430,7 @@ function buildIIFE(resDir: string): string {
         `var now=Date.now();`,
         `var svg;`,
         `if(st==="interrupted"){svg=(seq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
-        `else if(st==="running"){svg=pth.join(RES,RUN_FRAMES[RUN_IDX[seq%14]])}`,
+        `else if(st==="running"){svg=pth.join(RES,"claude-logo-running.svg")}`,
         `else if(st==="done"){svg=(since&&(now-since>DONE_TO_IDLE_MS))?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-done.svg")}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
         `else{return}`,
@@ -870,9 +840,9 @@ function installRuntimeFiles(): void {
                 warn(`failed to copy ${svg} (non-fatal)`);
             }
         }
-        // Sweep stale SVGs from older versions (e.g. v0.1.2 breathing frames:
-        // running-dim/-1/-2/-bright.svg). Only touches our own claude-logo-*.svg
-        // namespace — never other files in destRes.
+        // Sweep stale SVGs from older versions (e.g. v0.1.2's running-dim/-1/-2/-bright.svg,
+        // or v0.1.3's claude-logo-running-{0..7}.svg 8-frame breathing set). Only touches
+        // our own claude-logo-*.svg namespace — never other files in destRes.
         try {
             for (const name of fs.readdirSync(destRes)) {
                 if (!name.startsWith("claude-logo-") || !name.endsWith(".svg")) continue;

@@ -20,7 +20,7 @@ cd vscode-claude-code-status-dot
 npx tsx patch.ts
 ```
 
-两种方式等价、幂等，都会把运行时副本（11 个 SVG = idle + 8 running 呼吸帧 + done + error，加 hook 脚本）复制到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`），注入的 IIFE 与接线的 hook 都引用该**绝对路径**——所以即便删除项目源目录或 npx 缓存被清，已 patch 的扩展仍照常渲染。
+两种方式等价、幂等，都会把运行时副本（4 个 SVG = idle + running + done + error，加 hook 脚本）复制到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`），注入的 IIFE 与接线的 hook 都引用该**绝对路径**——所以即便删除项目源目录或 npx 缓存被清，已 patch 的扩展仍照常渲染。
 
 `patch.ts` 执行流程：
 
@@ -28,9 +28,9 @@ npx tsx patch.ts
 2. 若检测到 v0.1.2 装的 webview 聚合色块条残留，**自动从 `.bak` 还原 webview**（升级即清理，无需先 `--revert`）。
 3. 校验 `extension.js` 中两段 anchor 字符串的命中数（Anchor A 必须唯一命中，Anchor B 命中 0 或 1 次）。命中失败则**不写任何文件**并报错。
 4. 备份 `extension.js` → `extension.js.bak`（仅首次）。
-5. 注入 IIFE（含 `setInterval` 450ms 重绘：running 走 8 帧呼吸切帧 + done/interrupted 通知逻辑），把 `INSTALL_DIR/resources` 的绝对路径 bake 进注入块。
+5. 注入 IIFE（含 `setInterval` 500ms 重绘：running 静态黄 + done/interrupted 通知逻辑），把 `INSTALL_DIR/resources` 的绝对路径 bake 进注入块。
 6. 把 **8 个 hook 事件**写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记，命令指向 `INSTALL_DIR/hooks/cc-status.js`），首次备份为 `settings.json.cc-status-dot.bak`。
-7. 校验 `INSTALL_DIR/resources` 下 11 个 SVG 齐全（idle + 8 个 running 呼吸帧 + done + error）。
+7. 校验 `INSTALL_DIR/resources` 下 4 个 SVG 齐全（idle + running + done + error）。
 
 > **升级**：旧版（git clone 装的）用户直接重跑 `npx vscode-claude-code-status-dot` 即可——patcher 会检测到旧的 baked 路径过期并**原地改写** IIFE 的 `RES` 与 hook 命令，无需 `--revert` 后重装。
 
@@ -42,7 +42,7 @@ npx tsx patch.ts
 
 | 想测的状态 | 怎么触发 | 预期图标 |
 |---|---|---|
-| `running` | 在 CC 里发一条 prompt | 🟡 黄色**呼吸**（8 帧正弦渐变暗↔亮，~6.3s 周期） |
+| `running` | 在 CC 里发一条 prompt | 🟡 黄色**静态**（`#CCA700`，无动画） |
 | `done` | 等 CC 本轮正常完成 | 绿色静态 |
 | `idle` | `done` 后等超过 5 分钟（reader 自动把 done 渲染为 idle） | 灰色静态 |
 | `interrupted` | 触发 `StopFailure`（如限速 / 过载）——较难主动模拟，可跳过 | 红色快闪 |

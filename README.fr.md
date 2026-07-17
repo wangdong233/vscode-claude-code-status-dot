@@ -174,7 +174,7 @@ En mode développement, remplacez la commande par `npx tsx patch.ts` (mêmes par
 ```json
 {
   "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifyWhenFocused": true,
   "ccStatusDot.notifySound": "Glass"
 }
 ```
@@ -182,7 +182,7 @@ En mode développement, remplacez la commande par `npx tsx patch.ts` (mêmes par
 | Clé | Défaut | Description |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Interrupteur général des notifications |
-| `ccStatusDot.notifyWhenFocused` | `false` | Afficher aussi un message VSCode au premier plan (garder false quand l'icône suffit) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Afficher aussi un message VSCode au premier plan (garder false quand l'icône suffit) |
 | `ccStatusDot.notifySound` | `"Glass"` | Son de notification système macOS (partagé entre done et interruption ; `""` pour muet ; Basso/Ping/Hero, etc. possibles) |
 
 ---

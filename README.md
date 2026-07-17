@@ -22,7 +22,7 @@
 - 🔧 **一行装**——`npx vscode-claude-code-status-dot` 自动 patch CC 扩展、接 8 个 hooks、复制运行时文件，幂等可重跑
 - 🛡️ **持久化不怕删源**——运行时副本落在 `~/.claude/cc-status-dot/`，删项目源 / 清 npx 缓存 / CC 自动更新都不影响已 patch 的扩展
 - 🎨 **四态全覆盖**——比 CC 原生（只有蓝/橙两点）更完整：idle / running / done / interrupted 全可视化
-- 🔔 **完成/中断通知**——前台抑制，切走窗口时弹 VSCode 消息 + macOS 系统通知 + 声音，不用一直盯着
+- 🔔 **完成/中断通知**——默认前台也弹 VSCode 消息；切走窗口时另加 macOS 系统通知 + 声音，不用一直盯着
 - ⚙️ **workflow 跑期间保持 running**——后台 subagent/cron 在飞时不假绿，`Stop` 权威裁定
 - 📂 **Open Editors 同步**——左上角"打开的编辑器"视图里的 CC tab 也带状态点
 - ↩️ **零副作用一键还原**——`--revert` 从 `.bak` 完整恢复 extension.js、外科手术式移除 hooks、保留你的用户数据
@@ -38,7 +38,7 @@
 | 场景 | 你看到 / 得到 |
 |---|---|
 | CC 跑起来（你发了 prompt） | 🟡 tab 图标变**静态黄点** `#CCA700`（无动画） |
-| CC 本轮正常完成 | 🟢 tab 变绿 + **切走窗口时**收到系统通知 + 声音（前台不打扰） |
+| CC 本轮正常完成 | 🟢 tab 变绿 + 收到 VSCode 消息（切走窗口时另加系统通知 + 声音） |
 | CC 被限速 / 过载中断 | 🔴 tab 红色快闪 + 通知（文案带 `rate limit reached` 等原因） |
 | workflow / 后台 subagent 还在跑 | 主会话 tab **保持黄**（不误显绿），`Stop` 权威裁定不假完成 |
 | 看左上角"打开的编辑器"视图 | CC 的 tab 这里**也带状态点**，和顶部 tab 栏完全同步 |
@@ -111,10 +111,12 @@ npx vscode-claude-code-status-dot
 
 ### 🔔 完成 / 中断通知
 
-会话转为 `done` 或 `interrupted` 时（仅状态转换那一下，不重复）：
+会话转为 `done` 或 `interrupted` 时（每个新的完成/中断 `since` 触发一次，不重复）：
 
-- **VSCode 在前台**：默认抑制（图标变绿/红快闪已足够）；
+- **VSCode 在前台**：默认弹 VSCode 消息（`notifyWhenFocused` 默认 `true`）——"聚焦窗口"不等于"盯着 CC tab"。
 - **VSCode 不在前台**：弹 VSCode 消息（触发 dock bounce）+ macOS 系统通知（通知中心 + 声音）。
+
+> 前台也想彻底安静？设 `"ccStatusDot.notifyWhenFocused": false`（图标变绿/红快闪即足够），或直接关 `"ccStatusDot.notify": false`。
 
 done 与中断都播放 `ccStatusDot.notifySound`（默认 `Glass`）。首次系统通知 macOS 会弹一次"Script Editor 想发送通知"授权，允许即可。
 
@@ -174,7 +176,7 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 ```json
 {
   "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifyWhenFocused": true,
   "ccStatusDot.notifySound": "Glass"
 }
 ```
@@ -182,7 +184,7 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 | 配置项 | 默认 | 说明 |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | 通知总开关 |
-| `ccStatusDot.notifyWhenFocused` | `false` | 前台时也弹 VSCode 消息（图标已足够时保持 false） |
+| `ccStatusDot.notifyWhenFocused` | `true` | 前台时也弹 VSCode 消息（想前台彻底安静设 `false`） |
 | `ccStatusDot.notifySound` | `"Glass"` | macOS 系统通知声音（done 与中断共用；`""` 静音；可选 Basso/Ping/Hero 等） |
 
 ---

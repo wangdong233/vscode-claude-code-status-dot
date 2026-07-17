@@ -52,10 +52,14 @@ npx tsx patch.ts
 
 ## 3.5 通知（完成 / 中断时）
 
-当某 session 转为 `done` 或 `interrupted` 时，patch 注入的 IIFE 会发通知（仅状态转换时，不重复）：
+当某 session 转为 `done` 或 `interrupted` 时，patch 注入的 IIFE 会发通知（每个新的完成/中断 `since` 触发一次，不重复）：
 
-- **VSCode 在前台**（你在看）：默认抑制（tab 图标变绿/红快闪已足够）。
+- **VSCode 在前台**（你在看）：默认**弹 VSCode 消息**（`notifyWhenFocused` 默认 `true`）——"聚焦于窗口"并不等于"盯着 CC tab"，所以前台也提醒。
 - **VSCode 不在前台**（你切走了）：弹 VSCode 消息（触发 dock bounce）+ macOS 系统通知（进通知中心 + 声音）。
+
+> 想前台彻底安静：把 `ccStatusDot.notifyWhenFocused` 设 `false`（图标变绿/红快闪即足够），或直接关 `ccStatusDot.notify`。
+
+> 注：通知触发判定已由"采样到 running→done 的状态转换"改为"终态 `since` 时间戳去重"——即便一轮跑得很快（两次 500ms 轮询之间完成）或 reload 落在旧 `done` 上，也不会漏报或误报。
 
 **macOS 首次授权**：第一次收到系统通知时，系统会弹"Script Editor 想发送通知"——点允许（一次性）。
 
@@ -63,12 +67,12 @@ npx tsx patch.ts
 ```json
 {
   "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifyWhenFocused": true,
   "ccStatusDot.notifySound": "Glass"
 }
 ```
 - `notify`：总开关（默认 true）。
-- `notifyWhenFocused`：前台时也弹 VSCode 消息（默认 false）。
+- `notifyWhenFocused`：前台时也弹 VSCode 消息（默认 **true**）。
 - `notifySound`：macOS 系统通知声音（默认 `"Glass"`；`""` 静音；可选 Basso/Ping/Hero 等）。
 
 > 限制：VSCode 完全关闭时不通知（IIFE 不运行）；系统通知点击不能跳转到 CC tab（仅提醒，回 VSCode 靠 tab 点定位）。详见 [`STATES.md` §4b/§5](STATES.md)。

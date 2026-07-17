@@ -93,12 +93,12 @@ switch state:
 
 | VSCode 前台？ | done | interrupted |
 |---|---|---|
-| focused | 抑制（图标变绿/红快闪已足够；`notifyWhenFocused:true` 时弹 `showInformationMessage`/`showWarningMessage`） | 同左 |
+| focused | 默认弹 `showInformationMessage`/`showWarningMessage`（`notifyWhenFocused:true`）；设 `false` 则前台抑制，仅图标变绿/红快闪 | 同左 |
 | unfocused | `showInformationMessage`（触发 dock bounce）+ osascript 系统通知（声音 Glass + 通知中心） | `showWarningMessage` + osascript（声音 Basso） |
 
 **配置项**（VSCode settings.json `ccStatusDot.*`）：
 - `ccStatusDot.notify`（bool，默认 true）：总开关
-- `ccStatusDot.notifyWhenFocused`（bool，默认 false）：前台时也弹 VSCode 消息
+- `ccStatusDot.notifyWhenFocused`（bool，默认 true）：前台时也弹 VSCode 消息（想前台彻底安静设 false）
 - `ccStatusDot.notifySound`（string，默认 `"Glass"`）：macOS 系统通知声音（`""`=静音）
 
 **error → 文案**：done → `Claude Code: turn complete`；interrupted → 按 error 映射（`rate_limit`→"rate limit reached"、`overloaded`→"server overloaded"、其它→原值或 "interrupted"）。

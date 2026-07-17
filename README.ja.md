@@ -174,7 +174,7 @@ VSCode の `settings.json` に書く（設定しなければデフォルト値�
 ```json
 {
   "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifyWhenFocused": true,
   "ccStatusDot.notifySound": "Glass"
 }
 ```
@@ -182,7 +182,7 @@ VSCode の `settings.json` に書く（設定しなければデフォルト値�
 | 設定項目 | デフォルト | 説明 |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | 通知のメインスイッチ |
-| `ccStatusDot.notifyWhenFocused` | `false` | フォアグラウンドでも VSCode メッセージをポップアップ（アイコンで十分なら false を維持） |
+| `ccStatusDot.notifyWhenFocused` | `true` | フォアグラウンドでも VSCode メッセージをポップアップ（アイコンで十分なら false を維持） |
 | `ccStatusDot.notifySound` | `"Glass"` | macOS システム通知サウンド（done と中断で共有；`""` でミュート；Basso/Ping/Hero なども選択可） |
 
 ---

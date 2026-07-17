@@ -117,7 +117,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  re-injects the current IIFE — otherwise structural IIFE changes (e.g. v0.1.4 reverting
  *  to static running, or v0.1.3 removing the aggregate bar) would be silently swallowed
  *  because the bare marker still matches. */
-const INJECT_VERSION = "v0.1.4";
+const INJECT_VERSION = "v0.1.5";
 
 /** Substring appended (as a shell comment) to every hook command we own in settings.json.
  *  Used for idempotent dedupe on install and surgical removal on --revert. */
@@ -127,7 +127,7 @@ const HOOK_MARKER = "cc-status-dot-managed";
  *   - the interrupted on/off flash (seq%2 → ~500 ms on, ~500 ms off — an
  *     alert-grade fast flash),
  *   - the done→idle 5-min fallback poll, and
- *   - the prevSt transition check that fires done/interrupted notifications.
+ *   - the terminal-`since` dedup that fires done/interrupted notifications.
  *   running/idle/done are STATIC (no animation) — iconPath frame-switching is
  *   inherently discrete and reads as flicker, so v0.1.4 reverted running to a
  *   steady yellow dot. The timer still ticks at 500 ms because interrupted
@@ -387,8 +387,13 @@ function countOccurrences(haystack: string, needle: string): number {
 //     done        -> steady claude-logo-done.svg; if since older than 5 min -> idle
 //     idle        -> steady claude-logo-idle.svg
 //     missing/unknown -> return (don't fight CC's own pending/done icon)
-//   On running->done/interrupted transition: notify (VSCode msg + macOS osascript
-//   when unfocused). Config: ccStatusDot.{notify,notifyWhenFocused,notifySound}.
+//   On a NEW terminal `since` (done/interrupted): notify once (VSCode msg +
+//   macOS osascript when unfocused). Config: ccStatusDot.{notify,notifyWhenFocused,notifySound}.
+//   notifyWhenFocused defaults to true (foreground still notifies — "window
+//   focused" ≠ "watching the CC tab"). Dedup is keyed on the terminal `since`
+//   timestamp (refreshed by Stop/StopFailure), seeded on the first poll so a
+//   reload into a stale done does not fire. This catches fast turns that finish
+//   between two 500 ms polls (the old prevSt transition check missed them).
 // ---------------------------------------------------------------------------
 
 function buildIIFE(resDir: string): string {
@@ -406,27 +411,27 @@ function buildIIFE(resDir: string): string {
         `var RES=${resLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         `var DONE_TO_IDLE_MS=5*60*1000;`,
-        `var seq=0,prevSt=null;`,
+        `var seq=0,lastTermSince=null,seeded=false;`,
         `function notify(st,err){`,
         `var c=vs.workspace.getConfiguration("ccStatusDot");`,
         `if(!c.get("notify",true))return;`,
         `var focused=vs.window.state.focused;`,
-        `if(focused&&!c.get("notifyWhenFocused",false))return;`,
+        `if(focused&&!c.get("notifyWhenFocused",true))return;`,
         `var msg,sev;`,
         `if(st==="done"){sev="info";msg="Claude Code: turn complete"}`,
         `else{sev="warn";var m={rate_limit:"rate limit reached",overloaded:"server overloaded"}[err]||err||"interrupted";msg="Claude Code: "+m}`,
         `if(t.__ccTitle)msg+=" ["+t.__ccTitle+"]";`,
         `if(focused){if(sev==="info")vs.window.showInformationMessage(msg,"Dismiss");else vs.window.showWarningMessage(msg,"Dismiss")}`,
         `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);`,
-        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var sndStr=snd?(' sound name "'+snd+'"'):'';try{require("child_process").execFile("osascript",["-e",'display notification "'+msg+'" with title "Claude Code"'+sndStr])}catch(e){}}}`,
+        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var sndStr=snd?(' sound name "'+snd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr])}catch(e){}}}`,
         `}`,
         `setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
         `var sid=t.__ccSid;if(!sid)return;`,
         `var st=null,since=null,err="";`,
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||""}catch(e){}`,
-        `if(prevSt&&prevSt!==st&&(st==="done"||st==="interrupted")){try{notify(st,err)}catch(e){}}`,
-        `if(st)prevSt=st;`,
+        `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
+        `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){lastTermSince=since;try{notify(st,err)}catch(e){}}`,
         `var now=Date.now();`,
         `var svg;`,
         `if(st==="interrupted"){svg=(seq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,

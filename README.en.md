@@ -174,7 +174,7 @@ Add to VSCode's `settings.json` (skip to keep defaults):
 ```json
 {
   "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifyWhenFocused": true,
   "ccStatusDot.notifySound": "Glass"
 }
 ```
@@ -182,7 +182,7 @@ Add to VSCode's `settings.json` (skip to keep defaults):
 | Option | Default | Description |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Master notification switch |
-| `ccStatusDot.notifyWhenFocused` | `false` | Also pop a VSCode message when focused (keep false if the icon is enough) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Also pop a VSCode message when focused (keep false if the icon is enough) |
 | `ccStatusDot.notifySound` | `"Glass"` | macOS notification sound (used for both done & interrupted; `""` for silent; options: Basso/Ping/Hero, etc.) |
 
 ---

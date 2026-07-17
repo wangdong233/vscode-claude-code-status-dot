@@ -174,7 +174,7 @@ Escríbelo en el `settings.json` de VSCode (si no lo configuras, se usan los val
 ```json
 {
   "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifyWhenFocused": true,
   "ccStatusDot.notifySound": "Glass"
 }
 ```
@@ -182,7 +182,7 @@ Escríbelo en el `settings.json` de VSCode (si no lo configuras, se usan los val
 | Opción | Por defecto | Descripción |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Interruptor maestro de notificaciones |
-| `ccStatusDot.notifyWhenFocused` | `false` | Mostrar también el mensaje de VSCode en primer plano (mantener false cuando el icono ya basta) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Mostrar también el mensaje de VSCode en primer plano (mantener false cuando el icono ya basta) |
 | `ccStatusDot.notifySound` | `"Glass"` | Sonido de notificación del sistema macOS (compartido por done e interrupción; `""` silencia; admite Basso/Ping/Hero, etc.) |
 
 ---

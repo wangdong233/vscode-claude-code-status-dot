@@ -174,7 +174,7 @@ npx vscode-claude-code-status-dot
 ```json
 {
   "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifyWhenFocused": true,
   "ccStatusDot.notifySound": "Glass"
 }
 ```
@@ -182,7 +182,7 @@ npx vscode-claude-code-status-dot
 | Параметр | По умолч. | Описание |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Общий переключатель уведомлений |
-| `ccStatusDot.notifyWhenFocused` | `false` | Показывать сообщение VSCode и на переднем плане (если иконки достаточно — держите false) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Показывать сообщение VSCode и на переднем плане (если иконки достаточно — держите false) |
 | `ccStatusDot.notifySound` | `"Glass"` | Звук системного уведомления macOS (общий для done и прерывания; `""` — без звука; возможны Basso/Ping/Hero и т. п.) |
 
 ---

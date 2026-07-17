@@ -174,7 +174,7 @@ In VSCode `settings.json` eintragen (ohne Angabe gelten die Standardwerte):
 ```json
 {
   "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": false,
+  "ccStatusDot.notifyWhenFocused": true,
   "ccStatusDot.notifySound": "Glass"
 }
 ```
@@ -182,7 +182,7 @@ In VSCode `settings.json` eintragen (ohne Angabe gelten die Standardwerte):
 | Option | Standard | Beschreibung |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Hauptschalter für Benachrichtigungen |
-| `ccStatusDot.notifyWhenFocused` | `false` | Auch im Vordergrund VSCode-Nachricht zeigen (bei ausreichendem Icon auf `false` lassen) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Auch im Vordergrund VSCode-Nachricht zeigen (bei ausreichendem Icon auf `false` lassen) |
 | `ccStatusDot.notifySound` | `"Glass"` | macOS-Systembenachrichtigungston (done und unterbrochen teilen sich; `""` stumm; Alternativen: Basso/Ping/Hero usw.) |
 
 ---

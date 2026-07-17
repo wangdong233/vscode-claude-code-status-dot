@@ -2,6 +2,20 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [Unreleased]
+
+修复「完成/中断通知不生效」。根因：`notifyWhenFocused` 默认 `false`，导致用户在 VSCode 前台（最常见场景）时**所有**通知被抑制——hook 正确写了 `done`/`interrupted`（`~/.claude/cc-tab-status/<sid>.json`），但 IIFE 在前台一律不弹。
+
+### 变更（Changed）
+
+- **`notifyWhenFocused` 默认值 `false` → `true`**（patch.ts `buildIIFE` 内 `c.get("notifyWhenFocused",true)`）。前台时也会弹 VSCode 消息，完成/中断不再静默。"聚焦于 VSCode 窗口"≠"盯着 CC tab"，原默认让通知在最常见场景下永远不触发，等同于功能失效。想恢复"前台不打扰"的用户把 `ccStatusDot.notifyWhenFocused` 设回 `false` 即可（`notify` 总开关仍在）。
+- **通知触发逻辑由 `prevSt` 状态转换改为 `since` 时间戳去重**（注入 IIFE）。原 `prevSt` 逻辑要求 500ms 轮询**采样到** `running` 再转到 `done`/`interrupted` 才触发——若一轮跑得太快（两次轮询之间已完成 running→done）或 reload 落在旧 `done` 上，转换永远观测不到，通知丢失。新逻辑：首次轮询用当前终态的 `since` 做种子（避免 reload 对陈旧状态误报），之后每个**新的终态 `since`** 触发一次（`done` 的 `since` 在 `Stop` 时刷新、`Stop` 前 heartbeat 写的是 `running` 不影响）。覆盖快速完成、reload、连续多轮等全部路径，且不重复弹。
+- **IIFE 版本戳 `v0.1.4` → `v0.1.5`**：已 patch 的旧装在下次 `npx vscode-claude-code-status-dot` 时会被检测为 STALE 并自动重注入新 IIFE（无需先 `--revert`）。
+
+### 修复（Fixed）
+
+- **macOS `osascript` 系统通知被特殊字符静默打断**：`__ccTitle`（注入到通知文案）若含 `"` 或 `\`，原代码把 `msg` 直接拼进 AppleScript 字符串字面量 → `osascript` 语法错 → 被 `try/catch` 吞掉，系统通知不弹（VSCode 消息仍弹，但前台被抑制时则全军覆没）。改为先用 `replace(/["\\]/g, c => "\\"+c)` 转义再拼。已用 `osascript -e` 实跑含引号/反斜杠标题验证通过。
+
 ## [0.1.3] - 2026-07-17
 
 减法 + 重做版本：去掉「聚合色块条」webview 注入，把 running 从 0.1.2 的「2 帧大跳变」重做为「8 帧正弦渐变 + 三角波」的流畅呼吸，并铺设 IIFE 版本戳以便后续升级能正确重注入。

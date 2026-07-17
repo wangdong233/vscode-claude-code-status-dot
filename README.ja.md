@@ -24,7 +24,7 @@
 - 🎨 **4状態を完全カバー**——CC ネイティブ（青/オレンジの2点のみ）より完全：idle / running / done / interrupted をすべて可視化
 - 🔔 **完了 / 中断通知**——フォアグラウンドでは抑制、ウィンドウを切り替えると VSCode メッセージ + macOS システム通知 + サウンドをポップアップ。見守り続ける必要なし
 - ⚙️ **workflow 実行中は running を維持**——バックグラウンド subagent / cron が動いているとき誤って緑にせず、`Stop` が権威判定
-- 📂 **Open Editors と同期**——左上の「開いているエディター」ビューの CC タブにも状態ドットが付く（iconPath はタブ属性、両方で共有）
+- 📂 **Open Editors と同期**——左上の「開いているエディター」ビューの CC タブにも状態ドットが付く
 - ↩️ **副作用ゼロの1行復元**——`--revert` が `.bak` から extension.js を完全復元、hooks を外科的に除去、ユーザーデータは保持
 
 > ⚠️ **正直な声明**: 本プロジェクトは **patch（パッチ）であり、独立した拡張ではありません**——VSCode はサードパーティ拡張が別の拡張の webview タブアイコンを変更することを許可しない。唯一現実的な経路は CC 自身の `extension.js` にパッチを当てること。代償：CC の自動更新で上書きされるため、コマンドの再実行が必要。
@@ -37,7 +37,7 @@
 
 | シーン | 見える / 得られるもの |
 |---|---|
-| CC が起動（prompt を送信） | 🟡 タブアイコンが**静的な黄ドット** `#CCA700` に（アニメなし、idle/done と同じ——iconPath のフレーム切替は本質的に離散で、静的が最もシンプル） |
+| CC が起動（prompt を送信） | 🟡 タブアイコンが**静的な黄ドット** `#CCA700` に（アニメなし） |
 | CC が当ターン正常に完了 | 🟢 タブが緑に + **ウィンドウを切り替えたとき**システム通知 + サウンドを受信（フォアグラウンドでは邪魔しない） |
 | CC がレート制限 / 過負荷で中断 | 🔴 タブが赤の速ブリンク + 通知（文言に `rate limit reached` などの理由を含む） |
 | workflow / バックグラウンド subagent が実行中 | メインセッションのタブは**黄のまま**（誤って緑に表示されない）、`Stop` が権威判定して偽の完了を出さない |
@@ -63,9 +63,9 @@ npx vscode-claude-code-status-dot
 
 この1行で自動的に:
 1. `~/.vscode/extensions`（および insiders / cursor / vscodium など）で `anthropic.claude-code-*` を探し、最も新しいバージョンを選択；
-2. 旧版（v0.1.2）がインストールした webview の集計色ブロックバーの残留を検出した場合、**webview を自動復元**（アップグレード即クリーンアップ、先に `--revert` する必要なし）；
+2. 旧版の残留を自動クリーンアップ（あれば）；
 3. anchor を検証したあと `extension.js` を **バックアップ** → `extension.js.bak`（初回のみ）；
-4. 500ms 再描画 IIFE を注入（タブアイコン設定 + done/interrupted 通知）；
+4. タイマーを注入（タブアイコン設定 + done/interrupted 通知）；
 5. **8 つの hook イベント**を `~/.claude/settings.json` に書き込み（`# cc-status-dot-managed` マーク付き、冪等）；
 6. ランタイムコピー（4 個の SVG = idle + running + done + error、+ hook スクリプト）を `~/.claude/cc-status-dot/`（`INSTALL_DIR`）にコピー。
 
@@ -99,7 +99,7 @@ CC で prompt をひとつ送る:
 | ⚪ 灰 `#808080`（静的） | アイドル | 初期 / 完了から 5 分超過 / ステータスファイルなし |
 | 🔵 青（CC ネイティブ） | 承認待ち | CC ネイティブの青ドット、**本プロジェクトは上書きしない** |
 
-> v0.1.4 より running は**静的黄ドット** `#CCA700` に回帰（idle/done/error と同じくアニメなし）。v0.1.3 では8フレームのサインス呼吸を試したが、`iconPath` のフレーム切替は本質的に離散（VSCode は各代入後にアイコンを再描画する）、フレーム間の遷移が不連続で、目にはグラデーションではなくフリッカーとして読めるため、最もシンプルな静的に戻した。interrupted は ~500ms の速ブリンク警告を維持。完全な状態契約（イベント / SVG / IPC / 通知）は [`docs/STATES.md`](docs/STATES.md) を参照。
+> running は静的黄ドット（アニメなし）；interrupted は赤の速ブリンクで警告。完全な状態契約（イベント / SVG / IPC / 通知）は [`docs/STATES.md`](docs/STATES.md) を参照。
 
 ---
 
@@ -107,7 +107,7 @@ CC で prompt をひとつ送る:
 
 ### 🟡 4状態タブアイコンドット
 
-各 CC セッションのタブアイコンが状態に応じて変色、**上部タブバーと左上の「開いているエディター」ビューの両方に同時表示**（iconPath はタブ属性、両方で共有）。注入された 500ms タイマーが `~/.claude/cc-tab-status/<session_id>.json` を読んで再描画——CC 自身は疎な `rename_tab` イベントでしかアイコンを再描画しないため、滑らかさが足りない。running/idle/done はすべて**静的ドット**（v0.1.4 より running は静的黄 `#CCA700` に回帰、理由：iconPath のフレーム切替は離散不連続で、呼吸アニメがフリッカーに読めるため）、interrupted は seq%2 の速ブリンク。
+各 CC セッションのタブアイコンが状態に応じて変色、**上部タブバーと左上の「開いているエディター」ビューの両方に表示**。running/idle/done は静的ドット、interrupted は赤の速ブリンク。
 
 ### 🔔 完了 / 中断通知
 
@@ -120,11 +120,11 @@ done と中断はどちらも `ccStatusDot.notifySound`（デフォルト `Glass
 
 ### ⚙️ workflow 実行中は running を維持
 
-メイン agent が「起動済み」と返答したあと `Stop` は**誤って done を書かない（偽緑）**: `Stop` / `SubagentStop` 時に hook payload の `background_tasks[]`（CC v2.1.145+ の権威、workflow/subagent/teammate 全タイプをカバー）を優先読み取り、欠損時は `activeSubagents` カウント + `SubagentStart` の早期シグナルにフォールバック。reader はカウントを読まず、state は4状態のまま。
+バックグラウンドで workflow / subagent が動いているとき、メインセッションは黄色のまま（誤って緑に表示されない）、偽の完了報告をしない。
 
 ### 📂 Open Editors と同期
 
-VSCode 左上の「開いているエディター」ビューの CC タブも**状態ドットを表示**——`iconPath` はタブレベル属性で、上部タブバーと Open Editors が共有、追加の注入は不要。
+左上の「開いているエディター」ビューの CC タブも**状態ドットを表示**、上部タブバーと完全に同期。
 
 <details>
 <summary>📖 持続化の仕組み（なぜソースを消しても大丈夫か）</summary>
@@ -141,10 +141,7 @@ patched 済み拡張は正常に描画し続ける。CC 更新後に**一度だ�
 <details>
 <summary>📖 アップグレードパス（旧版の git clone インストールからのアップグレード）</summary>
 
-旧版ユーザーはそのまま `npx vscode-claude-code-status-dot` を再実行すればよい。2 層の期限切れを自動処理、**`--revert` 後の再インストールは不要**:
-
-1. **IIFE ロジックバージョンの期限切れ**——注入ブロックにバージョンスタンプ `cc-status-dot-injected:v0.1.4` を持つ。patcher がスタンプバージョンと現行の不一致を検出すると（例：v0.1.3 の8フレーム呼吸 IIFE → v0.1.4 の静的 IIFE）、`extension.js.bak` からオリジナルファイルを復元してから新 IIFE を再注入する。
-2. **baked パスの期限切れ**——旧版（v0.1 の git clone インストール）はプロジェクトソースディレクトリを bake していた；patcher は IIFE 内の `RES` リテラルと settings.json の hook コマンドをその場で書き換え、`INSTALL_DIR` を指す。
+旧版ユーザーはそのまま `npx vscode-claude-code-status-dot` を再実行すればよい：patcher が旧版の注入ロジックを検出 → 自動的にオリジナルを復元 → 新版を再注入、**`--revert` は不要**。
 
 </details>
 
@@ -160,7 +157,7 @@ VSCode の `WebviewPanel` タブアイコン（`iconPath`）は**その panel �
 
 | コマンド | 役割 |
 |---|---|
-| `npx vscode-claude-code-status-dot` | インストール（extension.js にパッチ + hooks 接続、冪等；v0.1.2 webview 残留を検出すると自動クリーンアップ） |
+| `npx vscode-claude-code-status-dot` | インストール（extension.js にパッチ + hooks 接続、冪等；旧版の残留を自動クリーンアップ） |
 | `npx vscode-claude-code-status-dot --revert` | 復元（`.bak` から復元 + hooks 削除 + INSTALL_DIR 削除、ユーザーデータは保持） |
 | `npx vscode-claude-code-status-dot --status` | dry-run レポート、ファイルを一切変更しない |
 
@@ -199,7 +196,7 @@ CC の自動更新が拡張ディレクトリを全体置換し、patched ファ
 まず `Developer: Reload Window`。それでもダメなら `npx vscode-claude-code-status-dot --status` を実行: `patched: no` は再実行；`baked RES ... (STALE)` は再実行でその場で書き換え；`hooks wired: no` は再実行；`missing SVGs` は再実行で補完。
 
 **旧版（git clone インストール）からアップグレード?**
-そのまま `npx vscode-claude-code-status-dot` を再実行——patcher が古い baked パスの期限切れを検出してその場で書き換える、`--revert` 後の再インストールは不要。
+そのまま `npx vscode-claude-code-status-dot` を再実行——旧版のアップグレードを自動処理、`--revert` 後の再インストールは不要。
 
 **状態が running のまま固まる?**
 多くの場合 Esc で CC を中断したのが原因（CC は Stop/StopFailure をトリガーしない、hook なし）。次回 prompt 送信時か正常完了時に自然に修正される。
@@ -225,11 +222,10 @@ vscode-claude-code-status-dot        # インストール後そのままコマ�
 
 ## 🏗️ 原理 + ドキュメント
 
-**CC の `extension.js` にパッチ（500ms IIFE を注入: 状態ファイルを読んでタブアイコンを設定、running は静的黄 + done/interrupted 通知）+ 8 個の CC hooks（`~/.claude/cc-tab-status/` に状態を書き込む）。** 完全なドキュメント:
+**CC の extension.js にパッチ（タイマーを注入してタブアイコンを設定）+ CC hooks が状態を書き込み + 完了 / 中断通知。** 完全なドキュメント:
 
 - [`docs/STATES.md`](docs/STATES.md)——**状態契約（唯一の真実源）**: 4状態 / イベントマッピング / IPC / 通知
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)——アイコン注入の原理（anchor / IIFE / SVG バインディング）
-- [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md)——色ブロックバー注入の原理（**v0.1.3 で廃止**、歴史デザイン記録として保留）
 - [`docs/USAGE.md`](docs/USAGE.md)——使用ガイド（インストール / トラブルシューティング / 復元）
 
 > 本プロジェクトは CC 拡張の `extension.js` を変更し（バックアップ済み、`--revert` で完全復元）、`~/.claude/settings.json` に書き込む（初回バックアップ）。hook スクリプトは**決して CC をブロック / 中断しない**設計——いかなるエラーもサイレントに `exit(0)`。

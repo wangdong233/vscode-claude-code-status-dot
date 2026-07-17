@@ -24,7 +24,7 @@
 - 🎨 **Couverture totale des quatre états** — plus complet que le CC natif (qui n'a que deux points bleu/orange) : idle / running / done / interrupted tous visualisés
 - 🔔 **Notifications de fin / interruption** — supprimées au premier plan ; bascule de fenêtre → message VSCode + notification système macOS + son, sans devoir fixer l'écran
 - ⚙️ **Reste jaune running pendant l'exécution d'un workflow** — pas de faux vert tant que des subagents/cron tournent en arrière-plan, `Stop` est l'arbitre
-- 📂 **Synchronisation de la vue Open Editors** — l'onglet CC dans la vue « Open Editors » en haut à gauche porte aussi le point d'état (`iconPath` est une propriété d'onglet, partagée entre les deux emplacements)
+- 📂 **Synchronisation de la vue Open Editors** — l'onglet CC dans la vue « Open Editors » en haut à gauche porte aussi le point d'état
 - ↩️ **Restauration en un clic, sans effet de bord** — `--revert` restaure `extension.js` depuis `.bak`, retire les hooks chirurgicalement et conserve vos données utilisateur
 
 > ⚠️ **Avertissement honnête** : ce projet est un **patch, pas une extension autonome** — VSCode ne permet pas à une extension tierce de modifier l'icône d'onglet webview d'une autre extension. La seule voie possible est de patcher le `extension.js` de CC lui-même. Conséquence : les mises à jour automatiques de CC écrasent le patch, il faut relancer la commande.
@@ -37,7 +37,7 @@ Une fois installé, pendant que Claude Code travaille, **voyez en un coup d'œil
 
 | Scénario | Ce que vous voyez / obtenez |
 |---|---|
-| CC se lance (vous envoyez un prompt) | 🟡 l'icône d'onglet devient un **point jaune statique** `#CCA700` (pas d'animation, comme idle/done — le changement d'images via `iconPath` est par nature discret, le statique est le plus propre) |
+| CC se lance (vous envoyez un prompt) | 🟡 l'icône d'onglet devient un **point jaune statique** `#CCA700` (pas d'animation) |
 | CC termine normalement ce tour | 🟢 l'onglet passe au vert + **quand la fenêtre est quittée** vous recevez une notification système + son (pas de dérangement au premier plan) |
 | CC interrompu par limite de débit / surcharge | 🔴 l'onglet clignote rapidement en rouge + notification (le texte précise `rate limit reached` et autres causes) |
 | Un workflow / subagent en arrière-plan tourne encore | L'onglet de la session principale **reste jaune** (pas de faux vert), `Stop` tranche en arbitre sans fausse fin |
@@ -63,9 +63,9 @@ npx vscode-claude-code-status-dot
 
 Cette ligne effectue automatiquement :
 1. Trouver `anthropic.claude-code-*` dans `~/.vscode/extensions` (ainsi que insiders / cursor / vscodium, etc.) et choisir la version la plus récente ;
-2. Si un résidu de la barre d'agrégation webview (présent dans l'ancienne v0.1.2) est détecté, **restaurer automatiquement le webview** (la mise à niveau nettoie, pas besoin de `--revert` d'abord) ;
+2. Nettoyer automatiquement les résidus de l'ancienne version (le cas échéant) ;
 3. Valider les ancres puis **sauvegarder** `extension.js` → `extension.js.bak` (première fois seulement) ;
-4. Injecter une IIFE de redessin toutes les 500 ms (réglage de l'icône d'onglet + notifications done/interrupted) ;
+4. Injecter un minuteur (réglage de l'icône d'onglet + notifications done/interrupted) ;
 5. Écrire les **8 événements hook** dans `~/.claude/settings.json` (marqués `# cc-status-dot-managed`, idempotents) ;
 6. Copier les fichiers d'exécution (4 SVG = idle + running + done + error, plus les scripts de hook) vers `~/.claude/cc-status-dot/` (`INSTALL_DIR`).
 
@@ -99,7 +99,7 @@ Dans CC, envoyez un prompt :
 | ⚪ Gris `#808080` (statique) | Inactif | Initial / terminé depuis plus de 5 minutes / aucun fichier d'état |
 | 🔵 Bleu (natif CC) | En attente d'autorisation | Point bleu natif de CC, **ce projet ne le remplace pas** |
 
-> Depuis v0.1.4, running revient au **point jaune statique** `#CCA700` (comme idle/done/error, sans animation). v0.1.3 avait essayé une respiration sinusoïdale à 8 images, mais le changement d'images via `iconPath` est par nature discret (VSCode redessine l'icône après chaque affectation), les transitions entre images n'étant pas continues et se lisant à l'œil comme un clignotement plutôt qu'un fondu — d'où le retour au statique, le plus propre. L'interruption conserve son clignotement rapide d'alerte d'environ 500 ms. Le contrat d'état complet (événements / SVG / IPC / notifications) se trouve dans [`docs/STATES.md`](docs/STATES.md).
+> Running = point jaune statique (pas d'animation) ; interruption = clignotement rapide d'alerte rouge. Le contrat d'état complet (événements / SVG / IPC / notifications) se trouve dans [`docs/STATES.md`](docs/STATES.md).
 
 ---
 
@@ -107,7 +107,7 @@ Dans CC, envoyez un prompt :
 
 ### 🟡 Point d'icône d'onglet à quatre états
 
-L'icône d'onglet de chaque session CC change de couleur selon l'état, **affichée à la fois dans la barre d'onglets supérieure et dans la vue « Open Editors » en haut à gauche** (`iconPath` est une propriété d'onglet, partagée entre les deux). Le minuteur injecté toutes les 500 ms lit `~/.claude/cc-tab-status/<session_id>.json` et redessine — car CC lui-même ne redessine l'icône qu'à l'événement clairsemé `rename_tab`, ce qui n'est pas fluide. running/idle/done sont tous des **points statiques** (depuis v0.1.4, running est revenu au jaune statique `#CCA700`, pour la raison que le changement d'images via `iconPath` est discret et discontinu, l'animation de respiration se lisant comme un clignotement) ; interrupted utilise un clignotement rapide seq%2.
+L'icône d'onglet de chaque session CC change de couleur selon l'état, **affichée à la fois dans la barre d'onglets supérieure et dans la vue « Open Editors » en haut à gauche**. running/idle/done sont des points statiques ; interrupted clignote rapidement en rouge.
 
 ### 🔔 Notifications de fin / interruption
 
@@ -120,11 +120,11 @@ done et interruption jouent tous deux `ccStatusDot.notifySound` (`Glass` par dé
 
 ### ⚙️ Reste jaune running pendant l'exécution d'un workflow
 
-Après que l'agent principal a répondu « démarré », `Stop` **n'écrit plus par erreur done (faux vert)** : à `Stop` / `SubagentStop`, lecture en priorité du `background_tasks[]` du payload du hook (source autoritaire CC v2.1.145+, couvre workflow/subagent/teammate de tous types), avec repli sur le comptage `activeSubagents` + signal précoce `SubagentStart` en cas d'absence. Le reader ne lit pas le compteur, l'état reste à quatre états.
+Pendant qu'un workflow / subagent tourne en arrière-plan, la session principale reste jaune (pas de faux vert), sans fausse fin signalée.
 
 ### 📂 Synchronisation de la vue Open Editors
 
-L'onglet CC dans la vue « Open Editors » en haut à gauche **porte aussi le point d'état** — car `iconPath` est une propriété au niveau de l'onglet, partagée entre la barre d'onglets supérieure et Open Editors, sans injection supplémentaire.
+L'onglet CC dans la vue « Open Editors » en haut à gauche **porte aussi le point d'état**, parfaitement synchronisé avec la barre d'onglets supérieure.
 
 <details>
 <summary>📖 Mécanisme de persistance (pourquoi supprimer la source n'a pas d'impact)</summary>
@@ -141,10 +141,7 @@ Les chemins SVG référencés par le reader (IIFE injecté) et les commandes de 
 <details>
 <summary>📖 Parcours de mise à niveau (comment monter d'une ancienne version installée via git clone)</summary>
 
-Les utilisateurs de l'ancienne version peuvent relancer directement `npx vscode-claude-code-status-dot` — les deux couches d'obsolescence sont traitées automatiquement, **sans `--revert` préalable** :
-
-1. **Version logique IIFE obsolète** — le bloc injecté porte l'horodatage de version `cc-status-dot-injected:v0.1.4`. Quand le patcher détecte que la version du marqueur ne correspond pas à la version courante (ex. IIFE respiration 8 images de v0.1.3 → IIFE statique de v0.1.4), il restaure le fichier original depuis `extension.js.bak` puis réinjecte le nouvel IIFE.
-2. **Chemin baked obsolète** — l'ancienne version (v0.1 installée via git clone) bake le répertoire source du projet ; le patcher réécrit sur place le littéral `RES` dans l'IIFE et les commandes de hook dans settings.json pour pointer vers `INSTALL_DIR`.
+Les utilisateurs de l'ancienne version peuvent relancer directement `npx vscode-claude-code-status-dot` : le patcher détecte l'ancienne logique d'injection → restaure automatiquement l'original → réinjecte la nouvelle version, **sans `--revert` préalable**.
 
 </details>
 
@@ -160,7 +157,7 @@ L'icône d'onglet d'un `WebviewPanel` VSCode (`iconPath`) est définie de façon
 
 | Commande | Rôle |
 |---|---|
-| `npx vscode-claude-code-status-dot` | Installer (patch extension.js + câbler les hooks, idempotent ; nettoie automatiquement un résidu webview v0.1.2 détecté) |
+| `npx vscode-claude-code-status-dot` | Installer (patch extension.js + câbler les hooks, idempotent ; nettoie automatiquement les résidus de l'ancienne version) |
 | `npx vscode-claude-code-status-dot --revert` | Restaurer (depuis `.bak` + retirer les hooks + supprimer INSTALL_DIR, conserve les données utilisateur) |
 | `npx vscode-claude-code-status-dot --status` | dry-run, ne modifie aucun fichier |
 
@@ -199,7 +196,7 @@ La mise à jour automatique de CC remplace complètement le répertoire d'extens
 D'abord `Developer: Reload Window`. Si cela ne marche toujours pas, lancez `npx vscode-claude-code-status-dot --status` : `patched: no` → relancez ; `baked RES ... (STALE)` → relancez pour réécrire sur place ; `hooks wired: no` → relancez ; `missing SVGs` → relancez pour compléter.
 
 **Monter depuis une ancienne version (installée via git clone) ?**
-Relancez simplement `npx vscode-claude-code-status-dot` — le patcher détecte l'obsolescence du chemin baked et réécrit sur place, sans `--revert` préalable.
+Relancez simplement `npx vscode-claude-code-status-dot` — la mise à niveau depuis l'ancienne version est gérée automatiquement, sans `--revert` préalable.
 
 **L'état reste bloqué à running ?**
 C'est probablement que vous avez interrompu CC avec Esc (CC ne déclenche pas Stop/StopFailure, pas de hook). Le prochain prompt ou une fin normale corrigera l'état tout seul.
@@ -225,14 +222,13 @@ vscode-claude-code-status-dot        # lancez directement la commande après ins
 
 ## 🏗️ Principe + Documentation
 
-**Patche le `extension.js` de CC (injecte une IIFE toutes les 500 ms : lit le fichier d'état pour régler l'icône d'onglet, running jaune statique + notifications done/interrupted) + 8 hooks CC (écrivent l'état vers `~/.claude/cc-tab-status/`).** Documentation complète :
+**Patche le `extension.js` de CC (injecte un minuteur pour régler l'icône d'onglet) + hooks CC écrivent l'état + notifications de fin / interruption.** Documentation complète :
 
 - [`docs/STATES.md`](docs/STATES.md) — **Contrat d'état (source unique de vérité)** : quatre états / mapping d'événements / IPC / notifications
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — Principe d'injection de l'icône (ancre / IIFE / liaison SVG)
-- [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md) — Principe d'injection de la barre de couleur (**obsolète depuis v0.1.3**, conservé comme enregistrement de conception historique)
 - [`docs/USAGE.md`](docs/USAGE.md) — Guide d'utilisation (installation / dépannage / restauration)
 
-> Ce projet modifie le `extension.js` de l'extension CC (sauvegarde effectuée, `--revert` pour restauration complète) et écrit dans `~/.claude/settings.json` (sauvegarde à la première exécution). Les scripts de hook sont conçus pour **ne jamais bloquer ni interrompre CC** — toute erreur se termine silencieusement par `exit(0)`.
+> Ce projet modifie le `extension.js` de l'extension CC (sauvegarde effectuée, `--revert` pour restauration complète) et écrit dans `~/.claude/settings.json` (sauvegarde à la première exécution). Les scripts de hook **ne bloquent jamais CC** — toute erreur se termine silencieusement.
 
 ---
 

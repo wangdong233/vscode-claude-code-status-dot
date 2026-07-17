@@ -24,7 +24,7 @@
 - 🎨 **All four states** — more complete than CC's native (only blue/orange dots): idle / running / done / interrupted fully visualized
 - 🔔 **Completion/interruption notifications** — suppressed in the foreground; when you've switched away you get a VSCode message + macOS system notification + sound, no need to keep watching
 - ⚙️ **Stays running while workflow runs** — no false-green when background subagents/crons are in flight; `Stop` is the authoritative arbiter
-- 📂 **Open Editors sync** — the CC tab in the top-left "Open Editors" view also carries the status dot (iconPath is a tab property, shared by both)
+- 📂 **Open Editors sync** — the CC tab in the top-left "Open Editors" view also carries the status dot
 - ↩️ **Zero side effects, one-click restore** — `--revert` fully restores extension.js from `.bak`, surgically removes hooks, keeps your user data
 
 > ⚠️ **Honest disclaimer**: this project is a **patch, not a standalone extension** — VSCode does not allow a third-party extension to modify another extension's webview tab icon, so the only viable path is patching CC's own `extension.js`. Trade-off: a CC auto-update overwrites it, so you must re-run the command.
@@ -37,7 +37,7 @@ After installing, while Claude Code is working, **see at a glance what every ses
 
 | Scenario | What you see / get |
 |---|---|
-| CC starts running (you sent a prompt) | 🟡 tab icon turns to a **static yellow dot** `#CCA700` (no animation, same as idle/done — iconPath frame-switching is inherently discrete, static is cleanest) |
+| CC starts running (you sent a prompt) | 🟡 tab icon turns to a **static yellow dot** `#CCA700` (no animation) |
 | CC finishes a turn normally | 🟢 tab turns green + **if you've switched away** a system notification + sound (no bother when focused) |
 | CC is rate-limited / overloaded | 🔴 tab red fast-flash + notification (text carries the cause like `rate limit reached`) |
 | workflow / background subagent still running | The main session tab **stays yellow** (no false green); `Stop` authoritatively avoids a false done |
@@ -63,9 +63,9 @@ npx vscode-claude-code-status-dot
 
 This single line automatically:
 1. Finds `anthropic.claude-code-*` under `~/.vscode/extensions` (and insiders / cursor / vscodium), picks the highest version;
-2. If a v0.1.2 install left a leftover aggregate status bar in `webview/`, **auto-restores webview** from `.bak` (upgrade cleans it, no `--revert` needed first);
-3. Asserts anchors, then **backs up** `extension.js` → `extension.js.bak` (first run only);
-4. Injects the 500ms redraw IIFE (sets tab icon + done/interrupted notifications);
+2. Auto-cleans leftover files from old versions (if any);
+3. **Backs up** `extension.js` → `extension.js.bak` (first run only);
+4. Injects a timer (sets tab icon + done/interrupted notifications);
 5. Writes **8 hook events** into `~/.claude/settings.json` (tagged `# cc-status-dot-managed`, idempotent);
 6. Copies runtime files (4 SVGs = idle + running + done + error, plus the hook script) to `~/.claude/cc-status-dot/` (`INSTALL_DIR`).
 
@@ -99,7 +99,7 @@ Send a prompt in CC:
 | ⚪ Gray `#808080` (static) | Idle | Initial / done > 5 min ago / no state file |
 | 🔵 Blue (CC native) | Awaiting approval | CC's native blue dot, **not overridden** |
 
-> As of v0.1.4 running is again a **static yellow dot** `#CCA700` (no animation, same as idle/done/error). v0.1.3 tried an 8-frame sine breathing, but `iconPath` frame-switching is inherently discrete — VSCode re-renders the icon on each assignment, so the inter-frame transition is not continuous and the eye reads it as flicker rather than a fade. Reverted to the cleanest static form. Interrupted still fast-flashes at ~500ms for alert semantics. Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](docs/STATES.md).
+> running is a static yellow dot (no animation); interrupted flashes red as an alert. Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](docs/STATES.md).
 
 ---
 
@@ -107,7 +107,7 @@ Send a prompt in CC:
 
 ### 🟡 Four-state tab icon dots
 
-Each CC session's tab icon changes color by state, **shown in both the top tab bar and the top-left "Open Editors" view** (iconPath is a tab property, shared by both). The injected 500ms timer reads `~/.claude/cc-tab-status/<session_id>.json` and redraws — because CC itself only redraws the icon on sparse `rename_tab` events, which isn't smooth enough. running/idle/done are all **static dots** (as of v0.1.4 running reverted to a static yellow `#CCA700` — reason: iconPath frame-switching is discrete and non-continuous, so the breathing animation read as flicker); interrupted uses seq%2 fast-flash.
+Each CC session's tab icon changes color by state, **shown in both the top tab bar and the top-left "Open Editors" view**. running/idle/done are static dots; interrupted fast-flashes red.
 
 ### 🔔 Completion / interruption notifications
 
@@ -120,11 +120,11 @@ Both done and interrupted play `ccStatusDot.notifySound` (default `Glass`). The 
 
 ### ⚙️ Stays running while workflow runs
 
-After the main agent replies "started", `Stop` **no longer falsely writes done (no false green)**: on `Stop`/`SubagentStop` it first reads the hook payload's `background_tasks[]` (CC v2.1.145+ authoritative, covers workflow/subagent/teammate), falling back to an `activeSubagents` count + the `SubagentStart` early signal. The reader never reads the count; state stays four-state.
+While a workflow / subagent runs in the background, the main session stays yellow (no false green) and never falsely reports done.
 
 ### 📂 Open Editors sync
 
-The CC tab in VSCode's top-left "Open Editors" view **also carries the status dot** — because `iconPath` is a tab-level property shared by the top tab bar and Open Editors, no extra injection needed.
+The CC tab in VSCode's top-left "Open Editors" view **also carries the status dot**, fully in sync with the top tab bar.
 
 <details>
 <summary>📖 Persistence mechanism (why deleting the source is safe)</summary>
@@ -141,10 +141,7 @@ the patched extension keeps rendering normally. You only need to **re-run** `npx
 <details>
 <summary>📖 Upgrade path (for old git-clone installs)</summary>
 
-Old-version users can just re-run `npx vscode-claude-code-status-dot` — both staleness axes are handled automatically, **no need to `--revert` first**:
-
-1. **IIFE logic version stale** — the injected block carries a version stamp `cc-status-dot-injected:v0.1.4`. If the patcher detects a mismatched stamp (e.g. v0.1.3's 8-frame breathing IIFE vs. v0.1.4's static IIFE), it restores the original from `extension.js.bak` and re-injects the current IIFE.
-2. **Baked path stale** — old (v0.1 git-clone) installs baked the project source dir; the patcher rewrites the `RES` literal inside the IIFE and the hook command in settings.json in place, pointing at `INSTALL_DIR`.
+Old-version users can just re-run `npx vscode-claude-code-status-dot` — the patcher detects the old injection logic → auto-restores the original → re-injects the new version (**no need to `--revert` first**).
 
 </details>
 
@@ -160,7 +157,7 @@ A VSCode `WebviewPanel` tab icon (`iconPath`) is set **exclusively by the extens
 
 | Command | Effect |
 |---|---|
-| `npx vscode-claude-code-status-dot` | Install (patch extension.js + wire hooks, idempotent; auto-cleans any legacy v0.1.2 webview bar) |
+| `npx vscode-claude-code-status-dot` | Install (patch extension.js + wire hooks, idempotent; auto-cleans leftover files from old versions) |
 | `npx vscode-claude-code-status-dot --revert` | Restore (from `.bak` + remove hooks + delete INSTALL_DIR, keeps user data) |
 | `npx vscode-claude-code-status-dot --status` | Dry-run report, changes nothing |
 
@@ -199,7 +196,7 @@ A CC auto-update replaces the entire extension dir, overwriting patched files wi
 First run `Developer: Reload Window`. If it still doesn't work, run `npx vscode-claude-code-status-dot --status`: `patched: no` → re-run; `baked RES ... (STALE)` → re-run to rewrite in place; `hooks wired: no` → re-run; `missing SVGs` → re-run to refill.
 
 **Upgrading from an old (git clone) install?**
-Just re-run `npx vscode-claude-code-status-dot` — the patcher detects the stale baked path and rewrites it in place; no need to `--revert` first.
+Just re-run `npx vscode-claude-code-status-dot` — old-version upgrades are handled automatically; no need to `--revert` first.
 
 **State stuck on running?**
 Likely you interrupted CC with Esc (CC doesn't fire Stop/StopFailure, so no hook fires). The next prompt or a normal completion corrects it naturally.
@@ -225,14 +222,13 @@ vscode-claude-code-status-dot        # run the command directly after install
 
 ## 🏗️ How it works + docs
 
-**Patches CC's `extension.js` (injects a 500ms IIFE: reads state files to set tab icons, with running as a static yellow dot + done/interrupted notifications) + 8 CC hooks (write state to `~/.claude/cc-tab-status/`).** Full docs:
+**Patches CC's extension.js (injects a timer to set tab icons) + CC hooks write state + completion/interruption notifications.** Full docs:
 
 - [`docs/STATES.md`](docs/STATES.md) — **state contract (single source of truth)**: four states / event mapping / IPC / notifications
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — icon injection rationale (anchors / IIFE / SVG wiring)
-- [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md) — status bar injection rationale (**deprecated in v0.1.3**, kept as a historical design record)
 - [`docs/USAGE.md`](docs/USAGE.md) — usage guide (install / troubleshooting / revert)
 
-> This project modifies CC's `extension.js` (backed up; `--revert` fully restores) and writes to `~/.claude/settings.json` (backed up on first run). The hook script is designed to **never block or break CC** — any error exits silently with code 0.
+> This project modifies CC's `extension.js` (backed up; `--revert` fully restores) and writes to `~/.claude/settings.json` (backed up on first run). The hook script **never blocks CC** — any error exits silently.
 
 ---
 

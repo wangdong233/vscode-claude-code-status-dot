@@ -24,7 +24,7 @@
 - 🎨 **四态全覆盖**——比 CC 原生（只有蓝/橙两点）更完整：idle / running / done / interrupted 全可视化
 - 🔔 **完成/中断通知**——前台抑制，切走窗口时弹 VSCode 消息 + macOS 系统通知 + 声音，不用一直盯着
 - ⚙️ **workflow 跑期间保持 running**——后台 subagent/cron 在飞时不假绿，`Stop` 权威裁定
-- 📂 **Open Editors 同步**——左上角"打开的编辑器"视图里的 CC tab 也带状态点（iconPath 是 tab 属性，两处共用）
+- 📂 **Open Editors 同步**——左上角"打开的编辑器"视图里的 CC tab 也带状态点
 - ↩️ **零副作用一键还原**——`--revert` 从 `.bak` 完整恢复 extension.js、外科手术式移除 hooks、保留你的用户数据
 
 > ⚠️ **诚实声明**：本项目是一个 **patch（补丁），不是独立扩展**——VSCode 不允许第三方扩展修改另一个扩展的 webview tab 图标，唯一可行路径是 patch CC 自己的 `extension.js`。代价：CC 自动更新会覆盖，需重跑命令。
@@ -37,7 +37,7 @@
 
 | 场景 | 你看到 / 得到 |
 |---|---|
-| CC 跑起来（你发了 prompt） | 🟡 tab 图标变**静态黄点** `#CCA700`（无动画，和 idle/done 一致——iconPath 切帧本质离散，静态最干净） |
+| CC 跑起来（你发了 prompt） | 🟡 tab 图标变**静态黄点** `#CCA700`（无动画） |
 | CC 本轮正常完成 | 🟢 tab 变绿 + **切走窗口时**收到系统通知 + 声音（前台不打扰） |
 | CC 被限速 / 过载中断 | 🔴 tab 红色快闪 + 通知（文案带 `rate limit reached` 等原因） |
 | workflow / 后台 subagent 还在跑 | 主会话 tab **保持黄**（不误显绿），`Stop` 权威裁定不假完成 |
@@ -63,9 +63,9 @@ npx vscode-claude-code-status-dot
 
 这一行会自动完成：
 1. 在 `~/.vscode/extensions`（及 insiders / cursor / vscodium 等）找到 `anthropic.claude-code-*`，选版本最高的；
-2. 若检测到旧版（v0.1.2）装的 webview 聚合色块条残留，**自动还原 webview**（升级即清理，无需先 `--revert`）；
-3. 校验 anchor 后**备份** `extension.js` → `extension.js.bak`（仅首次）；
-4. 注入 500ms 重绘 IIFE（设 tab 图标 + done/interrupted 通知）；
+2. 自动清理旧版残留（如有）；
+3. **备份** `extension.js` → `extension.js.bak`（仅首次）；
+4. 注入定时器（设 tab 图标 + done/interrupted 通知）；
 5. 把 **8 个 hook 事件**写入 `~/.claude/settings.json`（带 `# cc-status-dot-managed` 标记，幂等）；
 6. 复制运行时副本（4 个 SVG = idle + running + done + error，加 hook 脚本）到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`）。
 
@@ -99,7 +99,7 @@ npx vscode-claude-code-status-dot
 | ⚪ 灰色 `#808080`（静态） | 空闲 | 初始 / 完成超 5 分钟 / 无状态文件 |
 | 🔵 蓝色（CC 原生） | 待授权 | CC 原生蓝点，**本项目不覆盖** |
 
-> v0.1.4 起 running 回归**静态黄点** `#CCA700`（和 idle/done/error 一样无动画）。v0.1.3 曾试过 8 帧正弦呼吸，但 `iconPath` 切帧本质是离散的（VSCode 在每次赋值后重渲染图标），帧间过渡不连续，肉眼读作闪烁而非渐变，所以改回最干净的静态。interrupted 仍保持 ~500ms 快闪告警。完整状态契约（事件 / SVG / IPC / 通知）见 [`docs/STATES.md`](docs/STATES.md)。
+> running 静态黄点（无动画）；interrupted 红色快闪告警。完整状态契约（事件 / SVG / IPC / 通知）见 [`docs/STATES.md`](docs/STATES.md)。
 
 ---
 
@@ -107,7 +107,7 @@ npx vscode-claude-code-status-dot
 
 ### 🟡 四态 tab 图标点
 
-每个 CC 会话的 tab 图标按状态变色，**同时显示在顶部 tab 栏和左上角"打开的编辑器"视图**（iconPath 是 tab 属性，两处共用）。注入的 500ms 定时器读 `~/.claude/cc-tab-status/<session_id>.json` 重绘——因为 CC 自己只在稀疏的 `rename_tab` 事件重绘图标，不够流畅。running/idle/done 都是**静态点**（v0.1.4 起 running 回归静态黄 `#CCA700`，理由：iconPath 切帧离散不连续，呼吸动画读作闪烁），interrupted 走 seq%2 快闪。
+每个 CC 会话的 tab 图标按状态变色，**顶部 tab 栏 + 左上角"打开的编辑器"视图都显示**。running/idle/done 是静态色点，interrupted 红色快闪。
 
 ### 🔔 完成 / 中断通知
 
@@ -120,11 +120,11 @@ done 与中断都播放 `ccStatusDot.notifySound`（默认 `Glass`）。首次�
 
 ### ⚙️ workflow 跑期间保持 running
 
-主 agent 回复"已启动"后 `Stop` **不再误写 done（假绿）**：`Stop` / `SubagentStop` 时优先读 hook payload 的 `background_tasks[]`（CC v2.1.145+ 权威，覆盖 workflow/subagent/teammate 全类型），缺失时退化为 `activeSubagents` 计数 + `SubagentStart` 早信号。reader 不读计数，state 仍四态。
+后台跑 workflow / subagent 时，主会话保持黄色（不误显绿），不会假报完成。
 
 ### 📂 Open Editors 同步
 
-VSCode 左上角"打开的编辑器"视图里的 CC tab **也带状态点**——因为 `iconPath` 是 tab 级属性，顶部 tab 栏和 Open Editors 共用，无需额外注入。
+左上角"打开的编辑器"视图里的 CC tab **也带状态点**，和顶部 tab 栏完全同步。
 
 <details>
 <summary>📖 持久化机制（为什么删源也不怕）</summary>
@@ -141,10 +141,7 @@ reader（注入 IIFE）引用的 SVG 路径与 settings.json 接线的 hook 命�
 <details>
 <summary>📖 升级路径（旧版 git clone 装的怎么升级）</summary>
 
-旧版用户直接重跑 `npx vscode-claude-code-status-dot` 即可，两层过期都自动处理，**无需 `--revert` 后重装**：
-
-1. **IIFE 逻辑版本过期**——注入块带版本戳 `cc-status-dot-injected:v0.1.4`。patcher 检测到戳记版本与当前不符（如 v0.1.3 的 8 帧呼吸 IIFE → v0.1.4 的静态 IIFE），会从 `extension.js.bak` 恢复原始文件再重新注入新 IIFE。
-2. **baked 路径过期**——旧版（v0.1 的 git clone 装）bake 的是项目源目录；patcher 原地改写 IIFE 里的 `RES` 字面量与 settings.json 的 hook 命令，指向 `INSTALL_DIR`。
+旧版用户直接重跑 `npx vscode-claude-code-status-dot` 即可：patcher 检测到旧版注入逻辑 → 自动还原原版 → 重新注入新版，**不用先 `--revert`**。
 
 </details>
 
@@ -160,7 +157,7 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 
 | 命令 | 作用 |
 |---|---|
-| `npx vscode-claude-code-status-dot` | 安装（patch extension.js + 接 hooks，幂等；若检测到 v0.1.2 webview 残留则自动清理） |
+| `npx vscode-claude-code-status-dot` | 安装（patch extension.js + 接 hooks，幂等；自动清理旧版残留） |
 | `npx vscode-claude-code-status-dot --revert` | 还原（从 `.bak` 恢复 + 移除 hooks + 删 INSTALL_DIR，保留用户数据） |
 | `npx vscode-claude-code-status-dot --status` | dry-run 报告，不改任何文件 |
 
@@ -199,7 +196,7 @@ CC 自动更新整体替换扩展目录，patched 文件被原版覆盖。重跑
 先 `Developer: Reload Window`。还不行跑 `npx vscode-claude-code-status-dot --status`：`patched: no` 重跑；`baked RES ... (STALE)` 重跑原地改写；`hooks wired: no` 重跑；`missing SVGs` 重跑补齐。
 
 **从旧版（git clone 装）升级？**
-直接重跑 `npx vscode-claude-code-status-dot`——patcher 检测到旧 baked 路径过期会原地改写，无需 `--revert` 后重装。
+直接重跑 `npx vscode-claude-code-status-dot`——自动处理旧版升级，无需 `--revert` 后重装。
 
 **状态卡在 running？**
 多半是你用 Esc 中断了 CC（CC 不触发 Stop/StopFailure，无 hook）。下次发 prompt 或等正常完成会自然更正。
@@ -225,14 +222,13 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 
 ## 🏗️ 原理 + 文档
 
-**patch CC 的 `extension.js`（注入 500ms IIFE：读状态文件设 tab 图标，running 静态黄 + done/interrupted 通知）+ 8 个 CC hooks（写状态到 `~/.claude/cc-tab-status/`）。** 完整文档：
+**patch CC extension.js（注入定时器设 tab 图标）+ CC hooks 写状态 + 完成/中断通知。** 完整文档：
 
 - [`docs/STATES.md`](docs/STATES.md)——**状态契约（唯一真相源）**：四态 / 事件映射 / IPC / 通知
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)——图标注入原理（anchor / IIFE / SVG 绑定）
-- [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md)——色块条注入原理（**v0.1.3 已废弃**，保留作历史设计记录）
 - [`docs/USAGE.md`](docs/USAGE.md)——使用指南（安装 / 排错 / 还原）
 
-> 本项目修改 CC 扩展的 `extension.js`（已备份，`--revert` 完整还原），并写入 `~/.claude/settings.json`（首次备份）。hook 脚本设计为**永不阻塞或中断 CC**——任何错误静默 `exit(0)`。
+> 本项目修改 CC 扩展的 `extension.js`（已备份，`--revert` 完整还原），并写入 `~/.claude/settings.json`（首次备份）。hook 脚本**永不阻塞 CC**——任何错误静默退出。
 
 ---
 

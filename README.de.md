@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Type](https://img.shields.io/badge/Type-VSCode%20Patch-CCA700?style=flat-square)](#-architektur--dokumentation)
 
-**Patcht die VSCode-Erweiterung von Claude Code, damit das Tab-Icon jeder Session zu einem Viere Zustands-Punkt wird**
+**Patcht die VSCode-Erweiterung von Claude Code, damit das Tab-Icon jeder Session zu einem Vier-Zustands-Punkt wird**
 
 🟡 Läuft · 🟢 Fertig · 🔴 Unterbrochen-Schnellblink · ⚪ Leerlauf —— zusätzlich Fertig-/Unterbrochen-Benachrichtigungen
 
@@ -20,11 +20,11 @@
 ## ✨ Merkmale
 
 - 🔧 **Einzeilige Installation** – `npx vscode-claude-code-status-dot` patcht die CC-Erweiterung automatisch, verdrahtet 8 Hooks, kopiert die Laufzeitdateien; idempotent und wiederholbar
-- 🛡️ **Dauerhaft, übersteht Löschen des Quellcodes** – die Laufzeitkopie liegt unter `~/.claude/cc-status-dot/`; projektquelle löschen / npx-Cache leeren / CC-Auto-Update beeinträchtigen die bereits gepatchte Erweiterung nicht
-- 🎨 **Viere Zustände vollständig abgedeckt** – vollständiger als CC nativ (nur Blau/Orange): idle / running / done / interrupted alles sichtbar
+- 🛡️ **Dauerhaft, übersteht Löschen des Quellcodes** – die Laufzeitkopie liegt unter `~/.claude/cc-status-dot/`; Projektquelle löschen / npx-Cache leeren / CC-Auto-Update beeinträchtigen die bereits gepatchte Erweiterung nicht
+- 🎨 **Vier Zustände vollständig abgedeckt** – vollständiger als CC nativ (nur Blau/Orange): idle / running / done / interrupted alles sichtbar
 - 🔔 **Fertig-/Unterbrochen-Benachrichtigung** – im Vordergrund unterdrückt; beim Wegwechseln vom Fenster VSCode-Nachricht + macOS-Systembenachrichtigung + Ton, ohne ständig hinzusehen
 - ⚙️ **Bleibt während Workflow-Lauf auf running** – Hintergrund-Subagent/Cron in der Luft zeigt nicht fälschlich Grün; `Stop` entscheidet autoritativ
-- 📂 **Open Editors synchron** – der CC-Tab in der Ansicht „Offene Editoren" oben links trägt ebenfalls den Zustands-Punkt (iconPath ist eine Tab-Eigenschaft, beide Stellen teilen sie)
+- 📂 **Open Editors synchron** – der CC-Tab in der Ansicht „Offene Editoren" oben links trägt ebenfalls den Zustands-Punkt
 - ↩️ **Ein-Klick-Wiederherstellung ohne Nebeneffekte** – `--revert` stellt extension.js vollständig aus `.bak` wieder her, entfernt Hooks chirurgisch und behält deine Benutzerdaten
 
 > ⚠️ **Ehrliche Erklärung**: Dieses Projekt ist ein **Patch, keine eigenständige Erweiterung** – VSCode erlaubt es Drittanbieter-Erweiterungen nicht, das Webview-Tab-Icon einer anderen Erweiterung zu ändern. Der einzig mögliche Pfad ist es, die `extension.js` von CC selbst zu patchen. Preis: CC-Auto-Updates überschreiben es, Befehl erneut ausführen.
@@ -37,7 +37,7 @@ Nach der Installation siehst du **auf einen Blick, was jede Session gerade macht
 
 | Szene | Du siehst / erhältst |
 |---|---|
-| CC läuft (du hast einen Prompt gesendet) | 🟡 Tab-Icon wird zum **statischen gelben Punkt** `#CCA700` (keine Animation, wie idle/done – iconPath-Frame-Wechsel ist inhärent diskret, statisch ist am saubersten) |
+| CC läuft (du hast einen Prompt gesendet) | 🟡 Tab-Icon wird zum **statischen gelben Punkt** `#CCA700` (keine Animation) |
 | CC wurde diese Runde normal fertig | 🟢 Tab wird grün + **beim Wegwechseln vom Fenster** Systembenachrichtigung + Ton (im Vordergrund keine Störung) |
 | CC durch Rate-Limit / Überlast unterbrochen | 🔴 Tab rotes Schnellblinken + Benachrichtigung (Text enthält Grund wie `rate limit reached`) |
 | Workflow / Hintergrund-Subagent noch läuft | Haupt-Session-Tab **bleibt gelb** (kein falsches Grün), `Stop` entscheidet autoritativ, kein falsches Fertig |
@@ -63,9 +63,9 @@ npx vscode-claude-code-status-dot
 
 Dieser eine Befehl erledigt automatisch:
 1. Findet `anthropic.claude-code-*` in `~/.vscode/extensions` (und insiders / cursor / vscodium usw.) und wählt die höchste Version;
-2. Falls Überreste der Webview-Aggregat-Farbblock-Leiste einer alten Version (v0.1.2) erkannt werden, **wird die Webview automatisch wiederhergestellt** (Aufräumen beim Upgrade, kein vorheriges `--revert` nötig);
+2. Bereinigt automatisch Überreste alter Versionen (falls vorhanden);
 3. Nach Anchor-Validierung **Backup** von `extension.js` → `extension.js.bak` (nur beim ersten Mal);
-4. Injiziert eine 500 ms-Redraw-IIFE (setzt Tab-Icon + done/interrupted-Benachrichtigung);
+4. Injiziert einen Timer (setzt Tab-Icon + done/interrupted-Benachrichtigung);
 5. Schreibt **8 Hook-Ereignisse** in `~/.claude/settings.json` (mit `# cc-status-dot-managed`-Markierung, idempotent);
 6. Kopiert die Laufzeitkopie (4 SVGs = idle + running + done + error, plus Hook-Skripte) nach `~/.claude/cc-status-dot/` (`INSTALL_DIR`).
 
@@ -99,15 +99,15 @@ Sende einen Prompt in CC:
 | ⚪ Grau `#808080` (statisch) | Leerlauf | Initial / fertig vor über 5 Minuten / keine Zustandsdatei |
 | 🔵 Blau (CC nativ) | Berechtigung erwartet | Nativer CC-Blau-Punkt, **dieses Projekt überschreibt das nicht** |
 
-> Ab v0.1.4 kehrt running zum **statischen gelben Punkt** `#CCA700` zurück (wie idle/done/error, ohne Animation). v0.1.3 hatte versuchsweise eine 8-Frame-Sinus-Atmung, aber der `iconPath`-Frame-Wechsel ist inhärent diskret (VSCode rendert das Icon nach jeder Zuweisung neu), die Übergänge zwischen Frames sind nicht kontinuierlich und werden vom Auge als Flackern statt als Verlauf wahrgenommen – daher zurück zum saubersten statischen Zustand. Unterbrochen behält die ~500 ms-Schnellblink-Warnung. Vollständiger Zustandsvertrag (Ereignisse / SVG / IPC / Benachrichtigung) siehe [`docs/STATES.md`](docs/STATES.md).
+> Running ist ein statischer gelber Punkt (keine Animation); Unterbrochen ist rotes Schnellblinken als Warnung. Vollständiger Zustandsvertrag (Ereignisse / SVG / IPC / Benachrichtigung) siehe [`docs/STATES.md`](docs/STATES.md).
 
 ---
 
 ## 🛠️ Fähigkeiten im Detail
 
-### 🟡 Viere Zustands-Tab-Icon-Punkte
+### 🟡 Vier Zustands-Tab-Icon-Punkte
 
-Das Tab-Icon jeder CC-Session ändert die Farbe nach Zustand und **erscheint gleichzeitig in der oberen Tab-Leiste und in der Ansicht „Offene Editoren" oben links** (iconPath ist eine Tab-Eigenschaft, beide Stellen teilen sie). Der injizierte 500 ms-Timer liest `~/.claude/cc-tab-status/<session_id>.json` und zeichnet neu – weil CC selbst das Icon nur bei spärlichen `rename_tab`-Ereignissen neu zeichnet, was nicht flüssig genug ist. running/idle/done sind alles **statische Punkte** (ab v0.1.4 ist running wieder statisch gelb `#CCA700`, Grund: iconPath-Frame-Wechsel ist diskret und nicht kontinuierlich, die Atmungs-Animation wird als Flackern wahrgenommen), unterbrochen verwendet seq%2-Schnellblink.
+Das Tab-Icon jeder CC-Session ändert die Farbe nach Zustand und **erscheint gleichzeitig in der oberen Tab-Leiste und in der Ansicht „Offene Editoren" oben links**. running/idle/done sind statische Farbpunkte, unterbrochen ist rotes Schnellblinken.
 
 ### 🔔 Fertig-/Unterbrochen-Benachrichtigung
 
@@ -120,11 +120,11 @@ Sowohl done als auch unterbrochen spielen `ccStatusDot.notifySound` (standardmä
 
 ### ⚙️ Bleibt während Workflow-Lauf auf running
 
-Nachdem der Haupt-Agent „gestartet" geantwortet hat, schreibt `Stop` **kein fälschliches done mehr (falsches Grün)**: Bei `Stop` / `SubagentStop` wird bevorzugt `background_tasks[]` aus dem Hook-Payload gelesen (CC v2.1.145+ autoritativ, deckt Workflow/Subagent/Teammate alle Typen ab); bei Fehlen Fallback auf `activeSubagents`-Zählung + `SubagentStart`-Frühsignal. Der Reader liest keine Zählung, der Zustand bleibt vier Zustände.
+Wenn im Hintergrund ein Workflow / Subagent läuft, bleibt die Haupt-Session gelb (kein falsches Grün) und meldet nicht fälschlich „fertig".
 
 ### 📂 Open Editors synchron
 
-Der CC-Tab in der VSCode-Ansicht „Offene Editoren" oben links **trägt ebenfalls den Zustands-Punkt** – da `iconPath` eine Tab-Level-Eigenschaft ist und sich die obere Tab-Leiste und Open Editors sie teilen, ist keine zusätzliche Injektion nötig.
+Der CC-Tab in der VSCode-Ansicht „Offene Editoren" oben links **trägt ebenfalls den Zustands-Punkt**, komplett synchron zur oberen Tab-Leiste.
 
 <details>
 <summary>📖 Dauerhaftigkeitsmechanismus (warum Löschen der Quelle kein Problem ist)</summary>
@@ -141,10 +141,7 @@ Die vom Reader (injizierte IIFE) referenzierten SVG-Pfade sowie die Hook-Befehle
 <details>
 <summary>📖 Upgrade-Pfad (wie alte git-clone-Installationen upgraden)</summary>
 
-Nutzer alter Versionen führen einfach `npx vscode-claude-code-status-dot` erneut aus; beide Arten der Veralterung werden automatisch behandelt, **kein `--revert` mit Neuinstallation nötig**:
-
-1. **Veraltete IIFE-Logikversion** – der injizierte Block trägt einen Versionsstempel `cc-status-dot-injected:v0.1.4`. Erkennt der Patcher, dass die Stempelversion nicht zur aktuellen passt (z. B. v0.1.3 8-Frame-Atmungs-IIFE → v0.1.4 statische IIFE), stellt er die Originaldatei aus `extension.js.bak` wieder her und injiziert die neue IIFE neu.
-2. **Veralteter baked-Pfad** – alte Versionen (v0.1 mit git-clone-Installation) bakten das Projektquellverzeichnis ein; der Patcher schreibt das `RES`-Literal in der IIFE sowie die Hook-Befehle in settings.json um und zeigt auf `INSTALL_DIR`.
+Nutzer alter Versionen führen einfach `npx vscode-claude-code-status-dot` erneut aus: der Patcher erkennt die alte Injektionslogik → stellt die Originaldatei automatisch wieder her → injiziert die neue Version neu, **kein vorheriges `--revert` nötig**.
 
 </details>
 
@@ -160,7 +157,7 @@ Das `WebviewPanel`-Tab-Icon (`iconPath`) in VSCode wird **ausschließlich von de
 
 | Befehl | Wirkung |
 |---|---|
-| `npx vscode-claude-code-status-dot` | Installieren (patcht extension.js + verdrahtet Hooks, idempotent; falls v0.1.2-Webview-Reste erkannt werden, automatische Bereinigung) |
+| `npx vscode-claude-code-status-dot` | Installieren (patcht extension.js + verdrahtet Hooks, idempotent; automatische Bereinigung alter Überreste) |
 | `npx vscode-claude-code-status-dot --revert` | Wiederherstellen (aus `.bak` + Hooks entfernen + INSTALL_DIR löschen, Benutzerdaten behalten) |
 | `npx vscode-claude-code-status-dot --status` | dry-run-Bericht, verändert keine Datei |
 
@@ -199,7 +196,7 @@ CC-Auto-Update ersetzt das gesamte Erweiterungsverzeichnis, die gepatchte Datei 
 Zuerst `Developer: Reload Window`. Falls das nicht hilft, führe `npx vscode-claude-code-status-dot --status` aus: `patched: no` → erneut ausführen; `baked RES ... (STALE)` → erneut ausführen zum Umschreiben; `hooks wired: no` → erneut ausführen; `missing SVGs` → erneut ausführen zum Ergänzen.
 
 **Upgrade von einer alten Version (git-clone-Installation)?**
-Einfach `npx vscode-claude-code-status-dot` erneut ausführen – der Patcher erkennt den veralteten baked-Pfad und schreibt um, ohne dass ein `--revert` mit Neuinstallation nötig wäre.
+Einfach `npx vscode-claude-code-status-dot` erneut ausführen – das alte Upgrade wird automatisch behandelt, ohne dass ein `--revert` mit Neuinstallation nötig wäre.
 
 **Zustand bleibt auf running hängen?**
 Meistens hast du CC mit Esc abgebrochen (CC löst kein Stop/StopFailure aus, kein Hook). Beim nächsten Prompt oder bei normalem Fertigstellen korrigiert sich das von selbst.
@@ -225,11 +222,10 @@ vscode-claude-code-status-dot        # nach der Installation direkt den Befehl a
 
 ## 🏗️ Architektur + Dokumentation
 
-**Patcht CCs `extension.js` (injiziert eine 500 ms-IIFE: liest Zustandsdatei und setzt Tab-Icon, statisches gelb für running + done/interrupted-Benachrichtigung) + 8 CC-Hooks (schreiben den Zustand nach `~/.claude/cc-tab-status/`).** Vollständige Dokumentation:
+**Patcht CCs `extension.js` (injiziert einen Timer, der das Tab-Icon setzt) + CC-Hooks schreiben den Zustand + Fertig-/Unterbrochen-Benachrichtigung.** Vollständige Dokumentation:
 
 - [`docs/STATES.md`](docs/STATES.md) – **Zustandsvertrag (einzige Quelle der Wahrheit)**: vier Zustände / Ereignis-Mapping / IPC / Benachrichtigung
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) – Prinzip der Icon-Injektion (Anchor / IIFE / SVG-Bindung)
-- [`docs/WEBVIEW-injection.md`](docs/WEBVIEW-injection.md) – Prinzip der Farbblock-Leisten-Injektion (**v0.1.3 verworfen**, als historisches Designdokument behalten)
 - [`docs/USAGE.md`](docs/USAGE.md) – Gebrauchsanleitung (Installation / Fehlersuche / Wiederherstellung)
 
 > Dieses Projekt verändert CCs `extension.js` (gebackuped, `--revert` stellt vollständig wieder her) und schreibt in `~/.claude/settings.json` (beim ersten Mal Backup). Die Hook-Skripte sind so entworfen, dass sie **CC niemals blockieren oder unterbrechen** – jeder Fehler führt zu einem stillen `exit(0)`.

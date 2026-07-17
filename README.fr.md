@@ -22,12 +22,30 @@
 - 🔧 **Installation en une ligne** — `npx vscode-claude-code-status-dot` patche automatiquement l'extension CC, câble 8 hooks, copie les fichiers d'exécution ; idempotent, relançable à volonté
 - 🛡️ **Persistant, sans crainte de supprimer la source** — l'exécutable de lecture est copié vers `~/.claude/cc-status-dot/` ; supprimer le projet source, vider le cache npx ou une mise à jour automatique de CC n'affecte pas l'extension déjà patchée
 - 🎨 **Couverture totale des quatre états** — plus complet que le CC natif (qui n'a que deux points bleu/orange) : idle / running / done / interrupted tous visualisés
-- 🔔 **Notifications de fin / interruption** — supprimées au premier plan ; bascule de fenêtre → message VSCode + notification système macOS + son, sans devoir fixer l'écran
+- 🔔 **Notifications de fin / interruption** — sur macOS, notification système native (coin supérieur droit de l'écran, avec son `Glass` par défaut), **à l'avant-plan comme à l'arrière-plan**, sans aucun bouton, disparaît automatiquement — plus besoin de fixer l'écran
 - ⚙️ **Reste jaune running pendant l'exécution d'un workflow** — pas de faux vert tant que des subagents/cron tournent en arrière-plan, `Stop` est l'arbitre
 - 📂 **Synchronisation de la vue Open Editors** — l'onglet CC dans la vue « Open Editors » en haut à gauche porte aussi le point d'état
 - ↩️ **Restauration en un clic, sans effet de bord** — `--revert` restaure `extension.js` depuis `.bak`, retire les hooks chirurgicalement et conserve vos données utilisateur
 
 > ⚠️ **Avertissement honnête** : ce projet est un **patch, pas une extension autonome** — VSCode ne permet pas à une extension tierce de modifier l'icône d'onglet webview d'une autre extension. La seule voie possible est de patcher le `extension.js` de CC lui-même. Conséquence : les mises à jour automatiques de CC écrasent le patch, il faut relancer la commande.
+
+---
+
+## 🖼️ Aperçu
+
+<div align="center">
+
+<img src="doc/status-dots.png" width="640" alt="Points d'état des sessions Claude Code">
+
+*Les points d'état sur l'onglet CC (en haut) et dans la vue « Open Editors » — chaque session porte sa propre couleur : 🟡 en cours / 🟢 terminé / 🔴 interrompu.*
+
+<br>
+
+<img src="doc/completion-notification.png" width="640" alt="Notification de fin de session">
+
+*Notification système macOS à la fin d'une session, accompagnée du son `Glass`.*
+
+</div>
 
 ---
 
@@ -38,7 +56,7 @@ Une fois installé, pendant que Claude Code travaille, **voyez en un coup d'œil
 | Scénario | Ce que vous voyez / obtenez |
 |---|---|
 | CC se lance (vous envoyez un prompt) | 🟡 l'icône d'onglet devient un **point jaune statique** `#CCA700` (pas d'animation) |
-| CC termine normalement ce tour | 🟢 l'onglet passe au vert + **quand la fenêtre est quittée** vous recevez une notification système + son (pas de dérangement au premier plan) |
+| CC termine normalement ce tour | 🟢 l'onglet passe au vert + **notification système macOS** (coin supérieur droit + son `Glass`), à l'avant-plan comme à l'arrière-plan |
 | CC interrompu par limite de débit / surcharge | 🔴 l'onglet clignote rapidement en rouge + notification (le texte précise `rate limit reached` et autres causes) |
 | Un workflow / subagent en arrière-plan tourne encore | L'onglet de la session principale **reste jaune** (pas de faux vert), `Stop` tranche en arbitre sans fausse fin |
 | Regarder la vue « Open Editors » en haut à gauche | L'onglet CC s'y affiche **aussi avec le point d'état**, parfaitement synchronisé avec la barre d'onglets supérieure |
@@ -85,7 +103,7 @@ Cette ligne effectue automatiquement :
 
 Dans CC, envoyez un prompt :
 - L'icône d'onglet devient 🟡 **point jaune statique** → CC termine → devient 🟢 vert
-- **Basculez de la fenêtre VSCode** en attendant la fin de CC → recevez une notification système + son
+- **Attendez la fin de CC** → vous recevez une notification système macOS + son, que VSCode soit au premier plan ou non
 
 ---
 
@@ -113,8 +131,8 @@ L'icône d'onglet de chaque session CC change de couleur selon l'état, **affich
 
 Quand une session passe à `done` ou `interrupted` (uniquement à cette transition, sans répétition) :
 
-- **VSCode au premier plan** : supprimé par défaut (l'icône qui devient verte / clignote rouge suffit) ;
-- **VSCode pas au premier plan** : message VSCode (dock bounce) + notification système macOS (centre de notifications + son).
+- **macOS** : notification système native (coin supérieur droit de l'écran, avec son `Glass` par défaut), **à l'avant-plan comme à l'arrière-plan**, sans aucun bouton, disparaît automatiquement après quelques secondes ;
+- **Windows / Linux** : repli sur le message intégré VSCode (toast en bas à droite, sans bouton, disparaît automatiquement).
 
 done et interruption jouent tous deux `ccStatusDot.notifySound` (`Glass` par défaut). À la première notification système, macOS affichera une fois « Script Editor veut envoyer des notifications » — autorisez-la.
 
@@ -182,7 +200,7 @@ En mode développement, remplacez la commande par `npx tsx patch.ts` (mêmes par
 | Clé | Défaut | Description |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Interrupteur général des notifications |
-| `ccStatusDot.notifyWhenFocused` | `true` | Afficher aussi un message VSCode au premier plan (garder false quand l'icône suffit) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Notifier aussi quand VSCode est au premier plan (passer à `false` pour ne notifier qu'en arrière-plan) |
 | `ccStatusDot.notifySound` | `"Glass"` | Son de notification système macOS (partagé entre done et interruption ; `""` pour muet ; Basso/Ping/Hero, etc. possibles) |
 
 ---

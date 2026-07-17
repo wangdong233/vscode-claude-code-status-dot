@@ -22,12 +22,30 @@
 - 🔧 **Einzeilige Installation** – `npx vscode-claude-code-status-dot` patcht die CC-Erweiterung automatisch, verdrahtet 8 Hooks, kopiert die Laufzeitdateien; idempotent und wiederholbar
 - 🛡️ **Dauerhaft, übersteht Löschen des Quellcodes** – die Laufzeitkopie liegt unter `~/.claude/cc-status-dot/`; Projektquelle löschen / npx-Cache leeren / CC-Auto-Update beeinträchtigen die bereits gepatchte Erweiterung nicht
 - 🎨 **Vier Zustände vollständig abgedeckt** – vollständiger als CC nativ (nur Blau/Orange): idle / running / done / interrupted alles sichtbar
-- 🔔 **Fertig-/Unterbrochen-Benachrichtigung** – im Vordergrund unterdrückt; beim Wegwechseln vom Fenster VSCode-Nachricht + macOS-Systembenachrichtigung + Ton, ohne ständig hinzusehen
+- 🔔 **Fertig-/Unterbrochen-Benachrichtigung** – macOS-Systembenachrichtigung (rechte obere Ecke, mit Ton, standardmäßig `Glass`) erscheint im Vordergrund wie im Hintergrund; auf Windows/Linux Fallback auf VSCode-interne Nachricht (Toast unten rechts), ohne Schaltflächen, verschwindet automatisch
 - ⚙️ **Bleibt während Workflow-Lauf auf running** – Hintergrund-Subagent/Cron in der Luft zeigt nicht fälschlich Grün; `Stop` entscheidet autoritativ
 - 📂 **Open Editors synchron** – der CC-Tab in der Ansicht „Offene Editoren" oben links trägt ebenfalls den Zustands-Punkt
 - ↩️ **Ein-Klick-Wiederherstellung ohne Nebeneffekte** – `--revert` stellt extension.js vollständig aus `.bak` wieder her, entfernt Hooks chirurgisch und behält deine Benutzerdaten
 
 > ⚠️ **Ehrliche Erklärung**: Dieses Projekt ist ein **Patch, keine eigenständige Erweiterung** – VSCode erlaubt es Drittanbieter-Erweiterungen nicht, das Webview-Tab-Icon einer anderen Erweiterung zu ändern. Der einzig mögliche Pfad ist es, die `extension.js` von CC selbst zu patchen. Preis: CC-Auto-Updates überschreiben es, Befehl erneut ausführen.
+
+---
+
+## 🖼️ Vorschau
+
+<div align="center">
+
+<img src="doc/status-dots.png" width="640" alt="Zustands-Punkte auf Tabs und in „Offene Editoren"">
+
+*Oben auf dem Session-Tab und links in der Ansicht „Offene Editoren" trägt jede CC-Session ihren eigenen Farbpunkt – 🟡 läuft / 🟢 fertig / 🔴 unterbrochen.*
+
+<br>
+
+<img src="doc/completion-notification.png" width="640" alt="Fertig-Benachrichtigung mit Ton">
+
+*macOS-Systembenachrichtigung mit Glass-Ton, wenn die Session fertig wird oder unterbrochen wird.*
+
+</div>
 
 ---
 
@@ -38,7 +56,7 @@ Nach der Installation siehst du **auf einen Blick, was jede Session gerade macht
 | Szene | Du siehst / erhältst |
 |---|---|
 | CC läuft (du hast einen Prompt gesendet) | 🟡 Tab-Icon wird zum **statischen gelben Punkt** `#CCA700` (keine Animation) |
-| CC wurde diese Runde normal fertig | 🟢 Tab wird grün + **beim Wegwechseln vom Fenster** Systembenachrichtigung + Ton (im Vordergrund keine Störung) |
+| CC wurde diese Runde normal fertig | 🟢 Tab wird grün + macOS-Systembenachrichtigung + Ton (Vordergrund und Hintergrund; auf Windows/Linux VSCode-Nachricht) |
 | CC durch Rate-Limit / Überlast unterbrochen | 🔴 Tab rotes Schnellblinken + Benachrichtigung (Text enthält Grund wie `rate limit reached`) |
 | Workflow / Hintergrund-Subagent noch läuft | Haupt-Session-Tab **bleibt gelb** (kein falsches Grün), `Stop` entscheidet autoritativ, kein falsches Fertig |
 | Ansicht „Offene Editoren" oben links ansehen | Der CC-Tab hat **hier ebenfalls den Zustands-Punkt**, komplett synchron zur oberen Tab-Leiste |
@@ -85,7 +103,7 @@ Dieser eine Befehl erledigt automatisch:
 
 Sende einen Prompt in CC:
 - Tab-Icon wird zu 🟡 **statischem gelben Punkt** → CC fertig → wird 🟢 grün
-- **Wechsle vom VSCode-Fenster weg**, während CC läuft → Systembenachrichtigung + Ton bei Fertigstellung
+- macOS: Systembenachrichtigung (rechte obere Ecke) + Ton bei Fertigstellung/Unterbrechung – auch wenn VSCode im Vordergrund ist
 
 ---
 
@@ -113,8 +131,8 @@ Das Tab-Icon jeder CC-Session ändert die Farbe nach Zustand und **erscheint gle
 
 Wenn eine Session auf `done` oder `interrupted` wechselt (nur bei diesem Zustandsübergang, keine Wiederholung):
 
-- **VSCode im Vordergrund**: standardmäßig unterdrückt (Icon wird grün/rotes Schnellblinken ist ausreichend);
-- **VSCode nicht im Vordergrund**: VSCode-Nachricht (löst Dock-Bounce aus) + macOS-Systembenachrichtigung (Mitteilungszentrale + Ton).
+- **macOS**: Systembenachrichtigung fällt von der rechten oberen Ecke herab (Mitteilungszentrale), mit Ton, ohne Schaltflächen, verschwindet nach einigen Sekunden automatisch. Erscheint im Vordergrund wie im Hintergrund (`notifyWhenFocused` standardmäßig `true`).
+- **Windows / Linux**: Fallback auf die VSCode-interne Nachricht (Toast unten rechts, ebenfalls ohne Schaltflächen, automatisches Verschwinden).
 
 Sowohl done als auch unterbrochen spielen `ccStatusDot.notifySound` (standardmäßig `Glass`). Bei der ersten Systembenachrichtigung fragt macOS einmal nach „Script Editor möchte Benachrichtigungen senden" – erlauben.
 
@@ -182,7 +200,7 @@ In VSCode `settings.json` eintragen (ohne Angabe gelten die Standardwerte):
 | Option | Standard | Beschreibung |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Hauptschalter für Benachrichtigungen |
-| `ccStatusDot.notifyWhenFocused` | `true` | Auch im Vordergrund VSCode-Nachricht zeigen (bei ausreichendem Icon auf `false` lassen) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Auch dann benachrichtigen, wenn VSCode im Vordergrund ist (Standard `true`; wer nur die Icon-Änderung möchte, auf `false` setzen) |
 | `ccStatusDot.notifySound` | `"Glass"` | macOS-Systembenachrichtigungston (done und unterbrochen teilen sich; `""` stumm; Alternativen: Basso/Ping/Hero usw.) |
 
 ---

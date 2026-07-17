@@ -22,12 +22,30 @@
 - 🔧 **One-line install** — `npx vscode-claude-code-status-dot` auto-patches the CC extension, wires 8 hooks, and copies runtime files; idempotent, re-runnable
 - 🛡️ **Persistent — survives source deletion** — runtime copies land in `~/.claude/cc-status-dot/`; deleting the project / purging the npx cache / a CC auto-update won't break the patched extension
 - 🎨 **All four states** — more complete than CC's native (only blue/orange dots): idle / running / done / interrupted fully visualized
-- 🔔 **Completion/interruption notifications** — suppressed in the foreground; when you've switched away you get a VSCode message + macOS system notification + sound, no need to keep watching
+- 🔔 **Completion/interruption notifications** — on macOS a native system notification drops down from the top-right corner (with sound, buttonless, auto-dismisses); on Windows/Linux it falls back to a VSCode toast — fires whether VSCode is in the foreground or background by default, no need to keep watching
 - ⚙️ **Stays running while workflow runs** — no false-green when background subagents/crons are in flight; `Stop` is the authoritative arbiter
 - 📂 **Open Editors sync** — the CC tab in the top-left "Open Editors" view also carries the status dot
 - ↩️ **Zero side effects, one-click restore** — `--revert` fully restores extension.js from `.bak`, surgically removes hooks, keeps your user data
 
 > ⚠️ **Honest disclaimer**: this project is a **patch, not a standalone extension** — VSCode does not allow a third-party extension to modify another extension's webview tab icon, so the only viable path is patching CC's own `extension.js`. Trade-off: a CC auto-update overwrites it, so you must re-run the command.
+
+---
+
+## 🖼️ Preview
+
+<div align="center">
+
+<img src="doc/status-dots.png" width="640" alt="Four-state status dots">
+
+**Four-state status dots on every CC session** — shown in both the top tab bar and the left-side "Open Editors" view: 🟡 yellow = running, 🟢 green = done, 🔴 red = interrupted, ⚪ gray = idle.
+
+<br>
+
+<img src="doc/completion-notification.png" width="640" alt="Completion notification">
+
+**Session-completion notification** — a native macOS system notification (with sound) drops down the moment a turn finishes.
+
+</div>
 
 ---
 
@@ -38,7 +56,7 @@ After installing, while Claude Code is working, **see at a glance what every ses
 | Scenario | What you see / get |
 |---|---|
 | CC starts running (you sent a prompt) | 🟡 tab icon turns to a **static yellow dot** `#CCA700` (no animation) |
-| CC finishes a turn normally | 🟢 tab turns green + **if you've switched away** a system notification + sound (no bother when focused) |
+| CC finishes a turn normally | 🟢 tab turns green + a system notification + sound (fires whether VSCode is focused or in the background) |
 | CC is rate-limited / overloaded | 🔴 tab red fast-flash + notification (text carries the cause like `rate limit reached`) |
 | workflow / background subagent still running | The main session tab **stays yellow** (no false green); `Stop` authoritatively avoids a false done |
 | Looking at the "Open Editors" view (top-left) | The CC tab here **also carries the status dot**, fully in sync with the top tab bar |
@@ -85,7 +103,7 @@ This single line automatically:
 
 Send a prompt in CC:
 - the tab icon turns to a 🟡 **static yellow dot** → on completion → 🟢 green
-- **switch away from VSCode** and wait for CC to finish → you get a system notification + sound
+- a system notification + sound fires when the turn finishes (whether VSCode is focused or in the background)
 
 ---
 
@@ -113,8 +131,8 @@ Each CC session's tab icon changes color by state, **shown in both the top tab b
 
 When a session transitions to `done` or `interrupted` (only at the transition, no repeats):
 
-- **VSCode focused**: suppressed by default (the icon turning green/red-flash is enough);
-- **VSCode unfocused**: pops a VSCode message (triggers dock bounce) + a macOS system notification (notification center + sound).
+- **macOS**: a native system notification drops down from the top-right corner of the screen, with sound, **no buttons**, auto-dismisses after a few seconds — **fires whether VSCode is in the foreground or background** (`notifyWhenFocused` defaults to `true`).
+- **Windows / Linux** (no `osascript`): falls back to VSCode's built-in toast (bottom-right, also buttonless and auto-dismissing).
 
 Both done and interrupted play `ccStatusDot.notifySound` (default `Glass`). The first system notification triggers a one-time macOS prompt "Script Editor wants to send notifications" — allow it.
 
@@ -182,7 +200,7 @@ Add to VSCode's `settings.json` (skip to keep defaults):
 | Option | Default | Description |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Master notification switch |
-| `ccStatusDot.notifyWhenFocused` | `true` | Also pop a VSCode message when focused (keep false if the icon is enough) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Also fire the notification when VSCode is focused (notifications fire in both foreground and background by default; set `false` to mute while focused) |
 | `ccStatusDot.notifySound` | `"Glass"` | macOS notification sound (used for both done & interrupted; `""` for silent; options: Basso/Ping/Hero, etc.) |
 
 ---

@@ -22,12 +22,30 @@
 - 🔧 **Instalación en una línea** — `npx vscode-claude-code-status-dot` aplica el parche a la extensión de CC, conecta 8 hooks, copia los archivos de runtime; idempotente, se puede ejecutar varias veces
 - 🛡️ **Persistente, no teme borrar el código fuente** — la copia de runtime se guarda en `~/.claude/cc-status-dot/`; borrar el proyecto, limpiar la caché de npx o las actualizaciones automáticas de CC no afectan a la extensión ya parcheada
 - 🎨 **Cobertura total de los cuatro estados** — más completa que CC nativo (que solo tiene azul/naranja): idle / running / done / interrupted, todo visible
-- 🔔 **Notificaciones de completado/interrupción** — suprimidas en primer plano; al cambiar de ventana muestra un mensaje de VSCode + notificación del sistema macOS + sonido, sin tener que mirar fijamente
+- 🔔 **Notificaciones de completado/interrupción** — en macOS salta una notificación del sistema (esquina superior derecha + sonido `Glass` por defecto, sin botones, se cierra sola), tanto si VSCode está en primer plano como en segundo; en Windows/Linux se usa el mensaje integrado de VSCode, sin tener que mirar fijamente
 - ⚙️ **Mantiene running durante la ejecución de workflows** — cuando hay subagentes/cron en vuelo no se pone verde por error, `Stop` es el árbitro definitivo
 - 📂 **Sincronización con Open Editors** — las pestañas de CC en la vista "Editores abiertos" arriba a la izquierda también muestran el punto de estado
 - ↩️ **Reversión sin efectos secundarios en una línea** — `--revert` restaura por completo `extension.js` desde `.bak`, retira los hooks de forma quirúrgica y conserva tus datos de usuario
 
 > ⚠️ **Declaración honesta**: este proyecto es un **parche (patch), no una extensión independiente** — VSCode no permite que una extensión de terceros modifique el icono de la pestaña webview de otra extensión; la única vía viable es parchear el `extension.js` del propio CC. El precio: las actualizaciones automáticas de CC lo sobrescriben, hay que volver a ejecutar el comando.
+
+---
+
+## 🖼️ Vista previa
+
+<div align="center">
+
+<img src="doc/status-dots.png" width="640" alt="Puntos de estado">
+
+**Puntos de estado de cuatro estados en las pestañas y en la vista "Editores abiertos"** — 🟡 en ejecución · 🟢 completado · 🔴 interrumpido
+
+<br>
+
+<img src="doc/completion-notification.png" width="640" alt="Notificación de completado">
+
+**Notificación del sistema + sonido al completarse la sesión** — avisa aunque estés en otra aplicación
+
+</div>
 
 ---
 
@@ -38,7 +56,7 @@ Tras instalarlo, cuando Claude Code trabaja, **ves de un vistazo qué hace cada 
 | Escenario | Lo que ves / obtienes |
 |---|---|
 | CC empieza a trabajar (envías un prompt) | 🟡 El icono de la pestaña se vuelve un **punto amarillo estático** `#CCA700` (sin animación) |
-| CC termina esta ronda con normalidad | 🟢 La pestaña se pone verde + al **salir de la ventana** recibes notificación del sistema + sonido (en primer plano no molesta) |
+| CC termina esta ronda con normalidad | 🟢 La pestaña se pone verde + recibes **notificación del sistema + sonido** (tanto si estás en VSCode como en otra ventana) |
 | CC se interrumpe por limitación de velocidad / sobrecarga | 🔴 La pestaña parpadea en rojo rápido + notificación (el texto incluye la causa, p. ej. `rate limit reached`) |
 | workflow / subagent en segundo plano aún trabajando | La pestaña de la sesión principal **se mantiene amarilla** (no se pone verde por error), `Stop` decide sin falsos completados |
 | Miras la vista "Editores abiertos" arriba a la izquierda | La pestaña de CC aquí **también tiene punto de estado**, totalmente sincronizada con la barra de pestañas superior |
@@ -85,7 +103,7 @@ Esta línea hace automáticamente:
 
 Envía un prompt en CC:
 - El icono de la pestaña se vuelve 🟡 **punto amarillo estático** → CC termina → se pone 🟢 verde
-- **Cambia de ventana de VSCode** y espera a que CC termine → recibes notificación del sistema + sonido
+- **Cambia a otra aplicación** (o quédate en VSCode) y espera a que CC termine → recibes **notificación del sistema + sonido** (también salta si sigues en VSCode)
 
 ---
 
@@ -113,10 +131,10 @@ El icono de la pestaña de cada sesión de CC cambia de color según el estado, 
 
 Cuando la sesión pasa a `done` o `interrupted` (solo en el instante de la transición, sin repetir):
 
-- **VSCode en primer plano**: suprimido por defecto (el icono en verde/rojo parpadeante ya basta);
-- **VSCode fuera de primer plano**: mensaje de VSCode (activa el dock bounce) + notificación del sistema macOS (centro de notificaciones + sonido).
+- **macOS**: salta una **notificación del sistema** (se desliza desde la esquina superior derecha de la pantalla), con sonido (por defecto `Glass`), **sin ningún botón** (nada que pulsar, se cierra sola a los pocos segundos). Funciona **tanto en primer plano como en segundo plano** (`ccStatusDot.notifyWhenFocused` por defecto en `true`).
+- **Windows / Linux**: como no hay `osascript`, se recurre al **mensaje integrado de VSCode** (toast abajo a la derecha, también sin botón, se cierra solo).
 
-Tanto done como interrupción reproducen `ccStatusDot.notifySound` (por defecto `Glass`). La primera vez, macOS pedirá autorización una vez para "Script Editor quiere enviar notificaciones", basta con permitirla.
+La primera vez, macOS pedirá autorización una vez para "Script Editor quiere enviar notificaciones", basta con permitirla.
 
 ### ⚙️ Mantiene running durante la ejecución de workflows
 
@@ -182,7 +200,7 @@ Escríbelo en el `settings.json` de VSCode (si no lo configuras, se usan los val
 | Opción | Por defecto | Descripción |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Interruptor maestro de notificaciones |
-| `ccStatusDot.notifyWhenFocused` | `true` | Mostrar también el mensaje de VSCode en primer plano (mantener false cuando el icono ya basta) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Notificar también cuando VSCode está en primer plano (si lo pones en `false`, solo se notifica al estar en segundo plano) |
 | `ccStatusDot.notifySound` | `"Glass"` | Sonido de notificación del sistema macOS (compartido por done e interrupción; `""` silencia; admite Basso/Ping/Hero, etc.) |
 
 ---

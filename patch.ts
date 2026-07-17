@@ -118,7 +118,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  re-injects the current IIFE — otherwise structural IIFE changes (e.g. v0.1.4 reverting
  *  to static running, or v0.1.3 removing the aggregate bar) would be silently swallowed
  *  because the bare marker still matches. */
-const INJECT_VERSION = "v0.1.7";
+const INJECT_VERSION = "v0.1.8";
 
 /** Substring appended (as a shell comment) to every hook command we own in settings.json.
  *  Used for idempotent dedupe on install and surgical removal on --revert. */
@@ -215,6 +215,13 @@ const ANCHOR_A =
  * the timer begins on the very first rename_tab (which can precede the first
  * update_session_state) and so CC's icon assignment is re-asserted within one
  * tick. Exact, must match ONCE.
+ *
+ * The injected replB ALSO stashes `this.__ccPending=!!e.request.hasPendingPermissions`
+ * on every rename_tab fire — the same flag CC uses to paint its native blue
+ * pending dot. The IIFE's tick reads this live and yields when set, so the
+ * reader stops overriding CC's blue dot during a permission prompt (the
+ * PreToolUse heartbeat leaves state=running on disk, which previously caused
+ * the yellow running dot to cover the blue pending dot).
  */
 const ANCHOR_B =
     'this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)';
@@ -437,6 +444,14 @@ function assertCompiles(code: string, label: string): void {
 //     done        -> steady claude-logo-done.svg; if since older than 5 min -> idle
 //     idle        -> steady claude-logo-idle.svg
 //     missing/unknown -> return (don't fight CC's own pending/done icon)
+//     permission pending -> return (don't fight CC's native blue dot). The
+//                    rename_tab handler stashes `this.__ccPending` from
+//                    `e.request.hasPendingPermissions` (the same flag CC uses to
+//                    paint its blue dot) on every fire; the tick yields when it
+//                    is set, so CC's pending icon shows through. Fixes the bug
+//                    where a PreToolUse heartbeat leaves state=running on disk
+//                    during a permission prompt and the reader overrides CC's
+//                    blue dot with the yellow running dot.
 //   On a NEW terminal `since` (done/interrupted): notify once (VSCode msg +
 //   macOS osascript when unfocused). Config: ccStatusDot.{notify,notifyWhenFocused,notifySound}.
 //   notifyWhenFocused defaults to true (foreground still notifies — "window
@@ -481,6 +496,7 @@ function buildIIFE(resDir: string): string {
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||""}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
         `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){lastTermSince=since;try{notify(st,err)}catch(e){}}`,
+        `/*permission pending:yield to CC native blue dot*/if(t.__ccPending)return;`,
         `var now=Date.now();`,
         `var svg;`,
         `if(st==="interrupted"){svg=(seq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
@@ -534,7 +550,7 @@ function injectFresh(extJs: string, src: string): void {
         );
     }
     if (bCount === 0) {
-        warn("Anchor B not found — installing with Anchor A only (~500 ms flash may occur after CC rename_tab).");
+        warn("Anchor B not found — installing with Anchor A only. The permission-pending blue-dot fix will be INACTIVE (a yellow running dot may cover CC's native blue pending dot during a permission prompt), and ~500 ms flash may occur after CC rename_tab.");
     }
 
     // One-time original backup, only after we know injection will succeed.
@@ -560,7 +576,7 @@ function injectFresh(extJs: string, src: string): void {
 
     // Anchor B (optional hardening): start the same guarded timer from rename_tab too.
     if (bCount === 1) {
-        const replB = "this.panelTab.title=e.request.title;" + iife + ";let r;if(e.request.hasPendingPermissions)";
+        const replB = "this.panelTab.title=e.request.title;this.__ccPending=!!e.request.hasPendingPermissions;" + iife + ";let r;if(e.request.hasPendingPermissions)";
         next = next.replace(ANCHOR_B, replB);
         if (countOccurrences(next, INJECT_MARKER) < 2) {
             fail("Anchor B replacement did not apply. No files were modified.");

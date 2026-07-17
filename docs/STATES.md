@@ -16,7 +16,12 @@
 | `interrupted` | 中断（限速 / 出错） | 红 `#F85149` | `claude-logo-error.svg` ↔ CC 默认 `claude-logo.svg` | 快闪（~500ms 切换，on/off） |
 | — (permission) | 待用户授权 | 蓝（CC 原生） | CC 原生 `claude-logo-pending.svg` | **reader 不覆盖**，CC 原生蓝点照常显示 |
 
-> 设计决策：`permission` 态不纳入我们的渲染——CC 已有原生蓝点处理 `hasPendingPermissions`，reader 在"无外部状态文件 / state 未知"时 `return`（不覆盖图标），CC 蓝点自然生效。避免重复造一套 waiting 态。
+> 设计决策：`permission` 态不纳入我们的渲染——CC 已有原生蓝点处理 `hasPendingPermissions`，reader 在以下两种情况 `return`（不覆盖图标），CC 蓝点自然生效：
+>
+> 1. **无外部状态文件 / state 未知**（原 v0.1.7 行为）。
+> 2. **permission pending**（v0.1.8 新增）：reader tick 检测到 `t.__ccPending===true` 即 `return`。`__ccPending` 由 `rename_tab` handler（Anchor B）每次触发时从 `e.request.hasPendingPermissions`（CC 用来画蓝点的同一个 flag）就地刷新到 panel 实例上；IIFE 每 500ms 读这个 live flag，pending 期间不抢图标。
+>
+> 背景：PreToolUse 心跳会在 permission 弹窗前把 `state=running` 落盘，CC 又无 permission-pending hook 事件可纠正该文件；v0.1.7 只在"读不到文件"时 return，故 pending 期间 reader 持续用黄 `running.svg` 盖 CC 蓝点（本 bug）。v0.1.8 让 reader 直接读 CC 自己的 pending flag，不再依赖状态文件是否巧合缺失。避免重复造一套 waiting 态。
 >
 > **点几何（所有 SVG 统一）**：`viewBox 0 0 24 24`，状态点 `cx=18 cy=6 r=6`，mask 挖空 `r=7.5`（margin 1.5）。16px tab 渲染下点直径 8px，视觉占比 20%（竞品角标黄金比区间：macOS dock badge ~20-25%）。
 
@@ -72,6 +77,7 @@
 读 <sid>.json → state, since, error
 if prevSt && prevSt != state && state ∈ {done, interrupted}:  notify(state, error)   # 见 §4b
 prevSt = state
+if __ccPending (rename_tab hasPendingPermissions=true):  return（不覆盖，让 CC 原生蓝点显示）  # v0.1.8
 if state == "done" and now - since > 5min:  视为 idle
 switch state:
   running:     RES/claude-logo-running.svg   # 静态黄 #CCA700（无动画）

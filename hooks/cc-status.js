@@ -16,13 +16,21 @@
  *
  * Event mapping (MUST equal HOOK_EVENTS in patch.ts; see docs/STATES.md §2):
  *   UserPromptSubmit          -> running (activeSubagents: prefer payload
- *                                 background_tasks, else keep — don't reset 0)
- *   PreToolUse / PostToolUse  -> running (heartbeat; refresh `since`)
+ *                                 background_tasks, else reset 0 — drift must
+ *                                 NOT bleed across turns)
+ *   PreToolUse / PostToolUse  -> running (heartbeat; refresh `since`;
+ *                                 activeSubagents same rule as UserPromptSubmit)
  *   SubagentStart             -> running (early signal; activeSubagents+1)
  *   SubagentStop              -> persist decremented count (clamp 0); running if
  *                                 tasks remain, else keep cur.state (Stop decides)
- *   Stop                      -> done, UNLESS background_tasks / activeSubagents
- *                                 > 0 -> running (workflow still in flight)
+ *   Stop                      -> done, UNLESS inflight background_tasks > 0
+ *                                 -> running. The payload is the ONLY authority
+ *                                 at Stop; the on-disk activeSubagents is NOT
+ *                                 consulted — it can drift (SubagentStart with
+ *                                 no matching SubagentStop) and false-stick at
+ *                                 running. When the payload omits
+ *                                 background_tasks we read done + clear the
+ *                                 residual counter.
  *   StopFailure               -> interrupted (records the error enum)
  *   SessionEnd                -> delete the session's status file
  *
@@ -105,15 +113,19 @@ function deriveStatus(payload, cur) {
 
   switch (event) {
     // A new turn just began: CC is working on the user's prompt.
-    // Don't reset activeSubagents to 0 — a prior workflow may still be running.
-    // Correct it from the authoritative payload if available, else keep it.
+    // Correct activeSubagents from the authoritative payload if available;
+    // otherwise reset to 0 — a prior turn's drift must NOT bleed into the new
+    // turn (Stop is the authority on whether work remains, not this counter).
+    // state is running regardless.
     case 'UserPromptSubmit':
-      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : a };
+      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : 0 };
 
     // Heartbeat: keep CC marked running and refresh the timestamp.
+    // activeSubagents writeback follows the same rule as UserPromptSubmit:
+    // authoritative payload wins, else 0 (don't carry drift across events).
     case 'PreToolUse':
     case 'PostToolUse':
-      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : a };
+      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : 0 };
 
     // Early signal: a subagent was just spawned — turn yellow immediately,
     // before the first Stop. Prefer the authoritative count, else increment.
@@ -135,14 +147,20 @@ function deriveStatus(payload, cur) {
       };
     }
 
-    // Turn completed normally. Authoritative call: if background tasks are
-    // still in flight (a workflow running in the background), stay running
-    // instead of falsely going green. Old CC versions degrade to activeSubagents.
+    // Turn completed normally. State is decided by the AUTHORITATIVE payload
+    // count ONLY: inflight>0 (a workflow still running in the background) ->
+    // running; otherwise done — including when the payload omits
+    // background_tasks entirely (inflight=null). We do NOT fall back to the
+    // on-disk activeSubagents counter here: that counter can drift (e.g. a
+    // SubagentStart with no matching SubagentStop leaves a stale positive
+    // count) and would make an already-finished turn false-stick at running
+    // (bug e434c0a2). Clear the residual instead. `null > 0` is false so the
+    // single comparison covers inflight=null, 0, and N>0 correctly.
     case 'Stop':
       return {
-        state: (inflight != null ? inflight : a) > 0 ? 'running' : 'done',
+        state: inflight > 0 ? 'running' : 'done',
         since: now,
-        activeSubagents: inflight != null ? inflight : a,
+        activeSubagents: inflight != null ? inflight : 0,
       };
 
     // Turn was aborted/interrupted; preserve the failure reason enum.

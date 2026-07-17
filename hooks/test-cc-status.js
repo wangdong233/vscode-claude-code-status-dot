@@ -96,6 +96,26 @@ function check(name, got, expectedState) {
   return ok;
 }
 
+/** Like check(), but also asserts activeSubagents — used for regression cases
+ *  that care about residual-counter cleanup, not just the visible state. */
+function checkBoth(name, got, expectedState, expectedActive) {
+  const gotState = got ? got.state : null;
+  const gotActive = got ? got.activeSubagents : null;
+  const ok = gotState === expectedState && gotActive === expectedActive;
+  if (ok) {
+    pass++;
+    console.log('  PASS  ' + name + '   -> state=' + gotState + ' activeSubagents=' + gotActive);
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  ' + name +
+      '   expected state=' + expectedState + ' active=' + expectedActive +
+      ' got state=' + gotState + ' active=' + gotActive
+    );
+  }
+  return ok;
+}
+
 // --- scenarios ------------------------------------------------------------
 
 console.log('Phase-2 state machine integration tests');
@@ -108,11 +128,15 @@ check(
   'done'
 );
 
-// 2. CORE REQUIREMENT: workflow in flight -> Stop must NOT flip to done.
+// 2. (Semantics fix, bug e434c0a2): a counter bump with NO payload at Stop
+//    no longer false-sticks at running. The drift-prone activeSubagents counter
+//    is not consulted at Stop; only the payload is authoritative. The real
+//    "workflow in flight -> running" guarantee is covered by the payload-driven
+//    cases (7 and 10 below). Same sequence that used to assert 'running'.
 check(
-  '2. UserPromptSubmit -> SubagentStart -> Stop = running [CORE]',
+  '2. UserPromptSubmit -> SubagentStart -> Stop (no payload) = done',
   runSeq(['UserPromptSubmit', 'SubagentStart', 'Stop']),
-  'running'
+  'done'
 );
 
 // 3. Subagent finishes before Stop -> done. (Exposes the SubagentStop null-return bug.)
@@ -122,11 +146,12 @@ check(
   'done'
 );
 
-// 4. Two subagents start, one stops, then Stop -> still running (1 in flight).
+// 4. (Semantics fix): counter says "1 left" but Stop has no payload -> done.
+//    Only an authoritative inflight payload keeps it running at Stop.
 check(
-  '4. 2xStart -> SubagentStop -> Stop = running (1 left)',
+  '4. 2xStart -> SubagentStop -> Stop (no payload) = done (counter ignored at Stop)',
   runSeq(['UserPromptSubmit', 'SubagentStart', 'SubagentStart', 'SubagentStop', 'Stop']),
-  'running'
+  'done'
 );
 
 // 5. StopFailure always wins interrupted, even with a subagent in flight.
@@ -171,6 +196,50 @@ check(
   // SubagentStop sees inflight=2 -> next=2>0 -> writes running, activeSubagents=2
   check('8. SubagentStop w/ background_tasks=2 = running (B corrects A)', got, 'running');
 }
+
+// --- summary --------------------------------------------------------------
+
+//
+// Regression cases for bug e434c0a2 (Stop with no background_tasks payload
+// false-stuck at "running" because it fell back to a drifted activeSubagents
+// counter). These pin the fixed semantics: at Stop, ONLY the payload count
+// decides state; a missing payload means done + counter cleared.
+//
+
+// 9. [REGRESSION] The exact bug: a stale activeSubagents=1 on disk (left by a
+//    SubagentStart with no matching SubagentStop) + Stop with no background_tasks
+//    payload -> done, counter cleared to 0. Old code returned running here.
+checkBoth(
+  '9. [REGRESSION] Start -> Stop (no payload, stale counter=1) = done, counter=0',
+  runSeq(['UserPromptSubmit', 'SubagentStart', 'Stop']),
+  'done',
+  0
+);
+
+// 10. Stop with inflight=2 (authoritative payload) -> running, counter=2.
+checkBoth(
+  '10. Stop w/ background_tasks=[a,b] = running, counter=2',
+  runSeq([{ event: 'Stop', extra: { background_tasks: [{ id: 'a' }, { id: 'b' }] } }]),
+  'running',
+  2
+);
+
+// 11. Stop with inflight=0 (explicit empty payload array) -> done, counter=0.
+checkBoth(
+  '11. Stop w/ background_tasks=[] = done, counter=0',
+  runSeq([{ event: 'Stop', extra: { background_tasks: [] } }]),
+  'done',
+  0
+);
+
+// 12. [REGRESSION] UserPromptSubmit with no payload resets a drifted counter to
+//     0, so drift cannot cross into the new turn.
+checkBoth(
+  '12. [REGRESSION] SubagentStart -> UserPromptSubmit (no payload) = running, counter=0',
+  runSeq(['SubagentStart', 'UserPromptSubmit']),
+  'running',
+  0
+);
 
 // --- summary --------------------------------------------------------------
 

@@ -246,7 +246,6 @@ WeChat | Alipay
 :-: | :-:
 <img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
 
-> Image du QR code de don à compléter
 
 </div>
 

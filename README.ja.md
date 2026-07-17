@@ -246,7 +246,6 @@ WeChat | Alipay
 :-: | :-:
 <img src="doc/support-wechat.jpg" height="200" alt="WeChat"> | <img src="doc/support-alipay.jpg" height="200" alt="Alipay">
 
-> 投げ銭用QRコード画像は後日補充
 
 </div>
 

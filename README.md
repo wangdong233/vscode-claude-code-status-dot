@@ -246,7 +246,6 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 :-: | :-:
 <img src="doc/support-wechat.jpg" height="200" alt="微信"> | <img src="doc/support-alipay.jpg" height="200" alt="支付宝">
 
-> 赞赏码图片待补
 
 </div>
 

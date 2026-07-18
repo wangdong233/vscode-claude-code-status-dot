@@ -1,8 +1,22 @@
 #!/usr/bin/env node
 'use strict';
+/*cc-status-dot-hook:v0.1.14:58d356e5*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
+ *
+ * Version + content-hash stamp above (cc-status-dot-hook:vX.Y.Z:HASH) mirrors
+ * the IIFE's INJECT_VERSION+hash banner so installRuntimeFiles can detect a
+ * stale on-disk hook copy the same way patchExtension detects a stale IIFE
+ * (architecture-review round-2 added the version banner; round-3 added the
+ * content-hash suffix to close the asymmetry the round-2 review left —
+ * previously a dev could edit the hook body and forget to bump HOOK_VERSION,
+ * and the patcher would silently overwrite an installed hook whose body
+ * differed, no warn. The hash detects intra-version drift). Bump HOOK_VERSION
+ * in lockstep with INJECT_VERSION in patch.ts when the writer CONTRACT
+ * changes; re-stamp the hash whenever the BODY changes. The hash is sha1 of
+ * the file body with the banner line replaced by an empty line, truncated to
+ * 8 hex chars (HOOK_HASH_LEN in patch.ts).
  *
  * Reads a CC hook event from stdin (JSON) and writes a status file to
  *   ~/.claude/cc-tab-status/<session_id>.json
@@ -88,6 +102,18 @@ function readStdin() {
 // Sentinel return value meaning "delete this session's status file".
 const DELETE = Symbol('delete');
 
+// 24h retention threshold for interrupted sessions. CONTRACT: MUST equal the
+// reader IIFE's INTERRUPTED_RETENTION_MS (patch.ts buildIIFE) and STATES.md §7.2
+// rule 3 / §7.5. The aggregation layer decays interrupted>24h to idle for
+// COUNTING but keeps the file on disk for diagnostic inspection (STATES.md §7.5
+// "文件不删（保留诊断价值）"); the writer's UserPromptSubmit GC below mirrors
+// the threshold for its bounded prune. Named here (not inlined) so a search for
+// INTERRUPTED_RETENTION_MS lands both files with one token and a future tuning
+// edit hits both sites in lockstep. The test-iife.mjs IIFE.37c regex + the
+// §INTERRUPTED-RETENTION test in test-cc-status.js both pin the literal value,
+// catching drift at CI time.
+const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 /**
  * Count of in-flight background tasks carried by the payload (CC v2.1.145+:
  * Stop / SubagentStop ship `background_tasks[]` scoped to the parent session).
@@ -167,7 +193,12 @@ function deriveStatus(payload, cur) {
     // answered. cur.pending defaults to false when there is no prior file, so
     // the no-prior-file path is unchanged.
     case 'SubagentStart':
-      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : a + 1, pending: cur.pending === true };
+      return {
+        state: 'running',
+        since: now,
+        activeSubagents: inflight != null ? inflight : a + 1,
+        pending: cur.pending === true,
+      };
 
     // A subagent finished. Prefer the authoritative count, else decrement
     // (clamped at 0). If tasks remain, stay running; otherwise do NOT
@@ -193,9 +224,20 @@ function deriveStatus(payload, cur) {
       // so refreshing it here would (a) re-fire a duplicate "turn complete"
       // notification for the same turn, and (b) reset the done→idle 5-min
       // countdown. When next>0 we DO flip state to running and refresh since
-      // (a remaining task re-arms the yellow dot).
+      // (a remaining task re-arms the yellow dot). R3 data-logic fix: the
+      // guard previously accepted `typeof cur.since === "number"` so a
+      // hand-edited / corrupt file with cur.since=0 would be preserved
+      // indefinitely — and the reader's `since && (now-since>DONE_TO_IDLE_MS)`
+      // tick is falsy for 0, so the file NEVER decayed to idle, permanently
+      // stuck as terminal green/red. Mirror Notification's strict `> 0`
+      // guard (see curSince below) — cur.since=0 only arises from a corrupt
+      // file (the writer never produces it via Date.now()).
       const preserveSince =
-        (curState === 'done' || curState === 'interrupted') && next === 0 && cur && typeof cur.since === 'number';
+        (curState === 'done' || curState === 'interrupted') &&
+        next === 0 &&
+        cur &&
+        typeof cur.since === 'number' &&
+        cur.since > 0;
       // Always persist the decremented count. Returning null would leave a stale
       // activeSubagents on disk and mislead the following Stop into running.
       return {
@@ -346,6 +388,74 @@ async function main() {
   if (typeof sid !== 'string' || /[\\/]/.test(sid) || sid === '.' || sid === '..') process.exit(0);
 
   const filePath = path.join(STATE_DIR, sid + '.json');
+
+  // --- Bounded GC (architecture-review round-2 finding: STATE_DIR had no GC) ---
+  // On UserPromptSubmit (a cheap, once-per-turn event) prune status files whose
+  // mtime exceeds INTERRUPTED_RETENTION_MS (24h). Crashed/killed CC processes
+  // never send SessionEnd, so without this prune ~/.claude/cc-tab-status/ would
+  // grow unbounded over months of daily use — every 500ms aggregation tick does
+  // fs.readdirSync + per-file readFileSync + JSON.parse over the WHOLE dir, so
+  // an unbounded long tail makes the SBI tick perceptibly heavier for zero
+  // diagnostic value (the user cannot map an old UUID to a session after the
+  // fact). The aggregation layer ALREADY discounts these files for COUNTING
+  // (interrupted>24h→idle, running>30min→idle, done>5min→idle); this prune also
+  // reclaims the bytes. Best-effort: wrapped in try/catch so a transient FS
+  // error never blocks the primary write. SKIP the current session's file —
+  // we're about to overwrite it with a fresh mtime anyway, and racing a prune
+  // against our own write would be pointless churn.
+  //
+  // Cross-session prune (round-3 review fix): the GC iterates the WHOLE
+  // STATE_DIR, so a UserPromptSubmit for session X may unlink a stale file
+  // belonging to ANY other session Y in the same CC installation. This is the
+  // SECOND writer-side deletion trigger (STATES.md §2 lists SessionEnd as the
+  // first). Functional rationale: there is no per-session cleanup hook besides
+  // SessionEnd, and crashed sessions never fire SessionEnd — a global mtime
+  // sweep is the only practical reclamation path. The skip-current rule below
+  // protects only the writer's own target file; third-party files older than
+  // 24h are pruned on any other session's UserPromptSubmit.
+  //
+  // Interrupted-preservation contract (round-3 review fix, STATES.md §7.5):
+  // INTERRUPTED_RETENTION_MS(24h) is the SAME threshold the aggregation layer
+  // uses to decay interrupted>24h to idle FOR COUNTING — but STATES.md §7.5
+  // explicitly guarantees "文件不删（保留诊断价值，用户可手动检查…）". The
+  // aggregation layer honors that (it filters at READ time, leaves the bytes);
+  // the writer's GC must honor it too — so we PARSE the file's state and SKIP
+  // the prune when state==='interrupted'. A user who comes back to inspect
+  // yesterday's interrupted session via ~/.claude/cc-tab-status/<sid>.json will
+  // still find the file. Running/done/idle-by-default files older than 24h
+  // remain prunable (no diagnostic value, reader already discounts them).
+  const event = payload && payload.hook_event_name;
+  if (event === 'UserPromptSubmit') {
+    try {
+      const cutoff = Date.now() - INTERRUPTED_RETENTION_MS;
+      for (const name of fs.readdirSync(STATE_DIR)) {
+        if (!name.endsWith('.json')) continue;
+        const p = path.join(STATE_DIR, name);
+        if (p === filePath) continue; // never prune the file we're about to write
+        try {
+          const st = fs.statSync(p);
+          if (st.mtimeMs >= cutoff) continue; // fresh enough — keep
+          // Interrupted-preservation: parse the state and skip interrupted
+          // files so the §7.5 "do not delete (diagnostic value preserved)"
+          // contract holds at the writer layer too. Parse failure on a
+          // corrupt/empty file falls through to prune — a corrupt file has
+          // no diagnostic value and the reader already skips it.
+          let preserved = false;
+          try {
+            const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+            if (parsed && parsed.state === 'interrupted') preserved = true;
+          } catch {
+            /* corrupt JSON — fall through to prune */
+          }
+          if (!preserved) fs.unlinkSync(p);
+        } catch {
+          /* best-effort per-file */
+        }
+      }
+    } catch {
+      /* STATE_DIR missing / unreadable — nothing to prune */
+    }
+  }
 
   // --- Read current on-disk status (read-modify-write for activeSubagents + pending) ---
   // Missing/corrupt file or any read error -> benign defaults, stay silent.

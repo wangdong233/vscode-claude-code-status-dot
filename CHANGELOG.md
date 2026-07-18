@@ -2,6 +2,38 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.1.14] - 2026-07-18
+
+**commandCenter 4 灯回退到底部 SBI 4 灯**。根因：v0.1.13 的 commandCenter 顶部居中 4 灯在 Reload Window + 完全重启 VSCode 后**根本不显示**——失败面太多（VSCode commandCenter 可见性开关、标题栏宽度预算、setContext→when 滤链、IIFE 仅在 CC panel 打开时才触发），在没有 VSCode 集成测试架的情况下无法定位。v0.1.12 的底部 SBI（动态 text）此前已验证可靠。v0.1.14 **保留 v0.1.13 全部设计改进**（新增 🔵 pending 第 4 灯、done/running/interrupted 三路陈旧会话 GC、pending 与 state 独立计数），**仅切换显示载体**回到单个运行时 `StatusBarItem`（`StatusBarAlignment.Left` + 极负 priority `-9999` → 在 Left 项里最靠右、最接近可见中心）。
+
+### 变更（Changed）
+
+- **IIFE 顶部 4 灯（commandCenter）→ 底部 4 灯（SBI）**：删 `globalThis.__ccsdCcTimer` + 4 个 `setContext` 推送 + `onDidDispose` 内的 4 个 setContext 重置；改为单个 `globalThis.__ccsdSbi = vs.window.createStatusBarItem(vs.StatusBarAlignment.Left, -9999)`，IIFE 每 500ms 直接 mutate `.text` / `.tooltip` / `.show()`。文本格式 `🟢N 🟡N 🔵N 🔴N`（count 0 → ⚪ 暗；1/2/3 → 彩色 + 空格 + 数字；>=4 → 彩色 + ` N`，`cap()` 截到 4）。tooltip 承载未截顶的真实计数（`X done, Y running, Z pending, W interrupted`）。`onDidDispose` 最后一个 panel 退出时 `clearInterval(__ccsdSbiTimer)` + `__ccsdSbi.dispose()`——SBI 不会冻结在陈旧计数。
+- **click 反馈：20 个 package.json command → 1 个运行时 `registerCommand`**：删 `ccStatusDot.<key>.<variant>` 20 个命令的 package.json contrib + IIFE 注册块；改为单个 `ccStatusDot.sbiClick`，通过运行时 `vs.commands.registerCommand` 注册（`registerCommand` 无需 package.json contribution 即可被 `executeCommand` 查到），handler 把当前 tooltip 作 `InformationMessage` 弹出。`__ccsdSbiCmdRegistered` 守卫防同 host 重注册抛错。
+- **install 不再 patch CC `package.json`**：删 `buildCcContribs` / `patchPackageJson` / `writePkgInject` / `injectedPkgVersion` / `injectedPkgHash` / `currentPkgHash` 及 `PKG_HASH_FIELD` 常量、`--check-pkg-contribs` dev flag、`test-pkg-contribs.mjs`、`test-smoke-v0.1.13.mjs`（两个测试都覆盖被移除的 install-side commandCenter contribs / setContext 端到端）。保留 `PKG_MARKER_FIELD` (`__ccStatusDotPkgManaged`) 常量 + `isPackageJsonPatched` + `restorePackageJson`，**仅用于检测并清理 v0.1.13 残留**——install 在 patch extension.js 前若发现 package.json 仍带 v0.1.13 marker，自动从 `package.json.bak` 还原（v0.1.13 升级用户重跑 `npx vscode-claude-code-status-dot` 即清理，无需先 `--revert`）；`--revert` 同样清理残留。
+- **`SBI_LIGHTS` / `SBI_DIM_EMOJI` 取代 `CC_LIGHTS` / `CC_DIM_EMOJI` / `CC_COUNT_VARIANTS` / `CcLight`**：去掉 `key`（不再需要 setContext key 后缀）与 `variant` 维度（不再需要 5 种 text 变体）；只保留 emoji + tooltip。emoji 通过 `JSON.stringify` 烘焙进 IIFE 的 `var EM=[...]` + `var DIM="..."`，IIFE 源码仍不含原始 `\u{...}` 转义。
+- **IIFE 版本戳 `v0.1.13` → `v0.1.14`**：已 patch 的 v0.1.13 装在下次 install 时被检测为 STALE（version 不符）→ 自动从 `extension.js.bak` 还原并重注入新 SBI IIFE（hash 也会变，双重保护）。
+
+### 保留（Preserved，v0.1.13 设计改进完整沿用到 v0.1.14）
+
+- **🔵 pending 第 4 灯**（writer 的 `Notification` hook case + reader 独立计数 + 与 state 正交）。
+- **done/running/interrupted 三路陈旧会话 GC**：done >5min→idle（§4）；running mtime >30min→idle（§7.2，变量名 `SBI_RUNNING_STALE_MS` 保留）；interrupted mtime >24h→idle（`INTERRUPTED_RETENTION_MS`，§7.5）。per-tab 渲染**不应用**后两条（tab 保持黄/红提醒），聚合层应用——用户可肉眼看到具体哪个 tab 是黄/红并自行处理。
+- **pending 与 idle GC 联动**：`j.pending===true && st!=="idle"`（`st` 是上面三条 decay 规则**已修正过**的值）——防止被强杀的权限弹窗会话 state=running/pending=true/mtime>30min 在 🟡 不计的同时 🔵 仍假粘 1。
+- **聚合单例 + panel 计数 lifecycle**：`__ccsdSbi` + `__ccsdSbiTimer` 窗口级单例（P 个 panel 共享 1 个 timer）；`__ccsdPanelCount` 入口 +1 / `onDidDispose` -1，归零时清理。
+- **三层独立 try/catch 隔离**（v0.1.12 round-3 review 沿用）：(1) SBI 创建；(2) 单例 timer 注册；(3) aggregation body。任何一层失败都不会传播到 CC 的 `update_session_state` handler，也不影响 per-tab 主链路。
+- **per-tab 4 态色点、`__ccPending` yield、notify、`__ccTitle` 刷新**：完全不变。
+
+### 移除（Removed）
+
+- **commandCenter 顶部居中 4 灯**：v0.1.13 的 `contributes.menus.commandCenter` 20 项 + `contributes.commands` 20 项 + `contributes.menus.commandPalette` 20 项 hide。install 自动清理残留；`--revert` 也清理。
+- **`setContext` 驱动**：`vs.commands.executeCommand("setContext","ccStatusDot.<key>",N)` 全部删除（包括 `onDidDispose` 内的 4 个重置）。SBI 直接 mutate text，无需 context key 中介。
+
+### 已知限制
+
+- **emoji 颜色保真度依赖 OS 字体栈**：🟢🟡🔵🔴⚪ 在 macOS 走 Apple Color Emoji 彩色，Win10+ Segoe UI Emoji 彩色；Win7/无 emoji 字体的 Linux/headless 可能黑白或豆腐块。颜色丢失时形状 + 数字仍承载信息（与 v0.1.12-v0.1.13 同款差异）。
+- **SBI 位置受状态栏拥挤度影响**：极负 priority 让 SBI 在 Left 项里最靠右、最接近可见中心，但若用户装了大量其它 Left 项 SBI 仍可能被挤到角落——这是 StatusBarItem API 限制（无真正的"居中"槽位）。
+- **click command 需 IIFE 注册**：reload 后若用户未打开 CC panel，`ccStatusDot.sbiClick` 未注册，此时点 SBI 不响应（VSCode 静默 no-op）。但 SBI 本身也未创建（IIFE 仅由 panel 打开触发），所以一致性 OK。
+
 ## [Unreleased]
 
 修复「完成/中断通知不生效」。根因：`notifyWhenFocused` 默认 `false`，导致用户在 VSCode 前台（最常见场景）时**所有**通知被抑制——hook 正确写了 `done`/`interrupted`（`~/.claude/cc-tab-status/<sid>.json`），但 IIFE 在前台一律不弹。

@@ -25,7 +25,7 @@
 - 🔔 **完了 / 中断通知**——セッションの完了 / 中断時に macOS システム通知（画面右上からドロップ、サウンド付き、ボタンなし、数秒で自動消滅）をポップアップ。フォアグラウンドでもバックグラウンドでも（`notifyWhenFocused` デフォルト true）。見守り続ける必要なし
 - ⚙️ **workflow 実行中は running を維持**——バックグラウンド subagent / cron が動いているとき誤って緑にせず、`Stop` が権威判定
 - 📂 **Open Editors と同期**——左上の「開いているエディター」ビューの CC タブにも状態ドットが付く
-- 📊 **commandCenter 上部 4 ランプ**——タイトルバー上部中央に `🟢完了 🟡実行中 🔵入力待ち 🔴中断` を並べて表示（v0.1.13 は v0.1.12 の右下 SBI を置換）、各ランプは 0/1/2/3/N で頭打ち（>=4 は N 表示）、0 は ⚪ アップ。🔵 = ユーザー入力待ち（permission/question/elicit、新設の Notification hook case 経由）。完了 >5 分は idle 扱い（緑に含まない）。20 コマンド + 20 メニュー項目を CC の package.json に注入、setContext が 500ms ごとに可視性を切替。
+- 📊 **下部 SBI 4 ランプ**——ステータスバー左側（`StatusBarAlignment.Left` + 極端に負の priority `-9999`、可視中心の近く）に `🟢完了 🟡実行中 🔵入力待ち 🔴中断` を並べて表示（v0.1.14 は v0.1.13 の commandCenter 上部 4 ランプを置換——後者は reload/再起動後に不安定だった）、各ランプは 0/1/2/3/N で頭打ち（>=4 は N 表示）、0 は ⚪ アップ。🔵 = ユーザー入力待ち（permission/question/elicit、Notification hook case 経由）。完了 >5 分は idle 扱い（緑に含まない）。v0.1.14 は**1 つのランタイム StatusBarItem** に簡素化——CC の package.json をパッチせず、IIFE が 500ms ごとに直接 text を mutate、v0.1.13 の setContext→when チェーンは削除済み。
 - ↩️ **副作用ゼロの1行復元**——`--revert` が `.bak` から extension.js を完全復元、hooks を外科的に除去、ユーザーデータは保持
 
 > ⚠️ **正直な声明**: 本プロジェクトは **patch（パッチ）であり、独立した拡張ではありません**——VSCode はサードパーティ拡張が別の拡張の webview タブアイコンを変更することを許可しない。唯一現実的な経路は CC 自身の `extension.js` にパッチを当てること。代償：CC の自動更新で上書きされるため、コマンドの再実行が必要。

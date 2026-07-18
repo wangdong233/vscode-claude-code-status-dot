@@ -1,7 +1,7 @@
 {
   "name": "vscode-claude-code-status-dot",
-  "version": "0.1.13",
-  "description": "Colorize Claude Code's VSCode tab icon with 4-state status dots (idle/running/done/interrupted) and add a commandCenter 4-light aggregate (done/running/pending/interrupted) via a minimal, reversible patch.",
+  "version": "0.1.14",
+  "description": "Colorize Claude Code's VSCode tab icon with 4-state status dots (idle/running/done/interrupted) and add a bottom status-bar 4-light aggregate (done/running/pending/interrupted) via a minimal, reversible patch.",
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -13,12 +13,14 @@
     "patch": "npx tsx patch.ts",
     "revert": "npx tsx patch.ts --revert",
     "status": "npx tsx patch.ts --status",
-    "test": "node hooks/test-cc-status.js && node hooks/test-iife.mjs && node hooks/test-pkg-contribs.mjs && node hooks/test-smoke-v0.1.13.mjs",
+    "test": "node hooks/test-cc-status.js && node hooks/test-iife.mjs && node hooks/test-sbi-aggregation.mjs && node hooks/test-smoke-journey.mjs",
     "test:writer": "node hooks/test-cc-status.js",
     "test:reader": "node hooks/test-iife.mjs",
-    "test:pkg": "node hooks/test-pkg-contribs.mjs",
-    "test:smoke": "node hooks/test-smoke-v0.1.13.mjs",
-    "format:check": "prettier --check patch.ts hooks/**/*.js hooks/**/*.mjs"
+    "test:aggregation": "node hooks/test-sbi-aggregation.mjs",
+    "test:smoke": "node hooks/test-smoke-journey.mjs",
+    "format:check": "prettier --check patch.ts hooks/**/*.js hooks/**/*.mjs",
+    "format": "prettier --write patch.ts hooks/**/*.js hooks/**/*.mjs",
+    "prepare": "husky"
   },
   "keywords": [
     "claude-code",
@@ -50,7 +52,14 @@
   ],
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
     "prettier": "^3.3.0",
     "typescript": "^5.4.0"
+  },
+  "lint-staged": {
+    "patch.ts": "prettier --check",
+    "hooks/**/*.js": "prettier --check",
+    "hooks/**/*.mjs": "prettier --check"
   }
 }

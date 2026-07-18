@@ -25,7 +25,7 @@
 - 🔔 **完成/中断通知**——macOS 走系统通知（屏幕右上角下拉，带声音，无按钮，几秒自动消失），前台后台都弹，不用一直盯着
 - ⚙️ **workflow 跑期间保持 running**——后台 subagent/cron 在飞时不假绿，`Stop` 权威裁定
 - 📂 **Open Editors 同步**——左上角"打开的编辑器"视图里的 CC tab 也带状态点
-- 📊 **commandCenter 顶部 4 灯**——标题栏顶部居中显示 `🟢完成 🟡运行 🔵待输入 🔴中断` 4 灯并排（v0.1.13 替代 v0.1.12 SBI 右下角条），每灯计数封顶 0/1/2/3/N（>=4 显示 N），0 时熄灭为 ⚪ 暗圈。🔵 = 待用户输入（permission/question/elicit，writer 新增 Notification hook case）。完成超 5 分钟算 idle 不计绿。20 commands + 20 menu items 注入 CC package.json，setContext 每 500ms 切可见性。
+- 📊 **底部 SBI 4 灯**——状态栏左侧（`StatusBarAlignment.Left` + 极负 priority `-9999`，靠近可见中心）显示 `🟢完成 🟡运行 🔵待输入 🔴中断` 4 灯并排（v0.1.14 替代 v0.1.13 的 commandCenter 顶部 4 灯——后者在 reload/重启后不稳定），每灯计数封顶 0/1/2/3/N（>=4 显示 N），0 时熄灭为 ⚪ 暗圈。🔵 = 待用户输入（permission/question/elicit，writer 新增 Notification hook case）。完成超 5 分钟算 idle 不计绿。v0.1.14 简化为**单个运行时 StatusBarItem**——不再 patch CC package.json，IIFE 每 500ms 直接 mutate text；v0.1.13 的 setContext→when 链已删除。
 - ↩️ **零副作用一键还原**——`--revert` 从 `.bak` 完整恢复 extension.js、外科手术式移除 hooks、保留你的用户数据
 
 > ⚠️ **诚实声明**：本项目是一个 **patch（补丁），不是独立扩展**——VSCode 不允许第三方扩展修改另一个扩展的 webview tab 图标，唯一可行路径是 patch CC 自己的 `extension.js`。代价：CC 自动更新会覆盖，需重跑命令。

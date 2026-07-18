@@ -26,7 +26,7 @@
  *   `rename_tab` handler, which only knows hasPendingPermissions /
  *   hasUnseenCompletion and carries NO sessionId. To bridge session→panel we
  *   patch the sibling `update_session_state` handler (same `ts` instance, and
- *   its request DOES carry sessionId) to stash `this.__ccSid` and start a
+ *   its request DOES carry sessionId) to stash `this.__ccsdSid` and start a
  *   500 ms setInterval that reads the external state file and asserts the
  *   icon. A second no-op-guarded copy of the starter is placed in the
  *   rename_tab handler to eliminate the ~500 ms flash after CC re-asserts its
@@ -121,47 +121,92 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  to static running, or v0.1.3 removing the aggregate bar) would be silently swallowed
  *  because the bare marker still matches.
  *
- *  v0.1.13 commandCenter 4-light redesign: the v0.1.10-v0.1.12 window-scoped SBI
- *  (StatusBarItem at Right) is REMOVED and replaced by 4 fixed lights in the VSCode
- *  commandCenter (title-bar top center). 4 lights 🟢done 🟡running 🔵pending 🔴interrupted
- *  in fixed left→right order, each either dim (⚪ at count 0) or colored with a capped
- *  count (1/2/3/N where N>=4). Implementation = 20 static menu items (4 lights × 5 count
- *  variants) contributed to CC's package.json under contributes.menus.commandCenter +
- *  contributes.commands, visibility toggled per-tick by 4 `setContext` keys
- *  (ccStatusDot.{done,running,pending,interrupted} = 0..4). A new singleton timer
- *  (globalThis.__ccsdCcTimer) aggregates counts every 500ms and pushes the 4 contexts.
- *  done>5min→idle and running stale>30min→idle reader rules still apply (counts agree
- *  with per-tab dots); idle sessions are NOT counted as green (only active done is).
- *  🔵 pending is a NEW state fed by the CC Notification hook (writer marks pending:true
- *  on the session file; reader counts it independently from running/done/interrupted).
- *  onDidDispose last-panel-out clears the singleton timer AND resets all 4 contexts to 0
- *  so lights go dim when no CC panel survives. package.json patch is managed by the new
- *  patchPackageJson (marker `__ccStatusDotPkgManaged` + .bak + version-stamped re-inject,
- *  same model as extension.js). The per-tab 4-state dot, __ccPending yield, notify, and
- *  onDidDispose panel-counter are all preserved unchanged.
+ *  v0.1.14 SBI pivot (commandCenter → bottom StatusBarItem 4-light): the
+ *  v0.1.13 commandCenter 4-light redesign (20 commands + 20 commandCenter
+ *  menu items + 20 palette hides + IIFE-driven setContext + VSCode title-bar
+ *  commandCenter visibility) was empirically unreliable — after a Reload
+ *  Window / full VSCode restart the commandCenter 4 lights often failed to
+ *  render at all (the failure has too many contributing surfaces — VSCode
+ *  commandCenter visibility toggle, title-bar width budget, the setContext-
+ *  when filter chain, the IIFE-only-runs-on-CC-panel-open lifecycle — to
+ *  diagnose without a VSCode integration test harness). v0.1.14 keeps the
+ *  v0.1.13 DESIGN improvements (4-light with NEW 🔵 pending, 3-way stale-
+ *  session GC for done/running/interrupted, pending counted INDEPENDENTLY
+ *  of state) but moves the SURFACE back to a single StatusBarItem at the
+ *  BOTTOM (StatusBarAlignment.Left, very negative priority so it sits
+ *  rightmost among Left items, closest to the visible center). The v0.1.12
+ *  SBI surface was verified reliable across reloads; v0.1.13 commandCenter
+ *  was not. The text is "🟢N 🟡N 🔵N 🔴N" where each light is either dim ⚪
+ *  (count 0) or colored + count (1/2/3/N where N means >=4, capped by reader).
+ *  Tooltip carries the full breakdown ("X done, Y running, Z pending, W
+ *  interrupted"). Click shows an InformationMessage with the same breakdown.
+ *  package.json is NO LONGER patched by install (the v0.1.13 commandCenter
+ *  contribs are removed); --revert still cleans any v0.1.13 residue via
+ *  restorePackageJson, and install auto-detects + restores a stale v0.1.13
+ *  patch on sight. Per-tab 4-state dots, __ccsdPending yield, notify, the
+ *  panel-counter lifecycle, and the aggregation GC rules are all preserved.
  *
  *  Earlier history:
+ *  v0.1.13 commandCenter 4-light (now abandoned — see v0.1.14 note above).
  *  v0.1.11 SBI aggregation refactor (per-panel-tick aggregation lifted into window-
  *  scoped singleton timer; §4 done>5min→idle + §7.2 stale-running(>30min)→idle applied
  *  so SBI matches per-tab counts; __ccsdPanelCount last-panel-out teardown).
  *  v0.1.12 round-3 review fixes (SBI singleton createStatusBarItem + setInterval each
  *  in their own try/catch; §7.5→§7.2 attribution fix). */
-const INJECT_VERSION = "v0.1.13";
+const INJECT_VERSION = "v0.1.14";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
- *  in both the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH) and the
- *  package.json hash field (__ccStatusDotPkgHash). The hash captures intra-
- *  version drift — dev iterations that change buildIIFE()/buildCcContribs()
- *  output without bumping INJECT_VERSION would otherwise be invisible to the
- *  idempotency gate (ver===INJECT_VERSION → "skip"), so re-running the patcher
- *  on an existing same-version install would leave stale logic in place. With
- *  the hash, ANY content change forces a .bak restore + re-inject. 8 hex chars
- *  = 32 bits = collision space of ~4 billion, plenty for a per-version stamp. */
+ *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
+ *  intra-version drift — dev iterations that change buildIIFE() output without
+ *  bumping INJECT_VERSION would otherwise be invisible to the idempotency gate
+ *  (ver===INJECT_VERSION → "skip"), so re-running the patcher on an existing
+ *  same-version install would leave stale logic in place. With the hash, ANY
+ *  content change forces a .bak restore + re-inject. 8 hex chars = 32 bits =
+ *  collision space of ~4 billion, plenty for a per-version stamp. */
 const STAMP_HASH_LEN = 8;
 
 /** Substring appended (as a shell comment) to every hook command we own in settings.json.
  *  Used for idempotent dedupe on install and surgical removal on --revert. */
 const HOOK_MARKER = "cc-status-dot-managed";
+
+/** Version banner stamped at the top of hooks/cc-status.js
+ *  (`cc-status-dot-hook:vX.Y.Z`). Mirrors the IIFE's INJECT_VERSION+hash gate
+ *  so installRuntimeFiles can detect a stale on-disk hook copy the same way
+ *  patchExtension detects a stale IIFE. Architecture-review round-2 finding:
+ *  writer/reader drift detection was asymmetric — the reader side was hash-
+ *  stamped and auto-reinjected, the writer side was copied verbatim with NO
+ *  version check, so a user running an old hook against a new IIFE (e.g. the
+ *  install copied the IIFE but the hook copy failed silently, or the user
+ *  hand-edited INSTALL_DIR/hooks/cc-status.js) saw silent feature loss with
+ *  no warning. MUST be kept in lockstep with the banner at the top of
+ *  hooks/cc-status.js. */
+const HOOK_VERSION = "v0.1.14";
+const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
+
+/** CC extension version against which the anchor strings (ANCHOR_A / ANCHOR_B)
+ *  were last verified byte-exact. Architecture-review round-3 finding: the
+ *  'verified byte-exact against CC X.Y.Z' comment lived inline at the anchor
+ *  declarations but was NOT surfaced anywhere user-visible. CC updates that
+ *  drift either anchor's bytes are still caught by countOccurrences==1 (the
+ *  patcher fails loud), but a user running an older CC whose anchors happen to
+ *  still match would silently install against a never-verified version.
+ *  --status now surfaces this const so the user can self-check after a CC
+ *  upgrade; install does NOT hard-gate (preserves forward compat — a future CC
+ *  that keeps the anchor bytes identical still installs cleanly). */
+const LAST_VERIFIED_CC = "2.1.204";
+
+/** Length (hex chars) of the content-hash suffix appended to the writer hook
+ *  banner (`cc-status-dot-hook:vX.Y.Z:HASH`). Mirrors STAMP_HASH_LEN — same
+ *  sha1-over-body scheme as the IIFE hash, so a dev iteration on
+ *  hooks/cc-status.js that doesn't bump HOOK_VERSION is still detectable by
+ *  installRuntimeFiles + --status. Architecture-review round-3 finding:
+ *  round-2 added a writer version banner + version-string check, but the
+ *  reader side had content-hash and the writer side did NOT — asymmetric
+ *  drift detection. A dev who edited hooks/cc-status.js and forgot to bump
+ *  the banner would have the patcher silently overwrite an installed hook
+ *  whose body differed, no warn. The hash closes that gap: install compares
+ *  BOTH version AND body hash, --status surfaces either drift. */
+const HOOK_HASH_LEN = 8;
 
 /** Redraw cadence (ms). 500 drives:
  *   - the interrupted on/off flash (flashSeq%2 → ~500 ms on, ~500 ms off — an
@@ -221,11 +266,14 @@ const SEARCH_DIRS = [
  *  docs/SUBAGENT-design.md §4–§5.
  *
  *  v0.1.13 adds `Notification`: the writer marks `pending:true` on the session
- *  file so the reader can count 🔵 pending sessions in the commandCenter (CC's
- *  Notification hook covers permission / question / elicit prompts — the same
- *  set of "user input needed" signals that previously only fed CC's native blue
- *  per-tab dot). `SessionStart` is still intentionally excluded (no writer case
- *  — wiring it would be dead wiring, audit F-5). */
+ *  file so the reader can count 🔵 pending sessions in the bottom SBI 4-light
+ *  aggregate (v0.1.14 surface; v0.1.13 attempted this via commandCenter — the
+ *  pending light + the Notification hook that feeds it are PRESERVED across
+ *  the v0.1.13→v0.1.14 pivot). CC's Notification hook covers permission /
+ *  question / elicit prompts — the same set of "user input needed" signals
+ *  that previously only fed CC's native blue per-tab dot. `SessionStart` is
+ *  still intentionally excluded (no writer case — wiring it would be dead
+ *  wiring, audit F-5). */
 const HOOK_EVENTS = [
     "UserPromptSubmit",
     "PreToolUse",
@@ -239,76 +287,72 @@ const HOOK_EVENTS = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// commandCenter 4-light definitions (v0.1.13)
+// SBI 4-light definitions (v0.1.14; was commandCenter in v0.1.13)
 // ---------------------------------------------------------------------------
-// The VSCode commandCenter (title-bar top center) only renders a command's
-// `title` text — there is NO per-menu-item title override (see VScode issue
-// #34048). So 5 distinct visible texts per light (0/1/2/3/N) REQUIRE 5
-// distinct commands, and 4 lights × 5 variants = 20 commands + 20 menu items
-// + 20 commandPalette hide-entries (the palette would otherwise list all 20
-// commands, which is noise — `when:"false"` hides them cleanly).
-//
-// Visibility is then driven by 4 `setContext` keys the IIFE ticks every 500ms:
-//   ccStatusDot.<lightKey> = N  where N is 0..4 and 4 means "4+ (display N)"
-// Each of the 5 variants per light carries a `when: "ccStatusDot.<key> == K"`
-// clause; exactly one variant per light is visible at any moment, the other
-// four are filtered out. Lights are declared in fixed left→right order
-// (done/running/pending/interrupted); within a light, only one variant shows,
-// so declaration order across lights determines the visible on-screen order.
+// The bottom StatusBarItem (StatusBarAlignment.Left, very negative priority
+// so it sits rightmost among Left items, closest to the visible center) shows
+// 4 lights in fixed left→right order: 🟢done 🟡running 🔵pending 🔴interrupted.
+// Each light is either dim (⚪ at count 0) or colored with a capped count
+// (1/2/3/N where N means >=4). The text is built every 500ms by the
+// __ccsdSbiTimer singleton (see buildIIFE) — same aggregation rules as the
+// v0.1.13 commandCenter version (done>5min→idle, running stale 30min→idle,
+// interrupted 24h→idle; pending counted independently of state). v0.1.13's
+// package.json contribution (20 commands + 20 menu items + 20 palette hides)
+// is GONE — the SBI is a single runtime createStatusBarItem whose text is
+// mutated in place, no package.json patch. The single click-command
+// `ccStatusDot.sbiClick` is registered via runtime `vs.commands.registerCommand`
+// (no contribution needed for that).
 
-/** Top-level field stamped into CC's patched package.json. Presence === "already
- *  patched by us"; the string value is the INJECT_VERSION stamp, so a stale
- *  patch (older version) triggers re-injection from package.json.bak on next
- *  install — same model as extension.js. VSCode ignores unknown top-level fields
- *  (CC's own package.json carries `__metadata`, `capabilities`, etc.), so this
- *  is safe. CC auto-update replaces the entire extension dir → marker gone →
- *  re-run install patches fresh (project-normal behavior). */
+/** Marker stamped into CC's package.json by the abandoned v0.1.13 commandCenter
+ *  patch. Kept only so install can DETECT stale v0.1.13 residue (and --revert
+ *  can clean it) — v0.1.14+ no longer writes this field. */
 const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
 
-/** Top-level field stamped into CC's patched package.json carrying the content
- *  hash of buildCcContribs(). Presence-with-matching-hash === "truly up to
- *  date"; a hash mismatch (intra-version dev iteration that changed the
- *  contribs output) triggers re-injection from package.json.bak on next install
- *  — same model as the IIFE hash. Sits next to PKG_MARKER_FIELD so a single
- *  JSON.parse surface carries both version and hash. */
-const PKG_HASH_FIELD = "__ccStatusDotPkgHash";
-
-/** The 4 lights, in fixed left→right display order. `key` is the setContext
- *  key suffix; `emoji` is the colored form (count > 0); `tooltip` is the
- *  user-facing descriptive string shown in the InformationMessage when the
- *  user clicks the commandCenter light (the SINGLE source of truth for the
- *  IIFE's per-light click-feedback text — do NOT duplicate these strings
- *  inside buildIIFE). Emoji codepoints match v0.1.12's SBI palette so per-tab
- *  SVG dots and the commandCenter lights agree (color fidelity depends on the
- *  OS emoji font stack — same documented tradeoff as the removed SBI). */
-interface CcLight {
-    key: "done" | "running" | "pending" | "interrupted";
-    emoji: string; // colored circle when count > 0
-    tooltip: string; // user-facing click-feedback text (injected into the IIFE LL map)
-}
-
-const CC_LIGHTS: CcLight[] = [
-    { key: "done", emoji: "\u{1F7E2}", tooltip: "turn complete (last 5 min)" }, // green circle
-    { key: "running", emoji: "\u{1F7E1}", tooltip: "running" }, // yellow circle
-    { key: "pending", emoji: "\u{1F535}", tooltip: "awaiting user input" }, // blue circle (NEW v0.1.13)
-    { key: "interrupted", emoji: "\u{1F534}", tooltip: "interrupted" }, // red circle
+/** The 4 lights, in fixed left→right display order. Each entry is the colored
+ *  emoji (count > 0); the dim form (count 0) is shared (`SBI_DIM_EMOJI` below).
+ *  Emoji is the ONLY value consumed by buildIIFE (baked into the IIFE's
+ *  `var EM=[...]` via JSON.stringify). The per-tick tooltip / click-feedback
+ *  text is built inline inside the IIFE aggregation tick from the raw `ag.*`
+ *  counts (see the `var tip=...` literal), NOT from any per-light descriptive
+ *  string — a wrapper object here would be pure indirection over a plain
+ *  string[]. Emoji codepoints: 🟢 U+1F7E2 / 🟡 U+1F7E1 / 🔵 U+1F535 / 🔴 U+1F534 / ⚪ U+26AA.
+ *  Color fidelity depends on the OS emoji font stack (same documented tradeoff
+ *  as the v0.1.12-v0.1.13 SBI/commandCenter). */
+const SBI_LIGHTS: string[] = [
+    "\u{1F7E2}", // green circle (active done, last 5 min)
+    "\u{1F7E1}", // yellow circle
+    "\u{1F535}", // blue circle (v0.1.13)
+    "\u{1F534}", // red circle
 ];
 
 /** Off-state emoji shared by all 4 lights (medium white circle). */
-const CC_DIM_EMOJI = "\u{26AA}";
+const SBI_DIM_EMOJI = "\u{26AA}";
 
-/** Count variants per light. "N" is the display form for "4 or more" — the
- *  setContext value is capped at 4 (so `== 4` selects the N variant). */
-const CC_COUNT_VARIANTS = ["0", "1", "2", "3", "N"] as const;
+/** SBI StatusBarItem alignment priority. Very negative so the SBI sits
+ *  rightmost among Left items (closest to visible center). Single source of
+ *  truth — baked into the IIFE below via ${SBI_LEFT_PRIORITY}, and mirrored
+ *  in test-iife.mjs (same pattern as SBI_DIM_EMOJI). */
+const SBI_LEFT_PRIORITY = -9999;
+
+/** The SBI click-command id. Registered at runtime via
+ *  vs.commands.registerCommand (no package.json contribution needed for
+ *  registerCommand). Single source of truth — baked into the IIFE at both
+ *  the registerCommand site AND the globalThis.__ccsdSbi.command assignment
+ *  via ${JSON.stringify(SBI_CLICK_CMD)}, and mirrored in test-iife.mjs.
+ *  Renaming the command touches this const once; the IIFE bytes + the test
+ *  assertions both follow. */
+const SBI_CLICK_CMD = "ccStatusDot.sbiClick";
 
 // ---------------------------------------------------------------------------
 // --- Anchor strings (verified byte-exact against CC 2.1.204) ---------------
 
 /**
  * Anchor A — the `update_session_state` handler. Same `ts` (per-panel) instance
- * as rename_tab, and its request carries sessionId. We wrap its body in a block
- * to (1) stash this.__ccSid and (2) start the redraw timer before the original
- * return. Exact, must match ONCE.
+ * as rename_tab, and its request carries sessionId. We splice side effects into
+ * the return expression via the comma operator (NOT a block — a block would
+ * orphan the trailing `else` and brick the extension; see injectFresh for the
+ * full syntactic constraint) to (1) stash this.__ccsdSid and (2) start the
+ * redraw timer before the original return. Exact, must match ONCE.
  */
 const ANCHOR_A =
     'else if(e.request.type==="update_session_state")return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}';
@@ -321,12 +365,12 @@ const ANCHOR_A =
  * tick. Exact, must match ONCE.
  *
  * The injected replB stashes TWO live flags on every rename_tab fire:
- *   - this.__ccTitle = e.request.title    — keeps the cached panel title fresh
- *     so notify()'s "["+__ccTitle+"]" suffix matches the CURRENT tab title
+ *   - this.__ccsdTitle = e.request.title    — keeps the cached panel title fresh
+ *     so notify()'s "["+__ccsdTitle+"]" suffix matches the CURRENT tab title
  *     even after CC fires rename_tab multiple times post-update_session_state
  *     (truncation, user rename). Without this the title would freeze at the
  *     last update_session_state value.
- *   - this.__ccPending = !!e.request.hasPendingPermissions — the same flag CC
+ *   - this.__ccsdPending = !!e.request.hasPendingPermissions — the same flag CC
  *     uses to paint its native blue pending dot. The IIFE's tick reads this
  *     live and yields when set, so the reader stops overriding CC's blue dot
  *     during a permission prompt (the PreToolUse heartbeat leaves state=running
@@ -595,7 +639,7 @@ function assertCompiles(code: string, label: string): void {
 //     idle        -> steady claude-logo-idle.svg
 //     missing/unknown -> return (don't fight CC's own pending/done icon)
 //     permission pending -> return (don't fight CC's native blue dot). The
-//                    rename_tab handler stashes `this.__ccPending` from
+//                    rename_tab handler stashes `this.__ccsdPending` from
 //                    `e.request.hasPendingPermissions` (the same flag CC uses to
 //                    paint its blue dot) on every fire; the tick yields when it
 //                    is set, so CC's pending icon shows through. Fixes the bug
@@ -621,80 +665,104 @@ function assertCompiles(code: string, label: string): void {
 //   (otherwise the interval + its closed-over `t`/`panelTab` refs leak for
 //   the lifetime of the VSCode window).
 //
-//   commandCenter 4-light (v0.1.13; see docs/STATES.md §7):
-//     The v0.1.10-v0.1.12 StatusBarItem-at-Right aggregation is GONE. Instead
-//     the CC extension's package.json is patched (patchPackageJson) to contribute
-//     20 commands + 20 commandCenter menu items (group "navigation") + 20
-//     commandPalette hide-entries. The 4 lights 🟢done 🟡running 🔵pending
-//     🔴interrupted appear in fixed left→right order in the title-bar top center;
-//     each light is either dim (⚪ at count 0) or colored with a capped count
-//     (1/2/3/N where N means >=4). VSCode has NO per-menu-item title override
-//     (issue #34048), so each (light,count) variant is its OWN command — 5
-//     variants × 4 lights = 20 commands total.
-//   Visibility driver — setContext:
-//     A window-scoped singleton timer (globalThis.__ccsdCcTimer, 500ms) reads
+//   SBI 4-light (v0.1.14; see docs/STATES.md §7):
+//     The v0.1.13 commandCenter 4-light was abandoned — too many contributing
+//     surfaces (package.json contribs + setContext + VSCode title-bar visibility)
+//     made it unreliable after reload / restart. v0.1.14 keeps ALL the v0.1.13
+//     design improvements (4 lights incl. NEW 🔵 pending; 3-way stale-session
+//     GC for done/running/interrupted; pending counted INDEPENDENTLY of state)
+//     but moves the surface back to a single runtime StatusBarItem at the
+//     BOTTOM (StatusBarAlignment.Left, priority -9999 → rightmost among Left
+//     items → closest to the visible center). The v0.1.12 SBI was empirically
+//     reliable across reloads; this is a return to that proven surface.
+//   Surface — StatusBarItem:
+//     One window-scoped singleton globalThis.__ccsdSbi (createStatusBarItem),
+//     text mutated in place every 500ms by __ccsdSbiTimer. NO package.json
+//     patch (the v0.1.13 commandCenter contribs are GONE). Click feedback via
+//     a single runtime-registered command `ccStatusDot.sbiClick` (no
+//     contribution needed for registerCommand) — shows an InformationMessage
+//     with the current breakdown.
+//   Text format (built each tick):
+//     "🟢N 🟡N 🔵N 🔴N" — fixed left→right order done/running/pending/interrupted.
+//     Each light: count 0 → dim ⚪ (no number); 1/2/3 → colored + " " + digit;
+//     >=4 → colored + " N" (cap() clamps to 4). Tooltip carries the uncapped
+//     breakdown ("X done, Y running, Z pending, W interrupted").
+//   Aggregation rules (SAME as v0.1.13 commandCenter — preserved across pivot):
+//     Window-scoped singleton timer globalThis.__ccsdSbiTimer (500ms) reads
 //     every <sid>.json, applies the SAME §4 reader rules as per-tab rendering
 //     (done>5min→idle so idle sessions are NOT counted as green; running stale
-//     >30min→idle to GC crashed sessions), counts running/done/interrupted
-//     (idle is NOT a light — it just means "not counted"), ALSO counts pending
-//     (j.pending===true, independent of state — the NEW 🔵 light), caps each
-//     count at 4, and pushes 4 setContext keys:
-//       vs.commands.executeCommand("setContext","ccStatusDot.done",N)  // and
-//       .running / .pending / .interrupted — N ∈ {0,1,2,3,4}, 4 = "N" display.
-//     VSCode then shows exactly one variant per light (the `when` clause
-//     `ccStatusDot.<key> == K` selects it). setContext is idempotent — pushing
-//     the same value twice is a no-op, so the 500ms tick is cheap.
-//   🔵 pending (NEW v0.1.13):
+//     >30min→idle to GC crashed sessions; interrupted >24h→idle to bound 🔴
+//     growth from abandoned crashes), counts running/done/interrupted (idle is
+//     NOT a light — it just means "not counted"), ALSO counts pending
+//     (j.pending===true, independent of state — the 🔵 light, NEW v0.1.13).
+//   🔵 pending (NEW v0.1.13, preserved):
 //     The CC Notification hook (permission/question/elicit prompt) makes the
 //     writer mark pending:true on the session file (every non-Notification
 //     event clears it). The reader counts pending INDEPENDENTLY of state — a
 //     session can be both running AND pending (typical: running turn paused on
-//     a permission prompt). Per-tab rendering is UNCHANGED (the __ccPending
+//     a permission prompt). Per-tab rendering is UNCHANGED (the __ccsdPending
 //     yield still lets CC's native blue dot show through).
-//   commandCenter singleton scope:
-//     globalThis.__ccsdCcTimer is window-scoped — first CC panel creates it,
-//     every later panel reuses it, so a P-panel window ticks aggregation ONCE
-//     per 500ms (not P times). Project-scoped __ccsd* prefix keeps CC's __cc*
-//     namespace clean (see the `cc-status-bar-injected` tombstone in
-//     restoreWebview()).
-//   commandCenter panel-counter lifecycle:
+//   SBI singleton scope:
+//     globalThis.__ccsdSbi + __ccsdSbiTimer are window-scoped — first CC panel
+//     creates them, every later panel reuses them, so a P-panel window ticks
+//     aggregation ONCE per 500ms (not P times). Project-scoped __ccsd* prefix
+//     keeps CC's __cc* namespace clean (see the `cc-status-bar-injected`
+//     tombstone in restoreWebview()).
+//   SBI panel-counter lifecycle:
 //     Each IIFE entry bumps globalThis.__ccsdPanelCount; onDidDispose
 //     decrements and, when the count hits zero (last CC panel in the window
-//     closed), clears the singleton timer AND resets all 4 contexts to 0 so
-//     every light goes dim — the commandCenter can't freeze on a stale count
-//     when no panel survives to refresh it. Opening a fresh CC panel re-arms
-//     the timer; the first tick re-pushes the real counts.
-//   commandCenter isolation:
-//     The singleton timer creation AND the aggregation body each live in their
-//     OWN try/catch (carried over from v0.1.12's round-3 fix) — a readdir/stat/
-//     parse/setContext failure can never brick the per-panel tick (which has
-//     its own setInterval) nor vice-versa, and a timer-creation throw cannot
-//     propagate up through the comma-operator chain into CC's
-//     update_session_state handler.
+//     closed), clears the singleton timer AND disposes the SBI so it goes
+//     away — the bottom bar can't freeze on a stale count when no panel
+//     survives to refresh it. Opening a fresh CC panel re-creates both; the
+//     first tick re-pushes the real counts.
+//   SBI isolation:
+//     The SBI creation, the singleton timer creation, AND the aggregation body
+//     each live in their OWN try/catch (carried over from v0.1.12/v0.1.13) —
+//     a readdir/stat/parse/text-mutate failure can never brick the per-panel
+//     tick (which has its own setInterval) nor vice-versa, and a creation or
+//     timer-creation throw cannot propagate up through the comma-operator
+//     chain into CC's update_session_state handler.
 //   Naming:
-//     globalThis.__ccsdCcTimer / __ccsdPanelCount use the project-scoped
-//     __ccsd* prefix (mirrors INJECT_MARKER / HOOK_MARKER), NOT the bare __cc*
-//     prefix — see the `cc-status-bar-injected` tombstone in restoreWebview():
-//     `__cc*` is CC's own namespace and a future CC release could occupy the
-//     same globalThis key, silently disabling our guard.
-//     Emoji handling: the IIFE uses NO \u{...} escapes — emoji (🟢🟡🔵🔴⚪) live
-//     ONLY in CC_LIGHTS / CC_DIM_EMOJI (patch.ts source) and ship to the user
-//     via package.json command titles (buildCcContribs), never in the IIFE's
-//     runtime code paths. The only emoji that appear inside the IIFE are inside
-//     developer-facing /* */ comments (e.g. "🔴 growth"), not executable values.
+//     ALL project-injected fields — BOTH globalThis singletons
+//     (__ccsdSbi / __ccsdSbiTimer / __ccsdPanelCount / __ccsdSbiCmdRegistered)
+//     AND per-panel-instance fields stashed on the same `this`/`t` object CC's
+//     minified code operates on (__ccsdDotStarted / __ccsdSid / __ccsdTitle /
+//     __ccsdPending) — use the project-scoped __ccsd* prefix (mirrors
+//     INJECT_MARKER / HOOK_MARKER), NOT the bare __cc* prefix. The rationale
+//     is the same for both surfaces and applies by *reason*, not by literal
+//     scope: `__cc*` is CC's own namespace (see the `cc-status-bar-injected`
+//     tombstone in restoreWebview()) and a future CC release could occupy the
+//     same key on EITHER globalThis OR the panel instance, silently disabling
+//     our guard / overwriting our stash. The earlier v0.1.x field names
+//     __ccDotStarted / __ccSid / __ccTitle / __ccPending were renamed to the
+//     __ccsd* form in the v0.1.14 pivot for this consistency.
+//     Emoji handling: emoji (🟢🟡🔵🔴⚪) live ONLY in SBI_LIGHTS / SBI_DIM_EMOJI
+//     (patch.ts source) and are baked into the IIFE as JSON-stringified string
+//     literals (via JSON.stringify in buildIIFE — never as raw \u{...} escapes
+//     in the IIFE source). The only emoji that appear inside the IIFE comments
+//     are developer-facing (e.g. "🔴 growth"), not executable values.
 // ---------------------------------------------------------------------------
 
 function buildIIFE(resDir: string): string {
     // JSON.stringify yields a safely-quoted, escaped JS string literal for the path
     // (also handles the non-ASCII chars in the project path correctly).
     const resLiteral = JSON.stringify(resDir);
-    // LL map (per-light click-feedback tooltip strings) is derived from CC_LIGHTS
-    // — the SINGLE source of truth. v0.1.13 fix: previously the IIFE hardcoded its
-    // own LL map with divergent wording while CC_LIGHTS carried a dead `label`
-    // field that was never read. Now CC_LIGHTS.tooltip drives both the IIFE LL
-    // map and any future doc/audit; adding a 5th light only touches CC_LIGHTS.
-    const LLLiteral = "{" + CC_LIGHTS.map((l) => `${l.key}:${JSON.stringify(l.tooltip)}`).join(",") + "}";
-    // State machine + notification + commandCenter aggregation mirror docs/STATES.md §1/§4/§4b/§7. Keep in sync.
+    // SBI 4-light emoji + dim-emoji literals baked into the IIFE as JSON-stringified
+    // arrays/strings (so no raw \u{...} escapes in the IIFE source — see the buildIIFE
+    // header comment). SBI_LIGHTS is the SINGLE source of truth (patch.ts); the IIFE
+    // builds its per-tick text from this array. Order matches aggregation output:
+    // done/running/pending/interrupted.
+    const emLiteral = "[" + SBI_LIGHTS.map((e) => JSON.stringify(e)).join(",") + "]";
+    const dimLiteral = JSON.stringify(SBI_DIM_EMOJI);
+    // Initial SBI text baked once for the creation-time assignment so the SBI is
+    // visible immediately on panel-open (business-logic review round-2: the SBI
+    // was created with .tooltip set but .text NEVER set, leaving it zero-width
+    // and invisible for the ~500ms until the first aggregation tick fired — and
+    // silently permanent if the timer-setup try/catch swallowed a throw). The
+    // literal is the all-zero-count disp() output: 4 dim emojis joined with
+    // single spaces. Built at patch time so the IIFE has no runtime cost.
+    const dimTextLiteral = JSON.stringify(SBI_LIGHTS.map(() => SBI_DIM_EMOJI).join(" "));
+    // State machine + notification + SBI aggregation mirror docs/STATES.md §1/§4/§4b/§7. Keep in sync.
     //
     // The banner carries INJECT_VERSION + a content hash of the body (everything
     // after the banner line). The hash lets patchExtension detect intra-version
@@ -703,33 +771,43 @@ function buildIIFE(resDir: string): string {
     // re-inject instead of silently skipping. See STAMP_HASH_LEN above.
     const bodyLines = [
         `(function(t){`,
-        `if(t.__ccDotStarted||!t.panelTab)return;`,
-        `t.__ccDotStarted=true;`,
-        `/*commandCenter panel counter: bumped per IIFE entry so the onDidDispose teardown at the tail of this IIFE can detect the last panel out and clear the singleton Cc timer + reset all 4 setContext keys to 0 (v0.1.13; was SBI hide in v0.1.11).*/`,
+        `if(t.__ccsdDotStarted||!t.panelTab)return;`,
+        `t.__ccsdDotStarted=true;`,
+        `/*SBI panel counter: bumped per IIFE entry so the onDidDispose teardown at the tail of this IIFE can detect the last panel out and dispose the singleton SBI + clear its timer (v0.1.14; was Cc timer + 4 setContext resets in v0.1.13; was SBI hide in v0.1.11).*/`,
         `globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||0)+1;`,
         `var fs=require("fs"),pth=require("path"),vs=require("vscode"),os=require("os");`,
         `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");`,
         `var RES=${resLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         `var DONE_TO_IDLE_MS=5*60*1000;`,
-        `/*Stale-running heuristic (§7.2; was named SBI_RUNNING_STALE_MS in v0.1.11-v0.1.12 — kept verbatim for grep continuity): a legit running session gets PreToolUse/PostToolUse heartbeats every tool call, so a state=running file whose mtime exceeds this window is almost certainly a crashed/killed CC process whose SessionEnd never fired — count it as idle, not running (so the commandCenter yellow light doesn't false-stick at 1).*/`,
+        `/*Stale-running heuristic (§7.2; was named SBI_RUNNING_STALE_MS in v0.1.11-v0.1.12 — kept verbatim for grep continuity): a legit running session gets PreToolUse/PostToolUse heartbeats every tool call, so a state=running file whose mtime exceeds this window is almost certainly a crashed/killed CC process whose SessionEnd never fired — count it as idle, not running (so the SBI yellow light doesn't false-stick at 1).*/`,
         `var SBI_RUNNING_STALE_MS=30*60*1000;`,
-        /*v0.1.13 interrupted retention (architecture review fix): a crashed/killed
-         CC session whose writer wrote state=interrupted NEVER gets a SessionEnd
-         (CC didn't shut down cleanly), so without a retention heuristic the 🔴
-         red light would monotonically grow as users accumulate abandoned
-         interrupted sessions. We decay interrupted files older than 24h to idle
-         so they stop counting toward 🔴 (the file is NOT deleted — diagnostic
-         value preserved; user can still inspect / manually clean). 24h keeps
-         "today's interrupts" highly visible (the original §7.5 rationale:
-         "中断态需保持可见以提醒用户") while bounding the long-tail growth. The
-         threshold is intentionally much larger than SBI_RUNNING_STALE_MS (30min)
-         because interrupted is a terminal state the user may want to inspect
-         long after the fact, whereas running is a live heartbeat state whose
-         staleness is unambiguous. We reuse the same mtime stat the running
-         branch below already needs (best-effort: on stat failure we keep the
-         interrupted file counted, never silently drop it).*/
+        /*v0.1.13 interrupted retention (architecture review fix, preserved in v0.1.14):
+         a crashed/killed CC session whose writer wrote state=interrupted NEVER
+         gets a SessionEnd (CC didn't shut down cleanly), so without a retention
+         heuristic the 🔴 red light would monotonically grow as users accumulate
+         abandoned interrupted sessions. We decay interrupted files older than
+         24h to idle so they stop counting toward 🔴 (the file is NOT deleted —
+         diagnostic value preserved; user can still inspect / manually clean).
+         24h keeps "today's interrupts" highly visible (the original §7.5
+         rationale: "中断态需保持可见以提醒用户") while bounding the long-tail
+         growth. The threshold is intentionally much larger than
+         SBI_RUNNING_STALE_MS (30min) because interrupted is a terminal state
+         the user may want to inspect long after the fact, whereas running is a
+         live heartbeat state whose staleness is unambiguous. We reuse the same
+         mtime stat the running branch below already needs (best-effort: on
+         stat failure we keep the interrupted file counted, never silently
+         drop it).*/
         `var INTERRUPTED_RETENTION_MS=24*60*60*1000;`,
+        /*v0.1.14 SBI 4-light emoji array + dim emoji — baked from SBI_LIGHTS /
+         SBI_DIM_EMOJI (patch.ts single source of truth) via JSON.stringify so
+         the IIFE source contains no raw \u{...} escapes. Order matches the
+         disp() text build below: done/running/pending/interrupted. Emoji
+         codepoints: 🟢 U+1F7E2 / 🟡 U+1F7E1 / 🔵 U+1F535 / 🔴 U+1F534 / ⚪ U+26AA
+         (color fidelity depends on the OS emoji font stack — same documented
+         tradeoff as v0.1.12-v0.1.13 SBI/commandCenter).*/
+        `var EM=${emLiteral};`,
+        `var DIM=${dimLiteral};`,
         `var flashSeq=0,lastTermSince=null,seeded=false;/*flashSeq: interrupted on/off frame index (flashSeq%2)*/`,
         `function notify(st,err){`,
         `var c=vs.workspace.getConfiguration("ccStatusDot");`,
@@ -739,56 +817,64 @@ function buildIIFE(resDir: string): string {
         `var msg,sev;`,
         `if(st==="done"){sev="info";msg="Claude Code: turn complete"}`,
         `else{sev="warn";var m={rate_limit:"rate limit reached",overloaded:"server overloaded"}[err]||err||"interrupted";msg="Claude Code: "+m}`,
-        `if(t.__ccTitle)msg+=" ["+t.__ccTitle+"]";`,
-        `/*macOS: osascript system notification; on async OR sync failure fall through to VSCode message so the notification feature stays observable when osascript is denied / missing / mis-escaped.*/`,
-        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var sndStr=snd?(' sound name "'+snd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var vsMsg=function(){if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);};try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr],function(e){if(e)vsMsg()})}catch(e){vsMsg()}}`,
+        `if(t.__ccsdTitle)msg+=" ["+t.__ccsdTitle+"]";`,
+        `/*macOS: osascript system notification; on async OR sync failure fall through to VSCode message so the notification feature stays observable when osascript is denied / missing / mis-escaped. R3 review fix: escMsg escapes the message body; the same escape is now applied to the notifySound config value too — a sound name containing " or \\ would otherwise either break the AppleScript (caught silently → no sound plays, indistinguishable from "sound not found") or inject arbitrary AppleScript from the user's own settings.json. The two interpolations are now symmetric (both halves of the same command string defended the same way).*/`,
+        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var escSnd=(""+snd).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var sndStr=escSnd?(' sound name "'+escSnd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var vsMsg=function(){if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);};try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr],function(err){if(err)vsMsg()})}catch(e){vsMsg()}}`,
         `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);}`,
         `}`,
-        /*commandCenter command handlers (v0.1.13): register the 20 contributed
-         commands (ccStatusDot.<key>.<variant>) as info-message no-ops so VSCode
-         doesn't pop "command not found" when the user clicks a CC light. The 20
-         command IDs are the ones patchPackageJson spliced into CC's package.json
-         (4 lights × 5 variants). Idempotent: globalThis.__ccsdCcCmdsRegistered
-         ensures only the first CC panel in the extension host registers them;
-         subsequent panels reuse. registerCommand can throw on re-register within
-         the same host, so the whole block is wrapped in try/catch too — a
-         failure here must not propagate up through the comma-operator chain into
-         CC's update_session_state handler (same isolation rule as the Cc timer
-         setup block below). Click feedback is a one-line InformationMessage so
-         the click is acknowledged but not disruptive (no CC tab opened, no
-         modal).*/
-        `try{if(!globalThis.__ccsdCcCmdsRegistered){globalThis.__ccsdCcCmdsRegistered=true;var LK=["done","running","pending","interrupted"],LL=${LLLiteral},VR=["0","1","2","3","N"];for(var li=0;li<LK.length;li++){for(var vi=0;vi<VR.length;vi++){try{(function(k,v){vs.commands.registerCommand("ccStatusDot."+k+"."+v,function(){try{vs.window.showInformationMessage("cc-status-dot "+k+": "+(v==="N"?"4+":v)+" "+LL[k])}catch(e){}})})(LK[li],VR[vi])}catch(e){}}}}}catch(e){}`,
-        /* v0.1.13 commandCenter aggregation singleton timer (replaces the
-         * v0.1.10-v0.1.12 SBI StatusBarItem-at-Right). Window-scoped — first
-         * CC panel creates it, every later panel reuses it, so a P-panel
-         * window ticks aggregation ONCE per 500ms. Project-scoped __ccsd*
-         * prefix keeps CC's __cc* namespace clean (see the `cc-status-bar-
-         * injected` tombstone in restoreWebview()).
+        /*v0.1.14 SBI click command (replaces v0.1.13's 20 package.json-contributed
+         commandCenter commands). ONE command registered via runtime
+         vs.commands.registerCommand — no package.json contribution needed for
+         registerCommand (it adds the command to VSCode's command registry at
+         runtime; package.json contribution is only needed for palette/menu/
+         keybinding wiring, none of which we use here). Idempotent across panels
+         via globalThis.__ccsdSbiCmdRegistered — registerCommand throws on
+         re-registration of the same ID within one host, so the whole block is
+         wrapped in try/catch too. The handler reads the SBI's CURRENT tooltip
+         (kept fresh every 500ms by __ccsdSbiTimer) and shows it as an
+         InformationMessage — clicking the SBI echoes the current breakdown
+         without modal / tab-switch disruption. The SBI.command field is set to
+         this command's ID in the SBI creation block just below, so VSCode
+         executes it on click.*/
+        `try{if(!globalThis.__ccsdSbiCmdRegistered){globalThis.__ccsdSbiCmdRegistered=true;try{vs.commands.registerCommand(${JSON.stringify(SBI_CLICK_CMD)},function(){try{if(globalThis.__ccsdSbi)vs.window.showInformationMessage(globalThis.__ccsdSbi.tooltip||"cc-status-dot")}catch(e){}})}catch(e){}}}catch(e){}`,
+        /* v0.1.14 SBI 4-light singleton creation + aggregation timer (replaces
+         * the v0.1.13 commandCenter contribs + Cc singleton timer; the
+         * v0.1.10-v0.1.12 StatusBarItem-at-Right design is RESTORED to a
+         * StatusBarItem-at-Left-near-center surface). Window-scoped — first CC
+         * panel creates the SBI + the timer, every later panel reuses both, so
+         * a P-panel window ticks aggregation ONCE per 500ms. Project-scoped
+         * __ccsd* prefix keeps CC's __cc* namespace clean (see the
+         * `cc-status-bar-injected` tombstone in restoreWebview()).
          *
          * The aggregation applies §4 reader rules (done>5min→idle so IDLE
          * sessions are NOT counted toward the green light — only ACTIVE done
-         * counts; running stale>30min→idle to GC crashed sessions) so the
-         * commandCenter lights agree with the per-tab dots on what
-         * "done"/"running" mean. Pending is counted INDEPENDENTLY of state
-         * (a session can be both running AND pending).
+         * counts; running stale>30min→idle to GC crashed sessions; interrupted
+         * >24h→idle to bound 🔴 growth) so the SBI lights agree with the
+         * per-tab dots on what "done"/"running"/"interrupted" mean. Pending is
+         * counted INDEPENDENTLY of state (a session can be both running AND
+         * pending — the typical case: a running turn paused on a permission
+         * prompt).
          *
-         * TWO independent try/catch wrappers (carried over from v0.1.12's
-         * round-3 fix):
-         *   (1) The SETUP step (singleton timer creation) is wrapped
-         *       individually — a throw inside setInterval registration
-         *       (disposed host, transient VSCode API failure) is swallowed
-         *       and the IIFE continues to the per-tab tick. Without this,
-         *       a throw would propagate up through the comma-operator chain
-         *       into CC's `update_session_state` handler (bricking session-
-         *       state tracking), skip the per-tab setInterval, AND skip
-         *       onDidDispose registration (so the panel counter bumped at
-         *       IIFE entry would never decrement — a permanent leak).
-         *   (2) The aggregation BODY inside the setInterval callback has its
-         *       own try/catch so a readdir/stat/parse/setContext failure can
+         * THREE independent try/catch wrappers (carried over from v0.1.12/
+         * v0.1.13 round-3 fix):
+         *   (1) SBI CREATION (createStatusBarItem + registerCommand wiring) is
+         *       wrapped individually — a throw here is swallowed and the IIFE
+         *       continues to the per-tab tick.
+         *   (2) The singleton TIMER SETUP is wrapped individually — a throw
+         *       inside setInterval registration (disposed host, transient
+         *       VSCode API failure) is swallowed and the IIFE continues to the
+         *       per-tab tick + onDidDispose registration. Without this, a throw
+         *       would propagate up through the comma-operator chain into CC's
+         *       `update_session_state` handler (bricking session-state
+         *       tracking), skip the per-tab setInterval, AND skip onDidDispose
+         *       registration (so the panel counter bumped at IIFE entry would
+         *       never decrement — a permanent leak).
+         *   (3) The aggregation BODY inside the setInterval callback has its
+         *       own try/catch so a readdir/stat/parse/text-mutate failure can
          *       never brick the per-panel tick (which has its own setInterval).
-         * Emoji note: the IIFE uses no \u{...} escapes — see the buildIIFE
-         * header comment above. */
-        `try{if(!globalThis.__ccsdCcTimer){globalThis.__ccsdCcTimer=setInterval(function(){`,
+         */
+        `try{if(!globalThis.__ccsdSbi){globalThis.__ccsdSbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,${SBI_LEFT_PRIORITY});globalThis.__ccsdSbi.name="CC Status Dot";globalThis.__ccsdSbi.text=${dimTextLiteral};globalThis.__ccsdSbi.tooltip="Claude Code: 0 done, 0 running, 0 pending, 0 interrupted";try{globalThis.__ccsdSbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};globalThis.__ccsdSbi.show()}}catch(e){}`,
+        `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
         `try{`,
         `var ag={running:0,done:0,interrupted:0,idle:0,pending:0};`,
         `try{`,
@@ -803,35 +889,38 @@ function buildIIFE(resDir: string): string {
         `if(st==="done"&&since&&(Date.now()-since)>DONE_TO_IDLE_MS){st="idle";}`,
         `/*§7.2 stale-running heuristic: mtime>SBI_RUNNING_STALE_MS→idle (running files get tool heartbeats, so old mtime=crashed session)*/`,
         `else if(st==="running"){var mt=0;try{mt=fs.statSync(fp).mtimeMs}catch(e2){}if(mt&&(Date.now()-mt)>SBI_RUNNING_STALE_MS){st="idle";}}`,
-        `/*v0.1.13 interrupted retention: mtime>INTERRUPTED_RETENTION_MS(24h)→idle — bounds 🔴 growth from accumulated abandoned interrupted sessions (crashed/killed CC never sends SessionEnd). File is NOT deleted (diagnostic value preserved).*/`,
+        `/*v0.1.13/v0.1.14 interrupted retention: mtime>INTERRUPTED_RETENTION_MS(24h)→idle — bounds 🔴 growth from accumulated abandoned interrupted sessions (crashed/killed CC never sends SessionEnd). File is NOT deleted (diagnostic value preserved).*/`,
         `else if(st==="interrupted"){var mt=0;try{mt=fs.statSync(fp).mtimeMs}catch(e2){}if(mt&&(Date.now()-mt)>INTERRUPTED_RETENTION_MS){st="idle";}}`,
         `if(st==="running")ag.running++;`,
         `else if(st==="done")ag.done++;`,
         `else if(st==="interrupted")ag.interrupted++;`,
-        `else if(st==="idle")ag.idle++;`,
-        `/*v0.1.13: pending counted INDEPENDENTLY of state — a session can be both running AND pending (running turn paused on a permission prompt). The writer marks pending:true on Notification and clears it on user/turn-driven events (UserPromptSubmit / Pre/PostToolUse / Stop / StopFailure); SubagentStart / SubagentStop PRESERVE cur.pending (background events carry no signal about the parent's open prompt). GC: skip pending for sessions downgraded to "idle" above (crashed running with pending:true, stale done with pending:true, or interrupted>24h with pending:true) — otherwise a session killed mid-permission-prompt would false-stick the 🔵 light forever (SessionEnd never fires on crash). This mirrors the §7.2 / interrupted-retention treatment: the SAME 'st' value computed above (with all three decay rules applied) gates both the state buckets AND the pending bucket, so a single stale session cannot be "not yellow" yet "still blue".*/`,
+        `/*R3 review fix (M8/M9): catch-all idle bucket. The prior 'else if(st==="idle")ag.idle++;' chain silently dropped any file whose state field was neither of the four known values — a hand-edited / corrupt / forward-incompatible file with state="foo" or state=undefined matched NONE of the branches, so its counts vanished from ALL state totals while its pending===true STILL counted toward 🔵 (because undefined!=="idle" is true). That incoherence ("too corrupt to bucket by state yet trusted for pending") is now closed two ways: (1) any unknown state is treated as idle (matches the aggregation's unknown→idle posture already used on stat failure); (2) the pending check below then sees st==="idle" and skips pending too — consistent treatment of the same corrupt file across both axes. The writer never produces such files (every deriveStatus return has a known state), so this is pure defensive hardening.*/`,
+        `else ag.idle++;`,
+        `/*v0.1.13/v0.1.14: pending counted INDEPENDENTLY of state — a session can be both running AND pending (running turn paused on a permission prompt). The writer marks pending:true on Notification and clears it on user/turn-driven events (UserPromptSubmit / Pre/PostToolUse / Stop / StopFailure); SubagentStart / SubagentStop PRESERVE cur.pending (background events carry no signal about the parent's open prompt). GC: skip pending for sessions downgraded to "idle" above (crashed running with pending:true, stale done with pending:true, or interrupted>24h with pending:true) — otherwise a session killed mid-permission-prompt would false-stick the 🔵 light forever (SessionEnd never fires on crash). This mirrors the §7.2 / interrupted-retention treatment: the SAME 'st' value computed above (with all three decay rules applied) gates both the state buckets AND the pending bucket, so a single stale session cannot be "not yellow" yet "still blue".*/`,
         `if(j.pending===true&&st!=="idle")ag.pending++;`,
         `}catch(e){}`,
         `}`,
         `}catch(e){}`,
-        `/*cap each count at 4: ccStatusDot.<key>==4 means "4+ (display N)". Clamps via inline ternary — no helper fn to keep IIFE flat.*/`,
+        `/*cap each light's count at 4 so the "N" variant displays for >=4. Clamps via inline ternary — no helper fn to keep IIFE flat.*/`,
         `var cap=function(n){return n>=4?4:n;};`,
-        `try{`,
-        `vs.commands.executeCommand("setContext","ccStatusDot.done",cap(ag.done));`,
-        `vs.commands.executeCommand("setContext","ccStatusDot.running",cap(ag.running));`,
-        `vs.commands.executeCommand("setContext","ccStatusDot.pending",cap(ag.pending));`,
-        `vs.commands.executeCommand("setContext","ccStatusDot.interrupted",cap(ag.interrupted));`,
-        `}catch(e){}`,
+        `var cd=cap(ag.done),cr=cap(ag.running),cp=cap(ag.pending),ci=cap(ag.interrupted);`,
+        `/*disp: count 0 -> dim ⚪ (no number); count 1/2/3 -> colored emoji + " " + digit; count >=4 (already capped to 4) -> colored emoji + " N".*/`,
+        `var disp=function(em,n){return n===0?DIM:(em+" "+(n>=4?"N":n));};`,
+        `/*text: 4 lights joined with single space, fixed left→right order done/running/pending/interrupted (matches SBI_LIGHTS order).*/`,
+        `var text=disp(EM[0],cd)+" "+disp(EM[1],cr)+" "+disp(EM[2],cp)+" "+disp(EM[3],ci);`,
+        `/*tooltip carries the UNcapped breakdown so the user can see actual counts even when the lights cap at N.*/`,
+        `var tip="Claude Code: "+ag.done+" done, "+ag.running+" running, "+ag.pending+" pending, "+ag.interrupted+" interrupted";`,
+        `try{if(globalThis.__ccsdSbi){globalThis.__ccsdSbi.text=text;globalThis.__ccsdSbi.tooltip=tip;globalThis.__ccsdSbi.show()}}catch(e){}`,
         `}catch(e){}`,
         `},${TICK_MS});}}catch(e){}`,
         `var timer=setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
-        `var sid=t.__ccSid;if(!sid)return;`,
+        `var sid=t.__ccsdSid;if(!sid)return;`,
         `var st=null,since=null,err="";`,
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||""}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
         `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){lastTermSince=since;try{notify(st,err)}catch(e){}}`,
-        `/*permission pending: yield to CC native blue dot*/if(t.__ccPending)return;`,
+        `/*permission pending: yield to CC native blue dot*/if(t.__ccsdPending)return;`,
         `var now=Date.now();`,
         `var svg;`,
         `if(st==="interrupted"){svg=(flashSeq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
@@ -842,8 +931,8 @@ function buildIIFE(resDir: string): string {
         `flashSeq++;`,
         `try{p.iconPath=vs.Uri.file(svg)}catch(e){}`,
         `},${TICK_MS});`,
-        `/*release this panel's 500ms tick + closed-over refs when the panel closes; also decrement the commandCenter panel counter, and on the LAST panel out (count→0) clear the singleton Cc timer AND reset all 4 setContext keys to 0 so every light goes dim — the commandCenter can't freeze on a stale count with no surviving panel to refresh it (v0.1.13; was SBI hide in v0.1.11).*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdCcTimer){clearInterval(globalThis.__ccsdCcTimer);globalThis.__ccsdCcTimer=null;}try{vs.commands.executeCommand("setContext","ccStatusDot.done",0);vs.commands.executeCommand("setContext","ccStatusDot.running",0);vs.commands.executeCommand("setContext","ccStatusDot.pending",0);vs.commands.executeCommand("setContext","ccStatusDot.interrupted",0)}catch(e){}}})}catch(e){}`,
+        `/*release this panel's 500ms tick + closed-over refs when the panel closes; also decrement the SBI panel counter, and on the LAST panel out (count→0) clear the singleton SBI timer AND dispose the SBI itself so it goes away — the bottom bar can't freeze on a stale count with no surviving panel to refresh it (v0.1.14; was Cc timer + 4 setContext resets in v0.1.13; was SBI hide in v0.1.11).*/`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;}}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -893,6 +982,81 @@ function currentIifeHash(): string {
     return crypto.createHash("sha1").update(body).digest("hex").slice(0, STAMP_HASH_LEN);
 }
 
+// ---------------------------------------------------------------------------
+// Writer-hook content hash (architecture-review round-3 fix; mirrors the IIFE
+// hash scheme above). The writer hook (hooks/cc-status.js) carries a banner
+// `/*cc-status-dot-hook:vX.Y.Z:HASH*/` on its first line; the hash is sha1 of
+// everything AFTER that banner line. installRuntimeFiles + reportStatus use
+// these helpers to detect BOTH inter-version drift (banner version differs
+// from HOOK_VERSION) AND intra-version drift (banner hash differs from the
+// current body hash — a dev edited the hook but forgot to bump the banner).
+// Symmetric to the IIFE gate so writer/reader drift detection is no longer
+// the half-rounded thing round-2 left.
+// ---------------------------------------------------------------------------
+
+/** Parse `vX.Y.Z` out of a `cc-status-dot-hook:vX.Y.Z[:HASH]` banner line.
+ *  Returns null if the line has no recognizable banner (e.g. hand-edited or
+ *  pre-v0.1.14 hook). Tolerates a missing hash segment (pre-round-3 banner). */
+function parseHookBannerVersion(bannerLine: string): string | null {
+    const m = bannerLine.match(/cc-status-dot-hook:v(\d+\.\d+\.\d+)/);
+    return m ? "v" + m[1] : null;
+}
+
+/** Parse the `:HASH` suffix out of a `cc-status-dot-hook:vX.Y.Z:HASH` banner.
+ *  Returns null when the banner pre-dates the hash scheme (round-3) — callers
+ *  treat null as "stale, re-stamp" so legacy same-version hooks pick up the
+ *  new scheme on the next install. */
+function parseHookBannerHash(bannerLine: string): string | null {
+    const m = bannerLine.match(/cc-status-dot-hook:v\d+\.\d+\.\d+:([0-9a-f]{4,16})/);
+    return m ? m[1] : null;
+}
+
+/** Split a hook file's content into (bannerLine, body). The writer hook
+ *  (hooks/cc-status.js) starts with `#!/usr/bin/env node` + `'use strict';`
+ *  so the cc-status-dot-hook banner lives on line 3 — find it by regex over
+ *  the first ~10 lines instead of assuming it's the first line. The body is
+ *  the full content with the banner line replaced by an empty line, so the
+ *  hash is robust to changes ANYWHERE in the file (including the banner line
+ *  itself — the banner's hash claims to be the hash of everything that is
+ *  NOT the banner). Returns { banner: "", body: content } when no banner is
+ *  recognizable so callers can hash uniformly. */
+function splitHookBanner(content: string): { banner: string; body: string } {
+    const lines = content.split("\n");
+    const head = lines.slice(0, 10);
+    const idx = head.findIndex((l) => /cc-status-dot-hook:v\d+\.\d+\.\d+/.test(l));
+    if (idx === -1) return { banner: "", body: content };
+    const banner = head[idx];
+    // Replace the banner line with an empty string (preserving line count so
+    // byte offsets elsewhere in the file are unaffected — important if a
+    // future maintainer greps line numbers from a stack trace).
+    lines[idx] = "";
+    return { banner, body: lines.join("\n") };
+}
+
+/** Body hash for a hook file's content (sha1 over the body after the first
+ *  line, truncated to HOOK_HASH_LEN). Used both for the source hook
+ *  (currentHookBodyHash) and for installed hooks (installRuntimeFiles /
+ *  reportStatus compare the two). */
+function hookBodyHashOf(content: string): string {
+    const { body } = splitHookBanner(content);
+    return crypto.createHash("sha1").update(body).digest("hex").slice(0, HOOK_HASH_LEN);
+}
+
+/** Current source-hook body hash — sha1 over PROJECT_ROOT/hooks/cc-status.js
+ *  body (everything after the first banner line). installRuntimeFiles and
+ *  reportStatus compare this to the on-disk installed hook's body hash to
+ *  detect intra-HOOK_VERSION drift. Returns null when the source hook is
+ *  absent (caller treats as "skip hash check" — the copy already warned). */
+function currentHookBodyHash(): string | null {
+    const srcHook = path.join(PROJECT_ROOT, "hooks", "cc-status.js");
+    try {
+        const src = fs.readFileSync(srcHook, "utf8");
+        return hookBodyHashOf(src);
+    } catch {
+        return null;
+    }
+}
+
 /** Validate anchors, back up once, and write the IIFE into extension.js.
  *  `src` is the CURRENT unpatched content of extension.js (must NOT contain
  *  INJECT_MARKER — pre-v0.1.3 originals never do; restoreExtension yields one
@@ -933,7 +1097,7 @@ function injectFresh(extJs: string, src: string): void {
     // consequent as a single `return a,b,c,d` expression preserves the binding.
     const replA =
         'else if(e.request.type==="update_session_state")return ' +
-        "this.__ccSid=e.request.sessionId,this.__ccTitle=e.request.title," +
+        "this.__ccsdSid=e.request.sessionId,this.__ccsdTitle=e.request.title," +
         iife +
         ',this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}';
 
@@ -942,14 +1106,14 @@ function injectFresh(extJs: string, src: string): void {
 
     // Anchor B (optional hardening): start the same guarded timer from rename_tab too.
     if (bCount === 1) {
-        // replB also refreshes this.__ccTitle from the live rename_tab title —
+        // replB also refreshes this.__ccsdTitle from the live rename_tab title —
         // CC may fire rename_tab multiple times AFTER update_session_state
         // (truncation, user rename, panel title reassignment) and replA's
         // stashed value would otherwise go stale. notify() appends
-        // "["+__ccTitle+"]" to the notification body, so keeping it fresh
+        // "["+__ccsdTitle+"]" to the notification body, so keeping it fresh
         // matters for the message shown to the user.
         const replB =
-            "this.panelTab.title=e.request.title;this.__ccTitle=e.request.title;this.__ccPending=!!e.request.hasPendingPermissions;" +
+            "this.panelTab.title=e.request.title;this.__ccsdTitle=e.request.title;this.__ccsdPending=!!e.request.hasPendingPermissions;" +
             iife +
             ";let r;if(e.request.hasPendingPermissions)";
         next = next.replace(ANCHOR_B, replB);
@@ -1115,197 +1279,29 @@ function restoreWebview(extDir: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// CC package.json patch (v0.1.13 commandCenter 4-light)
+// CC package.json — v0.1.14 residue cleanup only (no install-time patching)
 // ---------------------------------------------------------------------------
-// VSCode's commandCenter (title-bar top center) only renders a command's `title`
-// text — there is NO per-menu-item title override (VSCode issue #34048 is open).
-// So 5 distinct visible texts per light (0/1/2/3/N) require 5 distinct commands,
-// and 4 lights × 5 variants = 20 commands + 20 commandCenter menu items (group
-// "navigation", `when: "ccStatusDot.<key> == K"`) + 20 commandPalette hide-entries
-// (when:"false" keeps the palette clean). Visibility is driven by 4 setContext
-// keys the IIFE ticks every 500ms — exactly one variant per light shows at any
-// moment. macOS renders colored emoji (🟢🟡🔵🔴⚪) via Apple Color Emoji in the
-// Chromium title-bar; Win7/font-less Linux may show monochrome (same documented
-// tradeoff as the removed v0.1.12 SBI).
-//
-// Idempotent + version-stamped, mirroring the extension.js injection model:
-// PKG_MARKER_FIELD at top level carries INJECT_VERSION; a stale stamp triggers
-// re-injection from package.json.bak on the next install. VSCode ignores
-// unknown top-level fields (CC's own package.json carries `__metadata` etc.),
-// so the marker is safe. CC auto-update replaces the entire extension dir →
-// marker gone → re-run install patches fresh (project-normal, same as extension.js).
+// v0.1.13 patched CC's package.json to contribute 20 commands + 20
+// commandCenter menu items + 20 commandPalette hide-entries; v0.1.14 removed
+// that entire surface (the SBI is a single runtime createStatusBarItem, no
+// package.json contribution). These two helpers remain ONLY to (1) detect a
+// stale v0.1.13 patch on sight at install time (so upgrade restores the
+// original package.json cleanly) and (2) back the --revert path for users
+// whose last install was v0.1.13. Both rely on the marker
+// `__ccStatusDotPkgManaged` that v0.1.13 stamped at the top level of CC's
+// package.json — VSCode ignores unknown top-level fields (CC's own
+// package.json carries `__metadata`, `capabilities`, etc.), so the marker
+// never affected CC's behavior, but the contrib arrays it shipped alongside
+// DID register 20 phantom commands whose handlers existed only inside the
+// v0.1.13 IIFE; cleaning those up on upgrade/revert is the job here.
 
-/** Build the 20 managed commands + 20 commandCenter menu items + 20 palette hides.
- *  Pure data — no side effects, easy to unit-test if we ever add one. */
-function buildCcContribs(): { commands: object[]; ccMenu: object[]; palette: object[] } {
-    const commands: object[] = [];
-    const ccMenu: object[] = [];
-    const palette: object[] = [];
-    for (const light of CC_LIGHTS) {
-        for (const variant of CC_COUNT_VARIANTS) {
-            const commandId = `ccStatusDot.${light.key}.${variant}`;
-            // count=0 → dim ⚪ (no number, light is "off"); count=1/2/3 → colored + digit;
-            // N → colored + "N" (means >=4, capped by reader).
-            const emoji = variant === "0" ? CC_DIM_EMOJI : light.emoji;
-            const title = `${emoji} ${variant}`;
-            // Map display variant to the setContext integer it matches. The "N"
-            // variant matches the capped value 4 (cap() in the IIFE clamps 4+ to 4).
-            const k = variant === "N" ? 4 : Number(variant);
-            // v0.1.13 reload-resilience: setContext is window-scoped runtime state
-            // that resets to undefined on extension host restart. Before the first
-            // IIFE tick fires (i.e. before any CC panel opens and calls
-            // update_session_state / rename_tab), `ccStatusDot.<key> == 0` evaluates
-            // FALSE because VSCode treats an undefined context key as not matching
-            // any `== <int>` clause — so every dim variant would be hidden and the
-            // commandCenter would be completely blank (not even the dim ⚪ shows),
-            // violating the §7.1 "4 lights always displayed" contract. The dim form
-            // therefore uses `!ccStatusDot.X || ccStatusDot.X == 0` so it ALSO
-            // matches the undefined (pre-tick / post-reload-no-panel) state. `!key`
-            // is VSCode's falsy test (true for undefined/false/0/"") so it covers
-            // the == 0 case too — the explicit `|| == 0` is belt-and-braces for
-            // readers auditing the when clause.
-            const when =
-                variant === "0"
-                    ? `!ccStatusDot.${light.key} || ccStatusDot.${light.key} == 0`
-                    : `ccStatusDot.${light.key} == ${k}`;
-            commands.push({ command: commandId, title: title });
-            ccMenu.push({
-                command: commandId,
-                when: when,
-                group: "navigation",
-            });
-            // Hide from commandPalette — otherwise all 20 show as noise.
-            palette.push({ command: commandId, when: "false" });
-        }
-    }
-    return { commands, ccMenu, palette };
-}
-
+/** Does CC's package.json still carry the v0.1.13 commandCenter patch? Presence
+ *  of the marker string === "v0.1.13-patched; restore on sight". The check is
+ *  a plain substring test (no JSON parse) so a corrupt package.json still
+ *  answers correctly — the caller (run() install path) then defers to
+ *  restorePackageJson which DOES parse + .bak-restore. */
 function isPackageJsonPatched(content: string): boolean {
     return content.includes(`"${PKG_MARKER_FIELD}"`);
-}
-
-/** Parse the INJECT_VERSION stamp from an already-patched CC package.json.
- *  Returns null for a pre-version stamp (shouldn't happen — PKG_MARKER_FIELD is
- *  always written together with the version string). */
-function injectedPkgVersion(content: string): string | null {
-    const re = new RegExp(`"${PKG_MARKER_FIELD}"\\s*:\\s*"(v\\d+\\.\\d+\\.\\d+)"`);
-    const m = content.match(re);
-    return m ? m[1] : null;
-}
-
-/** Parse the content-hash stamp from an already-patched CC package.json. Returns
- *  null for a pre-hash-scheme injection — patchPackageJson treats null as
- *  "stale, re-inject" so a same-version legacy install picks up the new scheme. */
-function injectedPkgHash(content: string): string | null {
-    const re = new RegExp(`"${PKG_HASH_FIELD}"\\s*:\\s*"([0-9a-f]{4,16})"`);
-    const m = content.match(re);
-    return m ? m[1] : null;
-}
-
-/** Current hash of buildCcContribs() — the value a fresh patch stamps into
- *  PKG_HASH_FIELD. patchPackageJson compares this to injectedPkgHash() to
- *  detect intra-version drift (e.g. tooltip/emoji/when changes that ship under
- *  the same INJECT_VERSION). */
-function currentPkgHash(contribs: { commands: object[]; ccMenu: object[]; palette: object[] }): string {
-    return crypto.createHash("sha1").update(JSON.stringify(contribs)).digest("hex").slice(0, STAMP_HASH_LEN);
-}
-
-/** Splice our 20 commands + 20 commandCenter items + 20 palette hides into the
- *  CC package.json object and write it back. Mutates `obj`, writes file once. */
-function writePkgInject(
-    pkgPath: string,
-    obj: Record<string, unknown>,
-    contribs: { commands: object[]; ccMenu: object[]; palette: object[] },
-): void {
-    const contributes = (obj.contributes as Record<string, unknown> | undefined) || {};
-    obj.contributes = contributes;
-
-    // commands: append ours after CC's existing commands (array order is not
-    // load-bearing — VSCode indexes by command id; CC's own commands all still
-    // resolve because we never touch their entries).
-    const cmds = Array.isArray(contributes.commands) ? (contributes.commands as object[]) : [];
-    contributes.commands = cmds.concat(contribs.commands);
-
-    // menus: ensure the map exists, then append to commandCenter + commandPalette.
-    const menus = (contributes.menus as Record<string, unknown> | undefined) || {};
-    contributes.menus = menus;
-    const cc = Array.isArray(menus.commandCenter) ? (menus.commandCenter as object[]) : [];
-    menus.commandCenter = cc.concat(contribs.ccMenu);
-    const pal = Array.isArray(menus.commandPalette) ? (menus.commandPalette as object[]) : [];
-    menus.commandPalette = pal.concat(contribs.palette);
-
-    // Stamp marker + content hash at top level so subsequent installs can detect
-    // both cross-version staleness (PKG_MARKER_FIELD = INJECT_VERSION) and
-    // intra-version drift (PKG_HASH_FIELD = currentPkgHash). The hash covers
-    // the contribs JSON, so any change to commands/menus/titles/emoji/when
-    // trips a re-inject on the next run even without a version bump.
-    obj[PKG_MARKER_FIELD] = INJECT_VERSION;
-    obj[PKG_HASH_FIELD] = currentPkgHash(contribs);
-
-    writeAtomicSync(pkgPath, JSON.stringify(obj, null, 2) + "\n");
-}
-
-function patchPackageJson(extDir: string): void {
-    const pkgPath = path.join(extDir, "package.json");
-    if (!fs.existsSync(pkgPath)) fail(`package.json not found in ${extDir}`);
-
-    const raw = fs.readFileSync(pkgPath, "utf8");
-    let obj: Record<string, unknown>;
-    try {
-        obj = JSON.parse(raw);
-    } catch (e) {
-        fail(`Could not parse CC package.json (${(e as Error).message}). No files were changed.`);
-    }
-
-    const contribs = buildCcContribs();
-
-    if (!isPackageJsonPatched(raw)) {
-        // Fresh injection — back up the original first (only after parse succeeded,
-        // so a corrupt package.json never gets a .bak).
-        backupOnce(pkgPath, pkgPath + ".bak");
-        writePkgInject(pkgPath, obj, contribs);
-        log(`patched package.json (20 commands + 20 commandCenter items + 20 palette hides)`);
-        return;
-    }
-
-    // Already patched — check version AND content-hash staleness. The hash
-    // catches intra-version drift (dev iterations that changed contribs output
-    // under the same INJECT_VERSION); without it, a same-version re-run would
-    // skip and leave the stale contribs on disk.
-    const ver = injectedPkgVersion(raw);
-    const diskHash = injectedPkgHash(raw);
-    const wantHash = currentPkgHash(contribs);
-    if (ver === INJECT_VERSION && diskHash === wantHash) {
-        log("package.json already patched — skipping");
-        return;
-    }
-
-    // Stale version or hash — restore from .bak and re-inject.
-    const why =
-        ver !== INJECT_VERSION
-            ? `version ${ver ?? "unknown"}`
-            : `hash ${diskHash ?? "(pre-hash-scheme)"} (expected ${wantHash})`;
-    const bak = pkgPath + ".bak";
-    if (fs.existsSync(bak)) {
-        const original = fs.readFileSync(bak, "utf8");
-        if (!isPackageJsonPatched(original)) {
-            log(`stale package.json injection (${why}) — re-injecting from package.json.bak`);
-            let origObj: Record<string, unknown>;
-            try {
-                origObj = JSON.parse(original);
-            } catch {
-                warn(`package.json.bak unreadable — skipping re-inject (manual edit needed)`);
-                return;
-            }
-            writePkgInject(pkgPath, origObj, contribs);
-            log(`re-patched package.json (20 commands + 20 commandCenter items + 20 palette hides)`);
-            return;
-        }
-        warn(`package.json.bak is itself patched — cannot cleanly re-inject; skipping`);
-    } else {
-        warn(`stale package.json injection (${why}) but no .bak — cannot re-inject; skipping`);
-    }
 }
 
 function restorePackageJson(extDir: string): void {
@@ -1559,6 +1555,37 @@ function installRuntimeFiles(): void {
         const srcHook = path.join(PROJECT_ROOT, "hooks", "cc-status.js");
         try {
             if (fs.existsSync(srcHook)) {
+                // Drift detection (architecture-review round-2 + round-3 hash gate):
+                // assert the source hook carries the HOOK_VERSION banner we expect AND
+                // that the banner's hash matches the source body hash. A version
+                // mismatch is a dev error (forgot to bump the banner in cc-status.js
+                // when bumping HOOK_VERSION); a hash mismatch is the intra-version
+                // equivalent (edited the hook body but forgot to re-stamp the banner
+                // hash). Both are surfaced loudly so the build ships self-consistent.
+                // Mirrors the IIFE's INJECT_VERSION+hash gate (round-3 closes the
+                // prior asymmetry where only the reader side had a hash check).
+                const srcContent = fs.readFileSync(srcHook, "utf8");
+                const { banner: srcBanner } = splitHookBanner(srcContent);
+                const srcVer = parseHookBannerVersion(srcBanner);
+                const srcBannerHash = parseHookBannerHash(srcBanner);
+                const srcBodyHash = hookBodyHashOf(srcContent);
+                if (srcVer === null) {
+                    warn(
+                        `source hooks/cc-status.js is missing the cc-status-dot-hook banner — version drift undetectable; copy proceeds but --status cannot report hook version`,
+                    );
+                } else if (srcVer !== HOOK_VERSION) {
+                    warn(
+                        `source hooks/cc-status.js banner ${srcVer} != HOOK_VERSION ${HOOK_VERSION} — bump the banner in cc-status.js to match`,
+                    );
+                } else if (srcBannerHash === null) {
+                    warn(
+                        `source hooks/cc-status.js banner ${srcVer} has no :HASH suffix — re-stamp with ${srcBodyHash} (round-3 hash scheme)`,
+                    );
+                } else if (srcBannerHash !== srcBodyHash) {
+                    warn(
+                        `source hooks/cc-status.js banner hash ${srcBannerHash} != body hash ${srcBodyHash} — hook body changed but banner not re-stamped; re-stamp the banner to match`,
+                    );
+                }
                 fs.copyFileSync(srcHook, path.join(destHooks, "cc-status.js"));
             } else {
                 warn("source hook missing, not copied: hooks/cc-status.js");
@@ -1692,11 +1719,45 @@ function reportStatus(): void {
     const { dir, version } = discoverExtension();
     log(`CC extension: v${version}`);
     log(`  ${dir}`);
+    // Surface the CC version against which the anchor strings were last
+    // verified byte-exact (architecture-review round-3 finding). install does
+    // NOT hard-gate against older/newer CC — the countOccurrences==1 anchor
+    // check is the actual safety net — but a user inspecting --status after a
+    // CC upgrade can see whether their running CC matches the verified baseline
+    // or is in untested-but-anchor-stable territory. Mirrors the inline comment
+    // at ANCHOR_A / ANCHOR_B ('verified byte-exact against CC X.Y.Z') by
+    // lifting that constant to a user-visible line.
+    if (version !== LAST_VERIFIED_CC) {
+        log(
+            `  last verified: ${LAST_VERIFIED_CC} (CC ${version} is untested — anchors may still match, install proceeds if countOccurrences==1)`,
+        );
+    } else {
+        log(`  last verified: ${LAST_VERIFIED_CC} (matches)`);
+    }
     const extJs = path.join(dir, "extension.js");
     const extSrc = fs.existsSync(extJs) ? fs.readFileSync(extJs, "utf8") : "";
     const patched = isExtensionPatched(extSrc);
     log(`extension.js patched: ${patched ? "YES" : "no"}`);
     if (patched) {
+        // Surface anchor injection health: INJECT_MARKER appears once per
+        // injection site (Anchor A always, Anchor B when present). 1 = A only
+        // (the v0.1.8 permission-pending blue-dot fix is INACTIVE — a yellow
+        // running dot may cover CC's native blue pending dot during a
+        // permission prompt); 2 = A+B (fix active). A CC update that drifted
+        // Anchor B's exact bytes leaves the user on the A-only path silently;
+        // this line makes that downgrade visible in --status so the user knows
+        // to re-run install after a CC update instead of discovering it via a
+        // miscolored tab during a permission prompt.
+        const markerN = countOccurrences(extSrc, INJECT_MARKER);
+        if (markerN >= 2) {
+            log(`  anchors injected: A+B (blue-dot fix ACTIVE)`);
+        } else if (markerN === 1) {
+            log(
+                `  anchors injected: A only (blue-dot fix INACTIVE — Anchor B not found at inject time; CC update likely drifted Anchor B's exact bytes. Re-run install.)`,
+            );
+        } else {
+            log(`  anchors injected: unexpected marker count ${markerN}`);
+        }
         // Surface a stale injected IIFE: a pre-v0.1.3 (or older) IIFE has the
         // marker but old logic (breathing frames etc.) — re-run re-injects.
         // Since the content-hash scheme landed, an intra-version drift (same
@@ -1731,29 +1792,52 @@ function reportStatus(): void {
     }
     const legacyBar = hasLegacyWebviewPatch(dir);
     log(`legacy webview bar (v0.1.2): ${legacyBar ? "detected — re-run install to clean" : "clean"}`);
-    // package.json commandCenter patch (v0.1.13+).
+    // Stale v0.1.13 commandCenter residue on CC's package.json (v0.1.14+ no
+    // longer patches package.json). Detected → re-run install to clean.
     const pkgPath = path.join(dir, "package.json");
     const pkgSrc = fs.existsSync(pkgPath) ? fs.readFileSync(pkgPath, "utf8") : "";
-    const pkgPatched = isPackageJsonPatched(pkgSrc);
-    log(`package.json patched (commandCenter 4-light): ${pkgPatched ? "YES" : "no"}`);
-    if (pkgPatched) {
-        const pver = injectedPkgVersion(pkgSrc);
-        const diskHash = injectedPkgHash(pkgSrc);
-        const wantHash = currentPkgHash(buildCcContribs());
-        const hashStale = diskHash !== wantHash;
-        if (pver === null) {
-            log(`  package.json injection: pre-v0.1.13 marker (STALE — re-run to re-inject)`);
-        } else if (pver !== INJECT_VERSION) {
-            log(`  package.json injection: ${pver} (STALE — expected ${INJECT_VERSION}; re-run to re-inject)`);
-        } else if (hashStale) {
-            log(
-                `  package.json injection: ${pver} hash ${diskHash ?? "(pre-hash-scheme)"} (STALE — expected ${wantHash}; re-run to re-inject)`,
-            );
-        } else {
-            log(`  package.json injection: ${pver} hash ${diskHash} (up to date)`);
-        }
-    }
+    const pkgStale = isPackageJsonPatched(pkgSrc);
+    log(`package.json (v0.1.13 commandCenter residue): ${pkgStale ? "STALE — re-run install to clean" : "clean"}`);
     log(`hooks wired: ${isHooksWired() ? "YES" : "no"}`);
+    // On-disk hook version + content hash (architecture-review round-2 + round-3
+    // hash gate): parse the banner at the top of INSTALL_DIR/hooks/cc-status.js
+    // and warn when EITHER the version differs from HOOK_VERSION OR the body
+    // hash differs from the current source body hash — mirrors the IIFE's
+    // stale-version + stale-hash surfacing above. A stale hook (older writer
+    // contract, or same version but drifted body) against a fresh IIFE is
+    // otherwise silent feature loss; these lines surface it so the user knows
+    // to re-run install. Round-3 closes the round-2 asymmetry: reader had a
+    // hash check, writer did not.
+    const installedHook = path.join(INSTALL_DIR, "hooks", "cc-status.js");
+    if (fs.existsSync(installedHook)) {
+        try {
+            const hdr = fs.readFileSync(installedHook, "utf8");
+            const { banner: insBanner } = splitHookBanner(hdr);
+            const insVer = parseHookBannerVersion(insBanner);
+            const insHash = parseHookBannerHash(insBanner);
+            const insBodyHash = hookBodyHashOf(hdr);
+            const wantHash = currentHookBodyHash();
+            if (insVer === null) {
+                log(`  hook script: (no version banner — pre-v0.1.14 or hand-edited; re-run install)`);
+            } else if (insVer !== HOOK_VERSION) {
+                log(
+                    `  hook script: ${insVer} (STALE — expected ${HOOK_BANNER_PREFIX}${HOOK_VERSION}; re-run to refresh)`,
+                );
+            } else if (insHash === null) {
+                log(`  hook script: ${insVer} hash (pre-hash-scheme — STALE; re-run install to stamp ${insBodyHash})`);
+            } else if (wantHash !== null && insBodyHash !== wantHash) {
+                log(
+                    `  hook script: ${insVer} hash ${insHash} (STALE — body ${insBodyHash} != source ${wantHash}; re-run to refresh)`,
+                );
+            } else {
+                log(`  hook script: ${insVer} hash ${insHash} (up to date)`);
+            }
+        } catch {
+            log(`  hook script: (unreadable — ${INSTALL_DIR}/hooks/cc-status.js)`);
+        }
+    } else {
+        log(`  hook script: (not installed — re-run install)`);
+    }
     // The injected IIFE references RUNTIME_RES_DIR (INSTALL_DIR/resources).
     // Check THERE honestly — do NOT silently fall back to the project source
     // copy, which would hide a real "icons will go blank" risk (a fallback to
@@ -1774,7 +1858,7 @@ function printHelp(): void {
             "",
             "Usage:",
             "  vscode-claude-code-status-dot            install patch + wire hooks (idempotent)",
-            "  vscode-claude-code-status-dot --revert   restore extension.js + package.json (and legacy v0.1.2 webview), remove hooks + runtime copy",
+            "  vscode-claude-code-status-dot --revert   restore extension.js + package.json (cleans v0.1.13 commandCenter residue + legacy v0.1.2 webview), remove hooks + runtime copy",
             "  vscode-claude-code-status-dot --status   show detection results, change nothing",
             "  vscode-claude-code-status-dot --help     this message",
             "",
@@ -1805,16 +1889,6 @@ function run(argv: string[]): void {
     if (args.includes("--check-iife")) {
         // Dev: dump the injected IIFE string for syntax verification (node --check).
         console.log(buildIIFE(RUNTIME_RES_DIR));
-        return;
-    }
-    if (args.includes("--check-pkg-contribs")) {
-        // Dev: dump buildCcContribs() output as JSON so test-pkg-contribs.mjs
-        // can lock the 20-command / 20-menu / 20-palette contract + the dim-when
-        // reload-resilience clause. Mirrors --check-iife's role: zero install-side
-        // coverage was a v0.1.13 blind spot (test-iife.mjs only saw the IIFE
-        // string), so any refactor breaking buildCcContribs (cap value, dim emoji,
-        // when clause form, command id shape) would pass every existing test.
-        console.log(JSON.stringify(buildCcContribs(), null, 2));
         return;
     }
     if (args.includes("--status")) {
@@ -1855,8 +1929,21 @@ function run(argv: string[]): void {
         log("detected legacy aggregate bar (v0.1.2) in webview — removing");
         restoreWebview(dir);
     }
+    // Auto-clean: v0.1.13 left a commandCenter patch (20 commands + 20 menu
+    // items + 20 palette hides) on CC's package.json. v0.1.14 removed that
+    // surface (the SBI is a single runtime createStatusBarItem, no package.json
+    // contribution). If we detect the v0.1.13 marker, restore package.json
+    // from .bak before patching. Users upgrading from v0.1.13 just re-run
+    // `npx vscode-claude-code-status-dot` and the residue is cleaned for them
+    // — no manual --revert needed.
+    const pkgPath = path.join(dir, "package.json");
+    if (fs.existsSync(pkgPath) && isPackageJsonPatched(fs.readFileSync(pkgPath, "utf8"))) {
+        log("detected stale v0.1.13 commandCenter patch in package.json — removing");
+        restorePackageJson(dir);
+    }
     patchExtension(dir);
-    patchPackageJson(dir);
+    // (v0.1.14: no patchPackageJson — the SBI is a runtime createStatusBarItem,
+    //  no package.json contribution. --revert still cleans any residue.)
     // Surface the install/runtime coupling BEFORE wiring hooks: hookCommand
     // bakes process.execPath into settings.json, and if that path lives under
     // nvm/asdf/volta it can disappear later. Warned here so the user sees it

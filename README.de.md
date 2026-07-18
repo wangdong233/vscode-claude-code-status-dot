@@ -25,6 +25,7 @@
 - 🔔 **Fertig-/Unterbrochen-Benachrichtigung** – macOS-Systembenachrichtigung (rechte obere Ecke, mit Ton, standardmäßig `Glass`) erscheint im Vordergrund wie im Hintergrund; auf Windows/Linux Fallback auf VSCode-interne Nachricht (Toast unten rechts), ohne Schaltflächen, verschwindet automatisch
 - ⚙️ **Bleibt während Workflow-Lauf auf running** – Hintergrund-Subagent/Cron in der Luft zeigt nicht fälschlich Grün; `Stop` entscheidet autoritativ
 - 📂 **Open Editors synchron** – der CC-Tab in der Ansicht „Offene Editoren" oben links trägt ebenfalls den Zustands-Punkt
+- 📊 **Aggregatzähler unten rechts** – ein Statusleisten-Item zeigt `🟢fertig 🟡läuft 🔴unterbrochen`-Zähler über ALLE CC-Sessions auf einen Blick, aktualisiert im 500ms-Takt (globales Singleton, keine extra Timer, koexistiert mit den Per-Tab-Punkten)
 - ↩️ **Ein-Klick-Wiederherstellung ohne Nebeneffekte** – `--revert` stellt extension.js vollständig aus `.bak` wieder her, entfernt Hooks chirurgisch und behält deine Benutzerdaten
 
 > ⚠️ **Ehrliche Erklärung**: Dieses Projekt ist ein **Patch, keine eigenständige Erweiterung** – VSCode erlaubt es Drittanbieter-Erweiterungen nicht, das Webview-Tab-Icon einer anderen Erweiterung zu ändern. Der einzig mögliche Pfad ist es, die `extension.js` von CC selbst zu patchen. Preis: CC-Auto-Updates überschreiben es, Befehl erneut ausführen.

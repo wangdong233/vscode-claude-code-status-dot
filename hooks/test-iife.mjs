@@ -58,7 +58,8 @@ function getIife() {
   if (r.status !== 0) {
     throw new Error(
       'dist/patch.js missing and `npx tsx patch.ts --check-iife` failed. ' +
-      'Run `npm run build` first. stderr: ' + (r.stderr || '')
+        'Run `npm run build` first. stderr: ' +
+        (r.stderr || ''),
     );
   }
   return stripShellNoise(r.stdout);
@@ -93,16 +94,27 @@ console.log('(extracting buildIIFE() output via `node dist/patch.js --check-iife
   const r = spawnSync(process.execPath, ['--check', tmp], { encoding: 'utf8' });
   check('IIFE.1  syntax (node --check on extracted IIFE)', r.status === 0, (r.stderr || '').trim());
   // Bracket balance (cheap sanity since we hand-edit the template literal).
-  const pairs = [['(', ')'], ['{', '}'], ['[', ']']];
+  const pairs = [
+    ['(', ')'],
+    ['{', '}'],
+    ['[', ']'],
+  ];
   let bal = true;
   const detail = [];
   for (const [o, c] of pairs) {
     const oc = (iife.match(new RegExp('\\' + o, 'g')) || []).length;
     const cc = (iife.match(new RegExp('\\' + c, 'g')) || []).length;
-    if (oc !== cc) { bal = false; detail.push(o + c + ': ' + oc + '/' + cc); }
+    if (oc !== cc) {
+      bal = false;
+      detail.push(o + c + ': ' + oc + '/' + cc);
+    }
   }
   check('IIFE.2  bracket balance () {} []', bal, detail.join(' '));
-  try { fs.unlinkSync(tmp); } catch { /* best-effort */ }
+  try {
+    fs.unlinkSync(tmp);
+  } catch {
+    /* best-effort */
+  }
 }
 
 // --- 2. State → SVG mapping (STATES.md §1) ----------------------------------
@@ -144,7 +156,10 @@ check('IIFE.17 async osascript failure -> vsMsg()', /vsMsg\s*\(/.test(iife));
 // The only use of t.__ccTitle in the IIFE is the notify-suffix `" ["+title+"]"`.
 // Asserting on the substring is enough; a regex over the JS source is brittle
 // because `+` and `.` need careful escaping.
-check('IIFE.18 notify references __ccTitle for message suffix', iife.includes('t.__ccTitle') && iife.includes('["+t.__ccTitle+"]'));
+check(
+  'IIFE.18 notify references __ccTitle for message suffix',
+  iife.includes('t.__ccTitle') && iife.includes('["+t.__ccTitle+"]'),
+);
 
 // --- 8. Timer lifecycle (M21) — setInterval captured + onDidDispose clear ---
 check('IIFE.19 setInterval captured to var', /var\s+timer\s*=\s*setInterval/.test(iife));
@@ -156,6 +171,145 @@ check('IIFE.21 banner carries marker+version', /\/\*cc-status-dot-injected:v\d+\
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
 check('IIFE.23 no bare `seq` counter (M8 rename)', !/\bseq\s*%/.test(iife) && !/\bseq\+\+/.test(iife));
+
+// --- 11. Aggregated status bar item (v0.1.11 singleton item + singleton timer) --
+// The SBI is a window-scoped singleton so N panels share ONE item AND one
+// aggregation timer (v0.1.11 lifted the refresh off the per-panel tick into
+// globalThis.__ccsdSbiTimer so a P-panel window ticks the aggregation ONCE
+// per 500ms, not P times — aligning timer scope with item scope). The item
+// + timer + a per-window panel counter use the project-scoped __ccsd* prefix
+// (NOT CC's __cc* namespace — see the `cc-status-bar-injected` tombstone in
+// restoreWebview() in patch.ts).
+// Aggregation now applies the §4 reader rules (done>5min→idle; running
+// mtime>30min→idle) so per-tab dots and the SBI count agree. The panel
+// counter enables a clean "last panel out → hide SBI + clear singleton timer"
+// path in onDidDispose so the bar can't freeze on a stale count.
+//
+// Emoji use \u{...} escapes (ASCII-only injected source — a backslash-u-brace
+// sequence in the IIFE string), so the regexes match the literal escape text,
+// not the decoded codepoint.
+check('IIFE.24 SBI globalThis singleton guard (item)', /globalThis\.__ccsdSbi/.test(iife));
+// R3-5 (round 3): the original regex `/globalThis\.__ccSbi(?!s|d|T|P)/` had a negative
+// lookahead that EXEMPTED exactly the suffixes a future bad refactor would produce
+// (`__ccSbiTimer`'s `T`, `__ccSbiItem`'s... etc). A regression renaming `__ccsdSbiTimer`
+// → `__ccSbiTimer` would slip past. The CC namespace is `__cc` + capital letter
+// directly; our project namespace is `__cc` + lowercase `sd` + anything. So the
+// correct discriminator is `/globalThis\.__cc[A-Z]/` — matches ANY bare CC-namespace
+// global, ignores our `__ccsd*` (lowercase `s` after `__cc`). Asserts no `globalThis.__ccX`
+// where X is a capital letter (the CC-native naming pattern) is present.
+check('IIFE.24b SBI uses project-scoped __ccsd* (NOT CC __cc[A-Z] ns)', !/globalThis\.__cc[A-Z]/.test(iife));
+check(
+  'IIFE.25 SBI createStatusBarItem(Right)',
+  /vs\.window\.createStatusBarItem\s*\(\s*vs\.StatusBarAlignment\.Right/.test(iife),
+);
+check('IIFE.26 SBI name set', iife.includes('"Claude Code Sessions"'));
+check('IIFE.27 SBI reads ALL files via readdirSync(DIR)', /readdirSync\s*\(\s*DIR\s*\)/.test(iife));
+check('IIFE.28 SBI done count = green circle (\\u{1F7E2})', /\\u\{1F7E2\}/.test(iife));
+check('IIFE.29 SBI running count = yellow circle (\\u{1F7E1})', /\\u\{1F7E1\}/.test(iife));
+check('IIFE.30 SBI interrupted count = red circle (\\u{1F534})', /\\u\{1F534\}/.test(iife));
+check('IIFE.31 SBI idle fallback = white circle (\\u{26AA})', /\\u\{26AA\}/.test(iife));
+// Crash-safety: the aggregation block must be wrapped in try/catch so a
+// readdir/parse failure (race with SessionEnd's file delete, JSON corruption)
+// cannot brick the per-panel tick that follows it. v0.1.11 structure is
+// `setInterval(function(){try{var sbi=globalThis.__ccsdSbi;...}catch(e){}})`.
+check(
+  'IIFE.32 SBI aggregation wrapped in try/catch',
+  /setInterval\s*\(\s*function\s*\(\s*\)\s*\{\s*try\s*\{\s*var\s+sbi\s*=\s*globalThis\.__ccsdSbi/.test(iife),
+);
+// The aggregation must NOT replace the per-tab dot — assert the iconPath
+// assignment still exists after the aggregation block.
+check('IIFE.33 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*vs\.Uri\.file/.test(iife));
+
+// --- 12. v0.1.11 lifecycle + reader-rule parity (this dimension's e2e concerns) --
+// hide()/show() lifecycle (the e2e "hide-show toggle" concern): a regression
+// that dropped either call (e.g. an accidental deletion during a version bump,
+// or a refactor to always-show policy) would silently pass IIFE.1-33 because
+// none of them grep for the toggle. Lock them explicitly.
+check(
+  'IIFE.34 SBI hide() called when total===0',
+  /if\s*\(\s*total\s*===\s*0\s*\)\s*\{\s*try\s*\{\s*sbi\.hide\s*\(\s*\)/.test(iife),
+);
+check('IIFE.35 SBI show() called when total>0', /try\s*\{\s*sbi\.show\s*\(\s*\)/.test(iife));
+// idle fallback must be CONDITIONAL on parts.length===0 — a regression that
+// made it unconditional (always-push ⚪ alongside the other segments) would
+// still satisfy IIFE.31 (which only checks the escape exists). Lock the guard.
+check(
+  'IIFE.36 SBI idle fallback guarded by parts.length===0',
+  /if\s*\(\s*parts\.length\s*===\s*0\s*\)\s*parts\.push\s*\(\s*"\\u\{26AA\}"/.test(iife),
+);
+// tooltip content: the only place the human-readable color legend appears.
+check(
+  'IIFE.37 SBI tooltip labels present',
+  /Claude Code sessions: done /.test(iife) && /\/ running /.test(iife) && /\/ interrupted /.test(iife),
+);
+// v0.1.11 reader-rule parity: aggregation applies §4 done>5min→idle so the
+// SBI count matches per-tab rendering (without this, a 2h-old done would
+// render as a gray idle dot on the tab but still count as 🟢 in the SBI).
+check(
+  'IIFE.38 SBI applies §4 done>5min→idle rule in aggregation',
+  /if\s*\(\s*st\s*===\s*"done"\s*&&\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*DONE_TO_IDLE_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}/.test(
+    iife,
+  ),
+);
+// v0.1.11 GC heuristic for crashed running sessions (§7.5): a state=running
+// file whose mtime exceeds SBI_RUNNING_STALE_MS is counted as idle, not
+// running — so a crashed/killed CC process (no SessionEnd) can't pin 🟡1
+// forever.
+check(
+  'IIFE.39 SBI stale-running heuristic (mtime>SBI_RUNNING_STALE_MS→idle)',
+  /\(\s*Date\.now\s*\(\s*\)\s*-\s*mt\s*\)\s*>\s*SBI_RUNNING_STALE_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}/.test(iife),
+);
+// v0.1.11 singleton timer: aggregation lifted off the per-panel tick into
+// globalThis.__ccsdSbiTimer so P panels → 1 aggregation tick per 500ms.
+check(
+  'IIFE.40 SBI singleton timer guard',
+  /if\s*\(\s*!globalThis\.__ccsdSbiTimer\s*\)\s*\{globalThis\.__ccsdSbiTimer\s*=\s*setInterval/.test(iife),
+);
+// v0.1.11 panel counter: enables "last panel out → hide SBI + clear timer"
+// so the bar can't freeze on a stale count when no panel remains to refresh.
+check(
+  'IIFE.41 SBI panel counter increment at IIFE entry',
+  /globalThis\.__ccsdPanelCount\s*=\s*\(\s*globalThis\.__ccsdPanelCount\s*\|\|\s*0\s*\)\s*\+\s*1/.test(iife),
+);
+check(
+  'IIFE.42 SBI panel counter decrement + last-out teardown in onDidDispose',
+  /globalThis\.__ccsdPanelCount\s*=\s*\(\s*globalThis\.__ccsdPanelCount\s*\|\|\s*1\s*\)\s*-\s*1/.test(iife) &&
+    /if\s*\(\s*globalThis\.__ccsdPanelCount\s*<=\s*0\s*\)/.test(iife) &&
+    /clearInterval\s*\(\s*globalThis\.__ccsdSbiTimer\s*\)/.test(iife),
+);
+
+// --- 13. v0.1.12 round-3 review: SBI setup-isolation + teardown wrap --------
+// R3-1 (HIGH): the SBI singleton creation (vs.window.createStatusBarItem) and
+// the SBI singleton timer creation (setInterval) must each be wrapped in their
+// OWN try/catch. A throw inside createStatusBarItem (disposed host, transient
+// VSCode API failure) would otherwise propagate up through the comma-operator
+// chain into CC's update_session_state handler — bricking session-state
+// tracking AND skipping the per-tab setInterval AND skipping onDidDispose
+// registration (so the panel counter bumped at IIFE entry would never
+// decrement, a permanent leak). The aggregation BODY's try/catch (IIFE.32)
+// does NOT cover the SETUP — these are separate concerns, locked separately.
+check(
+  'IIFE.43 SBI singleton-item creation wrapped in try/catch (v0.1.12)',
+  /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdSbi\s*\)\s*\{globalThis\.__ccsdSbi\s*=\s*vs\.window\.createStatusBarItem/.test(
+    iife,
+  ),
+);
+check(
+  'IIFE.44 SBI singleton-timer creation wrapped in try/catch (v0.1.12)',
+  /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdSbiTimer\s*\)\s*\{globalThis\.__ccsdSbiTimer\s*=\s*setInterval/.test(iife) &&
+    /,\s*500\s*\)\s*;\s*\}\s*\}\s*catch\s*\(\s*e\s*\)\s*\{/.test(iife),
+);
+// R3-4 (MEDIUM): the onDidDispose teardown registration must remain wrapped in
+// try/catch (matches the per-tab tick's existing isolation pattern since
+// v0.1.9). A regression that dropped the outer try/catch (e.g. an accidental
+// deletion during a refactor of the panel-counter teardown logic) would pass
+// IIFE.1-44 because none of them assert the wrap — only the internals. Lock
+// it explicitly so the failure-isolation guarantee cannot silently regress.
+check(
+  'IIFE.45 onDidDispose registration wrapped in try/catch',
+  /try\s*\{\s*t\.panelTab\.onDidDispose\s*\(/.test(iife) &&
+    /\)\s*\}\s*catch\s*\(\s*e\s*\)\s*\{\s*\}/.test(iife),
+);
 
 // --- summary ---------------------------------------------------------------
 

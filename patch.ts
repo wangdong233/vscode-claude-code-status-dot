@@ -118,8 +118,31 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  but the stamped version differs, patchExtension restores extension.js from .bak and
  *  re-injects the current IIFE — otherwise structural IIFE changes (e.g. v0.1.4 reverting
  *  to static running, or v0.1.3 removing the aggregate bar) would be silently swallowed
- *  because the bare marker still matches. */
-const INJECT_VERSION = "v0.1.9";
+ *  because the bare marker still matches.
+ *
+ *  v0.1.11 SBI aggregation refactor: per-panel-tick aggregation lifted into a window-
+ *  scoped singleton timer (globalThis.__ccsdSbiTimer, aligned with the singleton
+ *  StatusBarItem scope); aggregation now applies the §4 done>5min→idle rule and a
+ *  §7.2 stale-running (>30min mtime)→idle heuristic so per-tab dots and the SBI show
+ *  consistent counts; globalThis key is __ccsdSbi (project-scoped __ccsd*
+ *  prefix keeps CC's __cc* namespace clean — see the `cc-status-bar-injected`
+ *  tombstone in restoreWebview()); panel counter (__ccsdPanelCount) hides the SBI + clears the singleton timer when
+ *  the last CC panel closes so the bar cannot freeze on a stale count;
+ *  SBI tooltip now appends idle count when ag.idle>0; SBI block split into multiple
+ *  array elements matching the surrounding "one-logical-step-per-element" style.
+ *
+ *  v0.1.12 round-3 review fixes: the SBI singleton creation (`vs.window.createStatusBarItem`)
+ *  and the SBI singleton timer creation (`setInterval`) are each wrapped in their OWN
+ *  try/catch — matching the per-tab tick's existing isolation pattern. Previously a
+ *  transient VSCode API failure (disposed extension host, createStatusBarItem throw)
+ *  would propagate up through the comma-operator chain into CC's `update_session_state`
+ *  handler, bricking session-state tracking AND skipping the per-tab setInterval AND
+ *  the onDidDispose registration (so the panel counter bumped at IIFE entry would
+ *  never decrement — a permanent leak). Now: SBI failure degrades gracefully (no
+ *  aggregation bar, but per-tab dots + notify + permission yield still work). Also
+ *  fixed: §7.5→§7.2 attribution on the stale-running comment (the rule is DEFINED in
+ *  §7.2; §7.5 only references it). */
+const INJECT_VERSION = "v0.1.12";
 
 /** Substring appended (as a shell comment) to every hook command we own in settings.json.
  *  Used for idempotent dedupe on install and surgical removal on --revert. */
@@ -164,12 +187,7 @@ const RUNTIME_RES_DIR = path.join(INSTALL_DIR, "resources");
  *  only interrupted animates (flashSeq%2 on/off fast-flash between error.svg and
  *  CC's default). installRuntimeFiles auto-sweeps the stale v0.1.3
  *  `claude-logo-running-{0..7}.svg` frames on upgrade. */
-const OUR_SVGS = [
-    "claude-logo-idle.svg",
-    "claude-logo-running.svg",
-    "claude-logo-done.svg",
-    "claude-logo-error.svg",
-];
+const OUR_SVGS = ["claude-logo-idle.svg", "claude-logo-running.svg", "claude-logo-done.svg", "claude-logo-error.svg"];
 
 /** Extension directories to search, highest version wins. */
 const SEARCH_DIRS = [
@@ -230,8 +248,7 @@ const ANCHOR_A =
  *     on disk, which previously caused the yellow running dot to cover the
  *     blue pending dot).
  */
-const ANCHOR_B =
-    'this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)';
+const ANCHOR_B = "this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)";
 
 // ---------------------------------------------------------------------------
 // Logging — plain text, no emojis (kept terminal-friendly & greppable)
@@ -368,7 +385,9 @@ function discoverExtension(): DiscoveredExt {
         // the other CC tab isn't getting a status dot. Re-running install
         // after the lower-version one updates will pick the new top.
         for (let i = 1; i < candidates.length; i++) {
-            log(`  skipping lower version ${candidates[i].version.join(".")} at ${candidates[i].dir} (only one CC install is patched per run)`);
+            log(
+                `  skipping lower version ${candidates[i].version.join(".")} at ${candidates[i].dir} (only one CC install is patched per run)`,
+            );
         }
     }
     return { dir: top.dir, version: top.version.join(".") };
@@ -439,7 +458,10 @@ function assertCompiles(code: string, label: string): void {
                 `${label} would be a SyntaxError — refusing to write (would brick the CC extension).\n` +
                     `This is a bug in the injected code, not a Claude Code update — fix buildIIFE, then re-run. No files were changed.\n` +
                     `node --check output:\n` +
-                    stderr.split("\n").map((l) => "    " + l).join("\n"),
+                    stderr
+                        .split("\n")
+                        .map((l) => "    " + l)
+                        .join("\n"),
             );
         }
     } finally {
@@ -455,7 +477,7 @@ function assertCompiles(code: string, label: string): void {
 // Build the injected IIFE. Single line, version-robust, no minified refs.
 //   t = the `ts` panel instance (has panelTab, context.extensionPath).
 //   Reads ~/.claude/cc-tab-status/<sid>.json -> {state, since, error?}
-//   State machine + notification mirror docs/STATES.md §1/§4/§4b — keep in sync.
+//   State machine + notification mirror docs/STATES.md §1/§4/§4b/§7 — keep in sync.
 //     running     -> steady claude-logo-running.svg (static yellow #CCA700).
 //                    v0.1.3 tried an 8-frame breathing animation, but iconPath
 //                    frame-switching is inherently discrete and read as flicker,
@@ -493,23 +515,68 @@ function assertCompiles(code: string, label: string): void {
 //   t.panelTab.onDidDispose so closing the CC panel releases the 500 ms tick
 //   (otherwise the interval + its closed-over `t`/`panelTab` refs leak for
 //   the lifetime of the VSCode window).
+//
+//   SBI (status-bar aggregation, v0.1.10+; see docs/STATES.md §7):
+//     Window-scoped StatusBarItem at StatusBarAlignment.Right showing
+//     "🟢{done} 🟡{running} 🔴{interrupted}" with 0-count segments omitted and
+//     ⚪{idle} as a fallback when only idle sessions exist; hidden entirely
+//     when the state directory has zero parseable *.json (so CC-less windows
+//     stay clean). Sits ALONGSIDE the per-tab dot (does NOT replace it).
+//   SBI singleton scope (v0.1.11 refactor):
+//     BOTH the item (globalThis.__ccsdSbi) AND its refresh timer
+//     (globalThis.__ccsdSbiTimer) are window-scoped singletons — the first
+//     CC panel creates them, every subsequent panel's IIFE reuses them, so
+//     a window with P panels ticks the aggregation ONCE per 500 ms (not P
+//     times), aligning timer scope with item scope (previously every panel
+//     recomputed the same aggregation; correct but O(P×S) I/O).
+//   SBI reader-rule parity (v0.1.11):
+//     The aggregation applies the SAME §4 reader rules as per-tab rendering
+//     — done with since>5min → idle, and running with mtime>30min → idle
+//     (the latter is a §7.5 heuristic for crashed/killed CC processes whose
+//     SessionEnd never fires) — so the SBI count and the per-tab dots agree
+//     on what "done"/"running" mean. Without this, a 2-hour-old done would
+//     render as a gray idle dot on its tab but still be counted as 🟢 in
+//     the SBI.
+//   SBI panel-counter lifecycle (v0.1.11):
+//     Each IIFE entry bumps globalThis.__ccsdPanelCount; onDidDispose
+//     decrements and, when the count hits zero (last CC panel in the window
+//     closed), clears the singleton timer and hides the SBI — so the bar
+//     can no longer freeze on a stale count when no panel remains to
+//     refresh it. Opening a fresh CC panel re-arms the timer + shows the
+//     SBI again on its first tick.
+//   SBI isolation:
+//     The aggregation lives in its own try/catch inside the singleton timer
+//     callback — a readdir/stat/parse failure can never brick the per-panel
+//     tick (which has its own setInterval) nor vice-versa.
+//   SBI naming:
+//     globalThis.__ccsdSbi / __ccsdSbiTimer / __ccsdPanelCount use a
+//     project-scoped __ccsd* prefix (mirrors INJECT_MARKER / HOOK_MARKER),
+//     NOT the bare __cc* prefix — see the `cc-status-bar-injected` tombstone
+//     in restoreWebview(): `__cc*` is CC's own namespace and a future CC
+//     release could occupy the same globalThis key, silently disabling our guard.
+//     Emoji (🟢🟡🔴⚪) are written as \u{...} escapes to keep the injected
+//     source ASCII-only (matches test-iife.mjs L163-L165 note).
 // ---------------------------------------------------------------------------
 
 function buildIIFE(resDir: string): string {
     // JSON.stringify yields a safely-quoted, escaped JS string literal for the path
     // (also handles the non-ASCII chars in the project path correctly).
     const resLiteral = JSON.stringify(resDir);
-    // State machine + notification mirror docs/STATES.md §1/§4/§4b. Keep in sync.
+    // State machine + notification + SBI aggregation mirror docs/STATES.md §1/§4/§4b/§7. Keep in sync.
     return [
         `/*${INJECT_MARKER}:${INJECT_VERSION}*/`,
         `(function(t){`,
         `if(t.__ccDotStarted||!t.panelTab)return;`,
         `t.__ccDotStarted=true;`,
+        `/*SBI panel counter: bumped per IIFE entry so the onDidDispose teardown at the tail of this IIFE can detect the last panel out and tear down the singleton SBI timer + hide the item (v0.1.11).*/`,
+        `globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||0)+1;`,
         `var fs=require("fs"),pth=require("path"),vs=require("vscode"),os=require("os");`,
         `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");`,
         `var RES=${resLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         `var DONE_TO_IDLE_MS=5*60*1000;`,
+        `/*SBI stale-running heuristic (§7.2; referenced from §7.5): a legit running session gets PreToolUse/PostToolUse heartbeats every tool call, so a state=running file whose mtime exceeds this window is almost certainly a crashed/killed CC process whose SessionEnd never fired — count it as idle, not running.*/`,
+        `var SBI_RUNNING_STALE_MS=30*60*1000;`,
         `var flashSeq=0,lastTermSince=null,seeded=false;/*flashSeq: interrupted on/off frame index (flashSeq%2)*/`,
         `function notify(st,err){`,
         `var c=vs.workspace.getConfiguration("ccStatusDot");`,
@@ -524,6 +591,69 @@ function buildIIFE(resDir: string): string {
         `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var sndStr=snd?(' sound name "'+snd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var vsMsg=function(){if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);};try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr],function(e){if(e)vsMsg()})}catch(e){vsMsg()}}`,
         `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);}`,
         `}`,
+        /* v0.1.11 SBI singleton item + singleton timer. Both window-scoped
+         * (one per VSCode window, NOT per panel) — first CC panel creates them,
+         * every later panel's IIFE reuses them, so a P-panel window ticks the
+         * aggregation ONCE per 500ms (not P times) and writes the SAME item.
+         * Project-scoped __ccsd* prefix keeps CC's __cc* namespace clean (see
+         * the `cc-status-bar-injected` tombstone in restoreWebview()). Aggregation
+         * applies §4 reader rules (done>5min→idle; running stale>30min→idle) so
+         * per-tab dots and the SBI agree on counts.
+         *
+         * TWO independent try/catch wrappers (v0.1.12 round-3 fix):
+         *   (1) Each SETUP step (SBI creation, SBI timer creation) is wrapped
+         *       individually — a throw inside `vs.window.createStatusBarItem`
+         *       (transient VSCode API failure, disposed host) is swallowed and
+         *       the IIFE continues to the per-tab tick. Without this, a throw
+         *       would propagate up through the comma-operator chain into CC's
+         *       `update_session_state` handler (bricking session-state tracking),
+         *       skip the per-tab setInterval, AND skip onDidDispose registration
+         *       (so the panel counter bumped at IIFE entry would never decrement
+         *       — a permanent leak).
+         *   (2) The aggregation BODY inside the setInterval callback has its
+         *       own try/catch so a readdir/stat/parse failure can never brick
+         *       the per-panel tick (which has its own setInterval).
+         * Emoji (🟢🟡🔴⚪) use \u{...} escapes to keep injected source ASCII-only. */
+        `try{if(!globalThis.__ccsdSbi){globalThis.__ccsdSbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Right,0);globalThis.__ccsdSbi.name="Claude Code Sessions";}}catch(e){}`,
+        `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
+        `try{`,
+        `var sbi=globalThis.__ccsdSbi;`,
+        `var ag={running:0,done:0,interrupted:0,idle:0};`,
+        `try{`,
+        `var files=fs.readdirSync(DIR);`,
+        `for(var i=0;i<files.length;i++){`,
+        `if(!files[i].endsWith(".json"))continue;`,
+        `try{`,
+        `var fp=pth.join(DIR,files[i]);`,
+        `var j=JSON.parse(fs.readFileSync(fp,"utf8"));`,
+        `var st=j.state;var since=j.since;`,
+        `/*§4 reader rule: done>5min→idle so SBI matches per-tab rendering*/`,
+        `if(st==="done"&&since&&(Date.now()-since)>DONE_TO_IDLE_MS){st="idle";}`,
+        `/*§7.2 stale-running heuristic: mtime>SBI_RUNNING_STALE_MS→idle (running files get tool heartbeats, so old mtime=crashed session)*/`,
+        `else if(st==="running"){var mt=0;try{mt=fs.statSync(fp).mtimeMs}catch(e2){}if(mt&&(Date.now()-mt)>SBI_RUNNING_STALE_MS){st="idle";}}`,
+        `if(st==="running")ag.running++;`,
+        `else if(st==="done")ag.done++;`,
+        `else if(st==="interrupted")ag.interrupted++;`,
+        `else if(st==="idle")ag.idle++;`,
+        `}catch(e){}`,
+        `}`,
+        `}catch(e){}`,
+        `var total=ag.running+ag.done+ag.interrupted+ag.idle;`,
+        `if(total===0){try{sbi.hide()}catch(e){}}`,
+        `else{`,
+        `var parts=[];`,
+        `if(ag.done>0)parts.push("\\u{1F7E2}"+ag.done);`,
+        `if(ag.running>0)parts.push("\\u{1F7E1}"+ag.running);`,
+        `if(ag.interrupted>0)parts.push("\\u{1F534}"+ag.interrupted);`,
+        `/*idle fallback: only when done/running/interrupted are all 0 (e.g. crashed running sessions counted as idle, or aged done files post-5-min rule)*/`,
+        `if(parts.length===0)parts.push("\\u{26AA}"+ag.idle);`,
+        `sbi.text=parts.join(" ");`,
+        `/*tooltip lists all four states' counts, with idle appended only when nonzero so the white-circle fallback has a legend*/`,
+        `sbi.tooltip="Claude Code sessions: done "+ag.done+" / running "+ag.running+" / interrupted "+ag.interrupted+(ag.idle>0?" / idle "+ag.idle:"");`,
+        `try{sbi.show()}catch(e){}`,
+        `}`,
+        `}catch(e){}`,
+        `},${TICK_MS});}}catch(e){}`,
         `var timer=setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
         `var sid=t.__ccSid;if(!sid)return;`,
@@ -531,7 +661,7 @@ function buildIIFE(resDir: string): string {
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||""}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
         `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){lastTermSince=since;try{notify(st,err)}catch(e){}}`,
-        `/*permission pending:yield to CC native blue dot*/if(t.__ccPending)return;`,
+        `/*permission pending: yield to CC native blue dot*/if(t.__ccPending)return;`,
         `var now=Date.now();`,
         `var svg;`,
         `if(st==="interrupted"){svg=(flashSeq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
@@ -542,8 +672,8 @@ function buildIIFE(resDir: string): string {
         `flashSeq++;`,
         `try{p.iconPath=vs.Uri.file(svg)}catch(e){}`,
         `},${TICK_MS});`,
-        `/*release the 500 ms tick + its closed-over refs when the panel closes*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer)})}catch(e){}`,
+        `/*release this panel's 500ms tick + closed-over refs when the panel closes; also decrement the SBI panel counter, and on the LAST panel out (count→0) clear the singleton SBI timer + hide the item so the bar can't freeze on a stale count with no surviving panel to refresh it (v0.1.11).*/`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}try{if(globalThis.__ccsdSbi)globalThis.__ccsdSbi.hide()}catch(e){}}})}catch(e){}`,
         `})(this)`,
     ].join("");
 }
@@ -582,12 +712,13 @@ function injectFresh(extJs: string, src: string): void {
     const bCount = countOccurrences(src, ANCHOR_B);
     if (bCount > 1) {
         fail(
-            `Anchor B (rename_tab icon branch) matched ${bCount} times, expected 0 or 1. ` +
-                `No files were modified.`,
+            `Anchor B (rename_tab icon branch) matched ${bCount} times, expected 0 or 1. ` + `No files were modified.`,
         );
     }
     if (bCount === 0) {
-        warn("Anchor B not found — installing with Anchor A only. The permission-pending blue-dot fix will be INACTIVE (a yellow running dot may cover CC's native blue pending dot during a permission prompt), and ~500 ms flash may occur after CC rename_tab.");
+        warn(
+            "Anchor B not found — installing with Anchor A only. The permission-pending blue-dot fix will be INACTIVE (a yellow running dot may cover CC's native blue pending dot during a permission prompt), and ~500 ms flash may occur after CC rename_tab.",
+        );
     }
 
     // One-time original backup, only after we know injection will succeed.
@@ -619,7 +750,10 @@ function injectFresh(extJs: string, src: string): void {
         // stashed value would otherwise go stale. notify() appends
         // "["+__ccTitle+"]" to the notification body, so keeping it fresh
         // matters for the message shown to the user.
-        const replB = "this.panelTab.title=e.request.title;this.__ccTitle=e.request.title;this.__ccPending=!!e.request.hasPendingPermissions;" + iife + ";let r;if(e.request.hasPendingPermissions)";
+        const replB =
+            "this.panelTab.title=e.request.title;this.__ccTitle=e.request.title;this.__ccPending=!!e.request.hasPendingPermissions;" +
+            iife +
+            ";let r;if(e.request.hasPendingPermissions)";
         next = next.replace(ANCHOR_B, replB);
         if (countOccurrences(next, INJECT_MARKER) < 2) {
             fail("Anchor B replacement did not apply. No files were modified.");
@@ -681,7 +815,9 @@ function patchExtension(extDir: string): void {
             }
             warn(`extension.js.bak is itself patched — cannot cleanly re-inject; falling back to RES rewrite`);
         } else {
-            warn(`stale injected IIFE (${ver ?? "pre-v0.1.3"}) but no extension.js.bak — cannot re-inject; falling back to RES rewrite`);
+            warn(
+                `stale injected IIFE (${ver ?? "pre-v0.1.3"}) but no extension.js.bak — cannot re-inject; falling back to RES rewrite`,
+            );
         }
         // Fall through to baked-RES check as a best-effort refresh.
     }
@@ -1142,7 +1278,9 @@ function reportStatus(): void {
     // PROJECT_ROOT would report "all present" while the baked path points at an
     // empty/missing INSTALL_DIR). Before install this will (correctly) warn.
     checkSvgs(RUNTIME_RES_DIR);
-    log(`runtime install dir: ${INSTALL_DIR} ${fs.existsSync(INSTALL_DIR) ? "(exists)" : "(will be created on install)"}`);
+    log(
+        `runtime install dir: ${INSTALL_DIR} ${fs.existsSync(INSTALL_DIR) ? "(exists)" : "(will be created on install)"}`,
+    );
     log(`state dir: ${STATE_DIR} ${fs.existsSync(STATE_DIR) ? "(exists)" : "(will be created on first hook fire)"}`);
     reportBakedNodeHealth();
 }

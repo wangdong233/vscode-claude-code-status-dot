@@ -25,6 +25,7 @@
 - 🔔 **Notificaciones de completado/interrupción** — en macOS salta una notificación del sistema (esquina superior derecha + sonido `Glass` por defecto, sin botones, se cierra sola), tanto si VSCode está en primer plano como en segundo; en Windows/Linux se usa el mensaje integrado de VSCode, sin tener que mirar fijamente
 - ⚙️ **Mantiene running durante la ejecución de workflows** — cuando hay subagentes/cron en vuelo no se pone verde por error, `Stop` es el árbitro definitivo
 - 📂 **Sincronización con Open Editors** — las pestañas de CC en la vista "Editores abiertos" arriba a la izquierda también muestran el punto de estado
+- 📊 **Contador agregado abajo a la derecha** — un ítem en la barra de estado muestra los conteos `🟢hecho 🟡corriendo 🔴interrumpido` de TODAS las sesiones CC de un vistazo, actualizado en cada tick de 500ms (singleton global, sin temporizadores extra, coexiste con los puntos por pestaña)
 - ↩️ **Reversión sin efectos secundarios en una línea** — `--revert` restaura por completo `extension.js` desde `.bak`, retira los hooks de forma quirúrgica y conserva tus datos de usuario
 
 > ⚠️ **Declaración honesta**: este proyecto es un **parche (patch), no una extensión independiente** — VSCode no permite que una extensión de terceros modifique el icono de la pestaña webview de otra extensión; la única vía viable es parchear el `extension.js` del propio CC. El precio: las actualizaciones automáticas de CC lo sobrescriben, hay que volver a ejecutar el comando.

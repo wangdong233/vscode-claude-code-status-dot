@@ -25,6 +25,7 @@
 - 🔔 **Notifications de fin / interruption** — sur macOS, notification système native (coin supérieur droit de l'écran, avec son `Glass` par défaut), **à l'avant-plan comme à l'arrière-plan**, sans aucun bouton, disparaît automatiquement — plus besoin de fixer l'écran
 - ⚙️ **Reste jaune running pendant l'exécution d'un workflow** — pas de faux vert tant que des subagents/cron tournent en arrière-plan, `Stop` est l'arbitre
 - 📂 **Synchronisation de la vue Open Editors** — l'onglet CC dans la vue « Open Editors » en haut à gauche porte aussi le point d'état
+- 📊 **Compteur agrégé en bas à droite** — un élément de barre d'état affiche les compteurs `🟢terminé 🟡en cours 🔴interrompu` de TOUTES les sessions CC d'un coup d'œil, rafraîchi à chaque tick de 500ms (singleton global, aucun minuteur supplémentaire, coexiste avec les points par onglet)
 - ↩️ **Restauration en un clic, sans effet de bord** — `--revert` restaure `extension.js` depuis `.bak`, retire les hooks chirurgicalement et conserve vos données utilisateur
 
 > ⚠️ **Avertissement honnête** : ce projet est un **patch, pas une extension autonome** — VSCode ne permet pas à une extension tierce de modifier l'icône d'onglet webview d'une autre extension. La seule voie possible est de patcher le `extension.js` de CC lui-même. Conséquence : les mises à jour automatiques de CC écrasent le patch, il faut relancer la commande.

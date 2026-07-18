@@ -148,3 +148,79 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 > **为何不用 `window.__ccVsApi=`**：v0.1.2 的注入确实用了该字面量，但它遵循 CC 自己的 `__cc*` 命名约定，未来 CC 原生可能复用该名导致误判，从而拿陈旧 `.bak` 砸掉新 CC webview。墓碑注释 `cc-status-bar-injected` 是我们独有的、CC minified bundle 永远产不出的字符串，前向安全。
 >
 > 历史设计记录见 [`WEBVIEW-injection.md`](WEBVIEW-injection.md)（同样已标注废弃）。
+
+---
+
+## 7. 状态栏聚合统计（v0.1.10，v0.1.11 重构；与 §6 的废弃条无关）
+
+> **本节是 v0.1.10 新增的右下角聚合统计 item**，**不是** §6 那条 v0.1.3 已废弃的 webview 色块条。二者完全不同：
+> - §6（废弃）：v0.1.2 在 CC 的 **webview `index.js`/`index.css`** 上独立打补丁的"色块条"，v0.1.3 已删除。
+> - 本节（现行）：v0.1.10 在 **`extension.js` 的 IIFE 内**创建的 VSCode `StatusBarItem`，与 per-tab 四态色点**共存互补**。
+>
+> **v0.1.11 修订要点**（详见各小节）：
+> - **§7.1/§7.2**：聚合同步应用 §4 的 `done` 超 5 分钟→idle 渲染规则，并新增"running 文件 mtime 超 30 分钟→idle"启发式（§7.5），使聚合计数与 per-tab 点显示**一致**。tooltip 在 `ag.idle>0` 时追加 ` / idle N`。
+> - **§7.3**：item（`globalThis.__ccsdSbi`）与刷新定时器（`globalThis.__ccsdSbiTimer`）**同为窗口级单例**——v0.1.10 时刷新工作仍跑在每个 panel 的 per-tab tick 内（O(P×S) 读放大），v0.1.11 提升为单例定时器后 P 个 panel 每 500ms **只刷一次**（O(S)）。`__ccsdPanelCount` 计数器让"最后一个 panel 关闭"时立即 `clearInterval` + `sbi.hide()`，bar 不再冻结陈旧值。
+> - **命名**：`__cc*` → 项目级 `__ccsd*` 前缀，避免占用 CC 自己的 `__cc*` 全局命名空间（见 patch.ts `restoreWebview()` 内 `cc-status-bar-injected` 墓碑注释的警示）。
+
+### 7.1 位置与显示
+
+- **位置**：VSCode 状态栏**右下角**（`StatusBarAlignment.Right`，priority `0`）。
+- **格式**：`🟢{done} 🟡{running} 🔴{interrupted}`，段间空格分隔，**0 计数段省略**（如无中断不显红段）。
+  - 🟢 绿 `#3FB950` = `done` 会话数；🟡 黄 `#CCA700` = `running`；🔴 红 `#F85149` = `interrupted`。
+  - 当 `done`/`running`/`interrupted` 三态计数全为 0、但 `idle` 会话数 > 0 时，退化为 `⚪{idle}`（白圈 + idle 数）——一眼知"有会话但都在空闲"。
+  - 当状态目录里**零个可成功解析的 `*.json`**（无文件、或全部 JSON 破损/读失败）时，item **`hide()`** 隐藏，避免在没开 CC 的窗口里留杂物。
+- **tooltip**：`Claude Code sessions: done N / running N / interrupted N`，**`ag.idle > 0` 时末尾追加 ` / idle N`**（与可见文本 `⚪{idle}` 兜底对齐，让 hover 能解释白圈含义）。跨 panel 的 per-session title 在 reader 不可得，故不列每会话名。
+
+> **颜色保真度非对称（已知差异）**：per-tab 四态点用 SVG 嵌入 hex 颜色（`#3FB950`/`#CCA700`/`#F85149`/`#808080`）保证跨平台保真；聚合 item 用 emoji 码点（U+1F7E2/1F7E1/1F534/26AA）委托颜色，**渲染依赖 OS 的 emoji 字体栈**——Win7/无 emoji 字体的 Linux/headless 环境可能渲染为黑白或豆腐块（U+26AA 白圈尤其不一致）。VSCode `StatusBarItem.text` 无 color-aware markdown，故此 asymmetry 是当前最佳折衷：颜色丢失时形状 + 数字仍承载信息。同作者在 per-tab 选 SVG 而非 emoji 正是此因。
+
+### 7.2 数据源与刷新
+
+- **v0.1.11 起复用一个窗口级单例定时器** `globalThis.__ccsdSbiTimer`（500ms，`TICK_MS`）刷新聚合 item——**不再**像 v0.1.10 那样在每个 per-panel tick 内重复刷新。第一个 CC panel 的 IIFE 创建定时器，后续 panel 复用同一个。P 个 panel 每 500ms **只**触发一次聚合读取（O(S) 文件读，S = 会话数），不再 v0.1.10 的 O(P×S)。
+- 每 tick `fs.readdirSync(DIR)` 列 `~/.claude/cc-tab-status/*.json`，逐文件 `JSON.parse` 读 `state` + `since` 字段，**先应用与 per-tab 一致的渲染规则再分桶**：
+  1. `state === "done"` 且 `now - since > DONE_TO_IDLE_MS`（5 分钟）→ 计入 `idle` 桶（与 §4 per-tab done→idle 一致，避免"tab 已褪灰、聚合仍计 🟢"的口径分歧）。
+  2. `state === "running"` 且 `mtime > SBI_RUNNING_STALE_MS`（30 分钟，见 §7.5）→ 计入 `idle` 桶（崩溃/被杀未发 SessionEnd 的会话治理）。
+  3. 其余按字面 `state` 分桶（`running`/`done`/`interrupted`/`idle`）。
+- 失败文件 try/catch 跳过（与 reader 一贯风格，不崩扩展）。
+- 状态字段契约同 §3（`state` ∈ `idle|running|done|interrupted`）。`permission` 不落盘，故不参与聚合；但 PreToolUse 心跳会在 permission 弹窗前把 `state=running` 落盘——此期间该会话会被聚合计为 🟡 running（per-tab 则通过 `__ccPending` yield 让 CC 原生蓝点显示）——这是聚合 vs per-tab 的**有意分歧**，因为 pending 信号无窗口级广播通道。
+
+### 7.3 全局单例（关键设计）
+
+- IIFE 在 **per-panel** 跑（每个 CC panel 一个 per-tab `setInterval`），但聚合 item 通过 **`globalThis.__ccsdSbi` 守卫**、聚合刷新定时器通过 **`globalThis.__ccsdSbiTimer` 守卫**双双确保**全窗口唯一**：第一个 panel 的 IIFE 各创建一次，后续 panel 的 IIFE 完全跳过创建分支。
+- **v0.1.11 起 item 与 timer 作用域对齐**：均为窗口级单例。v0.1.10 时 item 是单例但刷新工作不是，每个 panel 每 tick 各自重算并写入同一个 item——值相同（读同一目录）无竞态问题，但读放大是 O(P×S)；v0.1.11 单例定时器后变成 O(S)。
+- item 生命周期与窗口绑定（`globalThis` 上的引用），VSCode reload 后由首个 panel 的 IIFE 重建。**`onDidDispose` 不释放 item**——它不属于某个 panel。
+- **v0.1.11 面板计数器 `__ccsdPanelCount`**：IIFE 入口 `+1`，`onDidDispose` 内 `-1`；当计数归零（窗口里**最后一个** CC panel 关闭）时立即 `clearInterval(__ccsdSbiTimer)` + `sbi.hide()`——bar 不再像 v0.1.10 那样因"无存活 panel 继续刷新"而**冻结在最后一次写入的陈旧值**（典型场景：CC 崩溃、被强杀、手动 Esc 不发 SessionEnd 的已知限制 §5）。新 panel 打开时首个 tick 自然 `show` 回来。
+
+### 7.4 与 per-tab 四态点的关系（共存，不替代）
+
+| 维度 | per-tab 四态色点（§1 / §4） | 右下角聚合 item（本节） |
+|---|---|---|
+| 位置 | 每个 CC tab 图标 + Open Editors 视图 | 状态栏右下角，全局唯一 |
+| 粒度 | 单 session | 全部 session 汇总计数 |
+| 渲染 | `panelTab.iconPath`（SVG） | `StatusBarItem.text`（emoji + 数字） |
+| 中断闪烁 | 红色快闪（`flashSeq%2`） | 仅静态数字（不闪） |
+| 颜色保真 | SVG 嵌入 hex，跨平台稳定 | emoji 字体依赖，可能黑白（§7.1 已知差异） |
+| permission 处理 | `__ccPending` yield→CC 原生蓝点 | 计为 🟡 running（pending 无窗口级通道，§7.2 有意分歧） |
+| 陈旧 running 治理（>30min mtime） | **不应用**——tab 保持 🟡 黄作为"此会话可能已死"的可见提醒，用户可自行关闭 | **应用 §7.2 启发式**——计入 idle 桶，避免单个崩溃会话永久占 🟡1（per-tab 仍保持黄，所以两者计数会差 1） |
+| done>5min 归 idle | 应用（§4） | 应用（§7.2，与 per-tab 一致） |
+| 刷新来源 | 每 panel 一个 per-tab `setInterval`（500ms） | 窗口级单例 `setInterval`（500ms，v0.1.11） |
+| 失败隔离 | per-tab setInterval 的 `p.iconPath=` 单行 try/catch；onDidDispose 注册也在 try/catch 内 | SBI 创建 + SBI timer 创建各自独立 try/catch（v0.1.12）；aggregation body 另有独立 try/catch（v0.1.11） |
+
+**互补**：tab 点告诉你"是哪个会话在跑/停了"；聚合 item 告诉你"全局总共有几个在跑/停了"，不用数 tab。
+
+### 7.5 异常安全 + 已知限制（v0.1.11；v0.1.12 加固）
+
+**异常安全（v0.1.12 加固后层次）**：v0.1.11 的 aggregation-body try/catch 之外，v0.1.12 给 SBI 创建 + SBI 单例 timer 创建各加了一层独立 try/catch（与 per-tab tick 自 v0.1.9 起就有的失败隔离对齐）。当前结构（自内向外）：
+1. **SBI 创建 try/catch**（v0.1.12 新增）：吞掉 `vs.window.createStatusBarItem` 的抛出（disposed extension host、API 暂态失败等），让 IIFE 继续走到 per-tab tick。
+2. **SBI 单例 timer 创建 try/catch**（v0.1.12 新增）：同样吞掉 `setInterval` 的抛出。
+3. **Aggregation body try/catch**（v0.1.11）：包住 readdirSync/statSync/JSON.parse 等所有 filesystem + JSON 操作。
+4. **per-tab setInterval** + **onDidDispose 注册** 各自的 try/catch（v0.1.9 起）。
+
+这 4 层互相独立：聚合链路上的任何失败都不会拖垮 per-tab 主链路，反之亦然；SBI 创建失败也不会传播到 CC 的 `update_session_state` handler（否则会经逗号操作符链向上抛出，砖化会话状态追踪 + 跳过 per-tab setInterval + 跳过 onDidDispose 注册导致 panel 计数永久泄漏）。
+
+**已知限制（诚实声明）**：
+
+- **emoji 颜色保真度依赖 OS 字体栈**：见 §7.1 末段。Win7/无 emoji 字体的 Linux/headless 环境可能黑白或豆腐块；U+26AA 白圈尤其不一致。颜色丢失时形状 + 数字仍承载信息。
+- **崩溃/被杀 CC 会话的 `interrupted` 文件无 GC**：`SessionEnd` 删除文件是 writer 契约（§2），但 CC 崩溃 / 被强杀 / hook pipe 断裂不发 `SessionEnd` 的 session，其 `<sid>.json` 会**永久残留**并被聚合**永久计入**对应桶。§7.2 的 30-min `mtime` 启发式**仅治理 `running` 桶**（崩溃的 running 会话会被降级为 idle，不再假 🟡）；**`done` 桶**靠 §4 的 5 分钟规则自动归 idle；**`interrupted` 桶**暂无 GC（中断态在 UI 上需要保持可见以提醒用户，加 mtime 截止会丢信息）。**该 30-min 启发式仅作用于聚合 item（SBI），不作用于 per-tab 渲染**——见 §7.4 表里"陈旧 running 治理"行的有意分歧：per-tab 保持 🟡 黄以提醒用户"此会话可能已死"（用户看到可手动关 tab），SBI 折扣为 idle 以避免崩溃会话永久占 🟡1。两者计数因此可能差 1（一个黄 tab + SBI 显示 🟡0），是设计折衷而非 bug。如需清理可手动删 `~/.claude/cc-tab-status/<sid>.json`，或下次 `Stop`/`SessionEnd` 触发 writer 重写/删除该文件。per-tab 因只读自己 sid，单个死 session 的残留只影响它自己一个 tab 的点，不会被放大；聚合把它计入**全局**计数，影响所有 tab 看到的数字。
+- **聚合 vs per-tab 的 permission 分歧**：见 §7.2 末段。permission-pending 期间聚合计为 🟡 running，per-tab 显示 CC 原生蓝点——同一会话两处 UI 不同色，因 pending 信号是 per-panel-live，无窗口级广播通道让聚合读取。无功能性 bug，是设计折衷。
+- **聚合刷新定时器的"第一 panel 闭包"绑定**：单例定时器由第一个 CC panel 的 IIFE 创建，闭包捕获该 panel 的 `DIR`/`fs`/`vs` 等局部（这些值在所有 panel 间是确定的、无 panel-specific 状态，故无泄漏问题）。最后 panel 关闭时 `clearInterval` 释放定时器；新 panel 打开时由其 IIFE 重建（item 仍复用，timer 重建），首 tick 即 `show` 回来。
+

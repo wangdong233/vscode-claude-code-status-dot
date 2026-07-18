@@ -25,6 +25,7 @@
 - 🔔 **Completion/interruption notifications** — on macOS a native system notification drops down from the top-right corner (with sound, buttonless, auto-dismisses); on Windows/Linux it falls back to a VSCode toast — fires whether VSCode is in the foreground or background by default, no need to keep watching
 - ⚙️ **Stays running while workflow runs** — no false-green when background subagents/crons are in flight; `Stop` is the authoritative arbiter
 - 📂 **Open Editors sync** — the CC tab in the top-left "Open Editors" view also carries the status dot
+- 📊 **Right-bottom aggregate counter** — a status-bar item surfaces `🟢done 🟡running 🔴interrupted` counts across ALL CC sessions at a glance, refreshed on the 500ms tick (global singleton, no extra timers, coexists with the per-tab dots)
 - ↩️ **Zero side effects, one-click restore** — `--revert` fully restores extension.js from `.bak`, surgically removes hooks, keeps your user data
 
 > ⚠️ **Honest disclaimer**: this project is a **patch, not a standalone extension** — VSCode does not allow a third-party extension to modify another extension's webview tab icon, so the only viable path is patching CC's own `extension.js`. Trade-off: a CC auto-update overwrites it, so you must re-run the command.

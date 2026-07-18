@@ -313,6 +313,231 @@ checkBoth(
   }
 }
 
+// --- v0.1.13: Notification pending flag (🔵 commandCenter light) ------------
+// Notification marks pending:true on the session file; every non-Notification
+// event clears it. The reader counts pending INDEPENDENTLY of state, so a
+// session can be both running AND pending (a running turn paused on a
+// permission/question/elicit prompt — the typical case).
+
+// 16. Notification on a fresh session (no prior file) writes pending:true,
+//     state coerced to running (Notification can fire first — default cur is
+//     also running), since=now (cur.since defaults to 0, falsy → now).
+{
+  const home = newTempHome();
+  const final = fire(home, 'Notification');
+  const ok = final && final.state === 'running' && final.pending === true;
+  if (ok) {
+    pass++;
+    console.log('  PASS  16. Notification (no prior file) -> running, pending=true');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  16. expected running+pending=true, got state=' +
+      (final && final.state) + ' pending=' + (final && final.pending)
+    );
+  }
+}
+
+// 17. Notification on an existing running turn PRESERVES state + since and
+//     ONLY adds pending:true. Regression check: a refactor that re-wrote
+//     since=now on Notification would race with the reader's notify-dedup
+//     (which keys on terminal since — though Notification doesn't fire on
+//     terminal states, locking the preserve-since rule is still correct).
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  const before = readState(home);
+  const sinceBefore = before.since;
+  const final = fire(home, 'Notification');
+  const ok = final
+    && final.state === 'running'
+    && final.since === sinceBefore  // PRESERVED, not refreshed
+    && final.pending === true;
+  if (ok) {
+    pass++;
+    console.log('  PASS  17. Notification preserves state=running + since, sets pending=true');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  17. expected running+preserved since(' + sinceBefore + ')+pending=true,' +
+      ' got state=' + (final && final.state) +
+      ' since=' + (final && final.since) +
+      ' pending=' + (final && final.pending)
+    );
+  }
+}
+
+// 18. Notification on an interrupted session preserves interrupted state +
+//     adds pending:true (e.g. user is prompted while an error is showing).
+//     error is dropped by the writer on every non-StopFailure write — locks
+//     the existing behavior pattern (every other case also drops error).
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'StopFailure', { error: 'rate_limit' });
+  const final = fire(home, 'Notification');
+  const ok = final
+    && final.state === 'interrupted'
+    && final.pending === true;
+  if (ok) {
+    pass++;
+    console.log('  PASS  18. Notification on interrupted preserves state, sets pending=true');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  18. expected interrupted+pending=true, got state=' +
+      (final && final.state) + ' pending=' + (final && final.pending)
+    );
+  }
+}
+
+// 19. UserPromptSubmit clears pending (the user answered the prompt).
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'Notification');
+  // pending now true
+  const final = fire(home, 'UserPromptSubmit');
+  const ok = final && final.state === 'running' && final.pending === false;
+  if (ok) {
+    pass++;
+    console.log('  PASS  19. UserPromptSubmit after Notification clears pending');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  19. expected running+pending=false, got state=' +
+      (final && final.state) + ' pending=' + (final && final.pending)
+    );
+  }
+}
+
+// 20. PreToolUse clears pending (heartbeat = progress, not waiting).
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'Notification');
+  const final = fire(home, 'PreToolUse');
+  const ok = final && final.state === 'running' && final.pending === false;
+  if (ok) {
+    pass++;
+    console.log('  PASS  20. PreToolUse after Notification clears pending');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  20. expected running+pending=false, got state=' +
+      (final && final.state) + ' pending=' + (final && final.pending)
+    );
+  }
+}
+
+// 21. Stop clears pending and writes done.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'Notification');
+  const final = fire(home, 'Stop');
+  const ok = final && final.state === 'done' && final.pending === false;
+  if (ok) {
+    pass++;
+    console.log('  PASS  21. Stop after Notification -> done, pending=false');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  21. expected done+pending=false, got state=' +
+      (final && final.state) + ' pending=' + (final && final.pending)
+    );
+  }
+}
+
+// 22. SessionEnd still deletes the status file even if pending was set —
+//     no half-state leaks when the session closes mid-prompt.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'Notification');
+  const final = fire(home, 'SessionEnd');
+  const ok = final === null;
+  if (ok) {
+    pass++;
+    console.log('  PASS  22. SessionEnd deletes file even with pending=true   -> (no file)');
+  } else {
+    fail++;
+    console.log('  FAIL  22. SessionEnd should delete file, got state=' + (final && final.state));
+  }
+}
+
+// --- v0.1.13 review round-2: Subagent* preserves cur.pending (MEDIUM fix) ---
+// SubagentStart / SubagentStop are BACKGROUND events on the parent session
+// with no signal about whether a parent permission/question/elicit prompt is
+// still open. They must therefore PRESERVE cur.pending instead of clearing it.
+// Previously both wrote `pending:false` unconditionally, which false-negatived
+// the 🔵 commandCenter light whenever a background subagent event fired during
+// a Notification prompt. These tests lock the preserve-pending behavior.
+
+// 23. SubagentStop after Notification PRESERVES pending=true. Sequence mirrors
+//     the bug report: parent running, hits a permission prompt (Notification),
+//     then a background subagent wraps up while the prompt is still open.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'Notification');
+  // pending now true; a subagent finishing must NOT extinguish it.
+  const final = fire(home, 'SubagentStop');
+  const ok = final && final.state === 'running' && final.pending === true;
+  if (ok) {
+    pass++;
+    console.log('  PASS  23. SubagentStop after Notification preserves pending=true');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  23. expected running+pending=true (preserve), got state=' +
+      (final && final.state) + ' pending=' + (final && final.pending)
+    );
+  }
+}
+
+// 24. SubagentStart after Notification PRESERVES pending=true. A subagent
+//     spawning mid-prompt is the canonical "workflow helper fired while the
+//     user is answering a permission prompt" case.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'Notification');
+  const final = fire(home, 'SubagentStart');
+  const ok = final && final.state === 'running' && final.pending === true;
+  if (ok) {
+    pass++;
+    console.log('  PASS  24. SubagentStart after Notification preserves pending=true');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  24. expected running+pending=true (preserve), got state=' +
+      (final && final.state) + ' pending=' + (final && final.pending)
+    );
+  }
+}
+
+// 25. REGRESSION GUARD: SubagentStart on a fresh session (no prior Notification,
+//     so cur.pending defaults to false) must NOT fabricate pending=true. The
+//     preserve rule is `cur.pending === true` — a falsy cur.pending stays falsy.
+//     Without this guard, a future refactor that flipped the default could turn
+//     every subagent into a false 🔵 pending count.
+{
+  const home = newTempHome();
+  const final = fire(home, 'SubagentStart');
+  const ok = final && final.state === 'running' && final.pending === false;
+  if (ok) {
+    pass++;
+    console.log('  PASS  25. SubagentStart on fresh session writes pending=false (no fabrication)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  25. expected running+pending=false, got state=' +
+      (final && final.state) + ' pending=' + (final && final.pending)
+    );
+  }
+}
+
 // --- summary --------------------------------------------------------------
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

@@ -4,18 +4,21 @@
  *
  * The state machine has TWO independent implementations: the writer's
  * deriveStatus (covered by test-cc-status.js) and the reader's injected IIFE
- * (state→SVG, notify dedup, __ccPending yield, done→idle fallback). Until now
- * only the writer side had automated coverage; the reader side relied on
- * `assertCompiles` (syntax only). This file nails the reader side to STATES.md
- * §1/§4/§4b by extracting the actual IIFE that patch.ts bakes (`--check-iife`)
- * and asserting on its contents + syntax-validity.
+ * (state→SVG, notify dedup, __ccPending yield, done→idle fallback,
+ * commandCenter 4-light aggregation + setContext driver). Until v0.1.10 only
+ * the writer side had automated coverage; the reader side relied on
+ * `assertCompiles` (syntax only). This file nails the reader side to
+ * STATES.md §1/§4/§4b/§7 by extracting the actual IIFE that patch.ts bakes
+ * (`--check-iife`) and asserting on its contents + syntax-validity.
  *
  * It does NOT execute the IIFE — VSCode APIs (`vscode.window`, `setInterval`
  * on a fake panel) would need a heavy harness. String + `node --check`
  * assertions are enough to lock the public contract: which SVG each state
  * maps to, that dedup is `since`-based (not prevSt), that __ccPending yields,
  * that macOS notifications fall back to VSCode messages on osascript failure,
- * and that the timer is disposed with the panel.
+ * that the timer is disposed with the panel, AND (v0.1.13) that the
+ * commandCenter 4-light aggregation pushes the right setContext keys with the
+ * right capping rules.
  *
  * Run:  node hooks/test-iife.mjs     (requires `npm run build` first; falls
  *                                    back to `npx tsx patch.ts` if dist/ is
@@ -43,6 +46,13 @@ function check(name, cond, detail) {
     console.log('  FAIL  ' + name + (detail ? '   ' + detail : ''));
   }
 }
+
+// Mirror patch.ts CC_LIGHTS / CC_COUNT_VARIANTS (single source of truth is
+// patch.ts; this local copy must stay in sync — these are the 4 commandCenter
+// lights and the 5 count-variants per light that patchPackageJson contributes
+// and the IIFE registers handlers for).
+const CC_LIGHTS = ['done', 'running', 'pending', 'interrupted'];
+const CC_COUNT_VARIANTS = ['0', '1', '2', '3', 'N'];
 
 // --- Obtain the IIFE string via --check-iife ---------------------------------
 function getIife() {
@@ -126,9 +136,8 @@ check('IIFE.6  interrupted -> claude-logo-error.svg', iife.includes('claude-logo
 check('IIFE.7  interrupted off-frame -> CC claude-logo.svg', iife.includes('claude-logo.svg'));
 
 // --- 3. Notify dedup mechanism — since+seeded, NOT prevSt -------------------
-// Locks the v0.1.5 algorithm change (CHANGELOG[Unreleased]). A regression
-// that revived the old prevSt transition check would silently miss fast
-// turns (running→done between two polls).
+// Locks the v0.1.5 algorithm change. A regression that revived the old prevSt
+// transition check would silently miss fast turns (running→done between polls).
 check('IIFE.8  dedup uses seeded flag', /seeded\s*=\s*true/.test(iife));
 check('IIFE.9  dedup uses lastTermSince', /lastTermSince/.test(iife));
 check('IIFE.10 dedup keyed on since change', /since\s*!==\s*lastTermSince/.test(iife));
@@ -166,150 +175,210 @@ check('IIFE.19 setInterval captured to var', /var\s+timer\s*=\s*setInterval/.tes
 check('IIFE.20 onDidDispose clears timer', /onDidDispose/.test(iife) && /clearInterval\s*\(\s*timer\s*\)/.test(iife));
 
 // --- 9. Inject marker banner + version stamp --------------------------------
-check('IIFE.21 banner carries marker+version', /\/\*cc-status-dot-injected:v\d+\.\d+\.\d+\*\//.test(iife));
+// Banner format: /*cc-status-dot-injected:vX.Y.Z:HASH*/ where HASH is an 8-hex
+// content fingerprint of the IIFE body (lets patchExtension detect intra-
+// version drift without a version bump). Pre-hash-scheme injections lack the
+// :HASH suffix, so the regex accepts both shapes.
+check(
+  'IIFE.21 banner carries marker+version(+hash)',
+  /\/\*cc-status-dot-injected:v\d+\.\d+\.\d+(?::[0-9a-f]{4,16})?\*\//.test(iife),
+);
+// v0.1.13+ content-hash scheme: confirm the on-disk banner actually carries a
+// hash (not just the legacy version-only form), so a stale same-version
+// install is detectable. If buildIIFE ever forgets to stamp the hash this
+// catches it before the idempotency gate silently skips a real change.
+check(
+  'IIFE.21b banner carries content-hash suffix',
+  /\/\*cc-status-dot-injected:v\d+\.\d+\.\d+:[0-9a-f]{8}\*\//.test(iife),
+);
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
 check('IIFE.23 no bare `seq` counter (M8 rename)', !/\bseq\s*%/.test(iife) && !/\bseq\+\+/.test(iife));
 
-// --- 11. Aggregated status bar item (v0.1.11 singleton item + singleton timer) --
-// The SBI is a window-scoped singleton so N panels share ONE item AND one
-// aggregation timer (v0.1.11 lifted the refresh off the per-panel tick into
-// globalThis.__ccsdSbiTimer so a P-panel window ticks the aggregation ONCE
-// per 500ms, not P times — aligning timer scope with item scope). The item
-// + timer + a per-window panel counter use the project-scoped __ccsd* prefix
-// (NOT CC's __cc* namespace — see the `cc-status-bar-injected` tombstone in
-// restoreWebview() in patch.ts).
-// Aggregation now applies the §4 reader rules (done>5min→idle; running
-// mtime>30min→idle) so per-tab dots and the SBI count agree. The panel
-// counter enables a clean "last panel out → hide SBI + clear singleton timer"
-// path in onDidDispose so the bar can't freeze on a stale count.
+// --- 11. commandCenter 4-light (v0.1.13): aggregation + setContext driver --
+// The v0.1.10-v0.1.12 StatusBarItem-at-Right is GONE. v0.1.13 contributes 20
+// commands + 20 commandCenter menu items (group "navigation") + 20 palette
+// hide-entries via patchPackageJson; the IIFE ticks a window-scoped singleton
+// timer (__ccsdCcTimer, 500ms) that aggregates counts every 500ms and pushes
+// 4 setContext keys (ccStatusDot.{done,running,pending,interrupted} = 0..4,
+// 4 = "N" display). Exactly one variant per light shows at any moment.
 //
-// Emoji use \u{...} escapes (ASCII-only injected source — a backslash-u-brace
-// sequence in the IIFE string), so the regexes match the literal escape text,
-// not the decoded codepoint.
-check('IIFE.24 SBI globalThis singleton guard (item)', /globalThis\.__ccsdSbi/.test(iife));
-// R3-5 (round 3): the original regex `/globalThis\.__ccSbi(?!s|d|T|P)/` had a negative
-// lookahead that EXEMPTED exactly the suffixes a future bad refactor would produce
-// (`__ccSbiTimer`'s `T`, `__ccSbiItem`'s... etc). A regression renaming `__ccsdSbiTimer`
-// → `__ccSbiTimer` would slip past. The CC namespace is `__cc` + capital letter
-// directly; our project namespace is `__cc` + lowercase `sd` + anything. So the
-// correct discriminator is `/globalThis\.__cc[A-Z]/` — matches ANY bare CC-namespace
-// global, ignores our `__ccsd*` (lowercase `s` after `__cc`). Asserts no `globalThis.__ccX`
-// where X is a capital letter (the CC-native naming pattern) is present.
-check('IIFE.24b SBI uses project-scoped __ccsd* (NOT CC __cc[A-Z] ns)', !/globalThis\.__cc[A-Z]/.test(iife));
+// The aggregation applies the SAME §4 reader rules as per-tab rendering
+// (done>5min→idle so IDLE sessions don't count toward green; running stale
+// >30min→idle to GC crashed sessions). pending is counted INDEPENDENTLY of
+// state — a session can be both running AND pending (running turn paused on
+// a permission prompt). The v0.1.13 IIFE retains the project-scoped __ccsd*
+// prefix (NOT CC's __cc* namespace — see the `cc-status-bar-injected`
+// tombstone in restoreWebview()).
 check(
-  'IIFE.25 SBI createStatusBarItem(Right)',
-  /vs\.window\.createStatusBarItem\s*\(\s*vs\.StatusBarAlignment\.Right/.test(iife),
+  'IIFE.24 Cc singleton timer guard (replaces SBI singleton)',
+  /if\s*\(\s*!globalThis\.__ccsdCcTimer\s*\)\s*\{globalThis\.__ccsdCcTimer\s*=\s*setInterval/.test(iife),
 );
-check('IIFE.26 SBI name set', iife.includes('"Claude Code Sessions"'));
-check('IIFE.27 SBI reads ALL files via readdirSync(DIR)', /readdirSync\s*\(\s*DIR\s*\)/.test(iife));
-check('IIFE.28 SBI done count = green circle (\\u{1F7E2})', /\\u\{1F7E2\}/.test(iife));
-check('IIFE.29 SBI running count = yellow circle (\\u{1F7E1})', /\\u\{1F7E1\}/.test(iife));
-check('IIFE.30 SBI interrupted count = red circle (\\u{1F534})', /\\u\{1F534\}/.test(iife));
-check('IIFE.31 SBI idle fallback = white circle (\\u{26AA})', /\\u\{26AA\}/.test(iife));
-// Crash-safety: the aggregation block must be wrapped in try/catch so a
-// readdir/parse failure (race with SessionEnd's file delete, JSON corruption)
-// cannot brick the per-panel tick that follows it. v0.1.11 structure is
-// `setInterval(function(){try{var sbi=globalThis.__ccsdSbi;...}catch(e){}})`.
+// R3-5 (round 3, ported): assert no `globalThis.__cc<SOMETHING-WRONG>` leaks —
+// the only legitimate prefix is `__ccsd*` (lowercase s after __cc). CC's own
+// namespace is `__cc` + capital letter directly. Lock the discriminator so a
+// future bad refactor cannot silently occupy CC's __cc* namespace.
+check('IIFE.24b Cc uses project-scoped __ccsd* (NOT CC __cc[A-Z] ns)', !/globalThis\.__cc[A-Z]/.test(iife));
+// Cc aggregation must NOT touch vs.window.createStatusBarItem (removed in
+// v0.1.13). Assert the SBI API call is GONE — a regression that revived it
+// would silently bring back the removed "Right" SBI alongside the new
+// commandCenter lights.
+check('IIFE.25 SBI createStatusBarItem removed (v0.1.13)', !/vs\.window\.createStatusBarItem/.test(iife));
+// Aggregation reads ALL session files via fs.readdirSync(DIR) — same data
+// source as the removed SBI, just feeding setContext instead of item.text.
+check('IIFE.26 Cc reads ALL files via readdirSync(DIR)', /readdirSync\s*\(\s*DIR\s*\)/.test(iife));
+// 4 setContext pushes (one per light), each clamped through cap() to 0..4.
 check(
-  'IIFE.32 SBI aggregation wrapped in try/catch',
-  /setInterval\s*\(\s*function\s*\(\s*\)\s*\{\s*try\s*\{\s*var\s+sbi\s*=\s*globalThis\.__ccsdSbi/.test(iife),
+  'IIFE.27 Cc pushes 4 setContext keys (done/running/pending/interrupted)',
+  /vs\.commands\.executeCommand\s*\(\s*"setContext"\s*,\s*"ccStatusDot\.done"/.test(iife) &&
+    /vs\.commands\.executeCommand\s*\(\s*"setContext"\s*,\s*"ccStatusDot\.running"/.test(iife) &&
+    /vs\.commands\.executeCommand\s*\(\s*"setContext"\s*,\s*"ccStatusDot\.pending"/.test(iife) &&
+    /vs\.commands\.executeCommand\s*\(\s*"setContext"\s*,\s*"ccStatusDot\.interrupted"/.test(iife),
 );
-// The aggregation must NOT replace the per-tab dot — assert the iconPath
-// assignment still exists after the aggregation block.
-check('IIFE.33 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*vs\.Uri\.file/.test(iife));
+// cap() clamps 4+ to 4 (so ccStatusDot.<k>==4 selects the "N" variant).
+check(
+  'IIFE.28 Cc cap() clamps 4+ to 4 (display N)',
+  /cap\s*=\s*function\s*\(\s*n\s*\)\s*\{\s*return\s+n\s*>=\s*4\s*\?\s*4\s*:\s*n/.test(iife),
+);
+// pending counted INDEPENDENTLY of state but WITH a stale-session GC: the
+// v0.1.13 review found a crashed CC session killed mid-permission-prompt
+// (state=running, pending=true, mtime>30min) was downgraded to idle for the
+// 🟡 running bucket yet still counted toward 🔵 pending — so the blue light
+// would false-stick at 1 forever (SessionEnd never fires on crash). The fix
+// reuses the SAME post-decay `st` value the state buckets use: if `st` is
+// "idle" (after done>5min / running-stale / interrupted-24h decay), pending
+// is skipped too. Lock the `&& st!=="idle"` clause so a regression that
+// dropped it would re-open the silent false-stick.
+check(
+  'IIFE.29 Cc counts pending independent of state with idle GC (j.pending===true && st!=="idle")',
+  /if\s*\(\s*j\.pending\s*===\s*true\s*&&\s*st\s*!==\s*"idle"\s*\)\s*ag\.pending\+\+/.test(iife),
+);
 
-// --- 12. v0.1.11 lifecycle + reader-rule parity (this dimension's e2e concerns) --
-// hide()/show() lifecycle (the e2e "hide-show toggle" concern): a regression
-// that dropped either call (e.g. an accidental deletion during a version bump,
-// or a refactor to always-show policy) would silently pass IIFE.1-33 because
-// none of them grep for the toggle. Lock them explicitly.
+// --- 12. v0.1.13 lifecycle: panel counter + teardown reset of 4 contexts ---
+// IIFE entry bumps __ccsdPanelCount; onDidDispose decrements and on the LAST
+// panel out (count→0) clears the singleton Cc timer AND resets all 4
+// setContext keys to 0 so every light goes dim — the commandCenter can't
+// freeze on a stale count when no panel survives to refresh it.
 check(
-  'IIFE.34 SBI hide() called when total===0',
-  /if\s*\(\s*total\s*===\s*0\s*\)\s*\{\s*try\s*\{\s*sbi\.hide\s*\(\s*\)/.test(iife),
+  'IIFE.30 Cc panel counter increment at IIFE entry',
+  /globalThis\.__ccsdPanelCount\s*=\s*\(\s*globalThis\.__ccsdPanelCount\s*\|\|\s*0\s*\)\s*\+\s*1/.test(iife),
 );
-check('IIFE.35 SBI show() called when total>0', /try\s*\{\s*sbi\.show\s*\(\s*\)/.test(iife));
-// idle fallback must be CONDITIONAL on parts.length===0 — a regression that
-// made it unconditional (always-push ⚪ alongside the other segments) would
-// still satisfy IIFE.31 (which only checks the escape exists). Lock the guard.
 check(
-  'IIFE.36 SBI idle fallback guarded by parts.length===0',
-  /if\s*\(\s*parts\.length\s*===\s*0\s*\)\s*parts\.push\s*\(\s*"\\u\{26AA\}"/.test(iife),
+  'IIFE.31 Cc panel counter decrement + last-out teardown in onDidDispose',
+  /globalThis\.__ccsdPanelCount\s*=\s*\(\s*globalThis\.__ccsdPanelCount\s*\|\|\s*1\s*\)\s*-\s*1/.test(iife) &&
+    /if\s*\(\s*globalThis\.__ccsdPanelCount\s*<=\s*0\s*\)/.test(iife) &&
+    /clearInterval\s*\(\s*globalThis\.__ccsdCcTimer\s*\)/.test(iife),
 );
-// tooltip content: the only place the human-readable color legend appears.
+// Last-panel-out teardown must reset all 4 contexts to 0 — locks v0.1.13
+// "lights go dim when no CC panel survives" behavior.
 check(
-  'IIFE.37 SBI tooltip labels present',
-  /Claude Code sessions: done /.test(iife) && /\/ running /.test(iife) && /\/ interrupted /.test(iife),
+  'IIFE.32 Cc last-panel-out resets 4 setContext keys to 0',
+  /vs\.commands\.executeCommand\s*\(\s*"setContext"\s*,\s*"ccStatusDot\.done"\s*,\s*0\s*\)/.test(iife) &&
+    /vs\.commands\.executeCommand\s*\(\s*"setContext"\s*,\s*"ccStatusDot\.running"\s*,\s*0\s*\)/.test(iife) &&
+    /vs\.commands\.executeCommand\s*\(\s*"setContext"\s*,\s*"ccStatusDot\.pending"\s*,\s*0\s*\)/.test(iife) &&
+    /vs\.commands\.executeCommand\s*\(\s*"setContext"\s*,\s*"ccStatusDot\.interrupted"\s*,\s*0\s*\)/.test(iife),
 );
-// v0.1.11 reader-rule parity: aggregation applies §4 done>5min→idle so the
-// SBI count matches per-tab rendering (without this, a 2h-old done would
-// render as a gray idle dot on the tab but still count as 🟢 in the SBI).
+
+// --- 13. v0.1.13 isolation: setup try/catch + teardown wrap (R3 carryover) --
+// Carried over from v0.1.12 round-3 review: (1) Cc singleton-timer creation
+// wrapped in try/catch — a throw inside setInterval registration (disposed
+// host, transient VSCode API failure) is swallowed and the IIFE continues to
+// the per-tab tick + onDidDispose registration. (2) The aggregation BODY
+// inside the setInterval callback has its OWN try/catch so a readdir/stat/
+// parse/setContext failure can never brick the per-panel tick. (3) The
+// onDidDispose teardown registration remains wrapped in try/catch (matches
+// the per-tab tick's isolation pattern).
 check(
-  'IIFE.38 SBI applies §4 done>5min→idle rule in aggregation',
+  'IIFE.33 Cc singleton-timer creation wrapped in try/catch (v0.1.13)',
+  /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdCcTimer\s*\)\s*\{globalThis\.__ccsdCcTimer\s*=\s*setInterval/.test(iife) &&
+    /,\s*500\s*\)\s*;\s*\}\s*\}\s*catch\s*\(\s*e\s*\)\s*\{\s*\}/.test(iife),
+);
+check(
+  'IIFE.34 Cc aggregation body wrapped in try/catch',
+  /setInterval\s*\(\s*function\s*\(\s*\)\s*\{\s*try\s*\{\s*var\s+ag\s*=\s*\{running:0,done:0,interrupted:0,idle:0,pending:0\}/.test(
+    iife,
+  ),
+);
+check(
+  'IIFE.35 Cc onDidDispose registration wrapped in try/catch',
+  /try\s*\{\s*t\.panelTab\.onDidDispose\s*\(/.test(iife) && /\)\s*\}\s*catch\s*\(\s*e\s*\)\s*\{\s*\}/.test(iife),
+);
+// Reader-rule parity: aggregation applies §4 done>5min→idle so IDLE sessions
+// are NOT counted toward the green light (only ACTIVE done is). A regression
+// that dropped this clause would make the 🟢 light over-count stale done.
+check(
+  'IIFE.36 Cc applies §4 done>5min→idle rule in aggregation',
   /if\s*\(\s*st\s*===\s*"done"\s*&&\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*DONE_TO_IDLE_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}/.test(
     iife,
   ),
 );
-// v0.1.11 GC heuristic for crashed running sessions (§7.5): a state=running
-// file whose mtime exceeds SBI_RUNNING_STALE_MS is counted as idle, not
-// running — so a crashed/killed CC process (no SessionEnd) can't pin 🟡1
-// forever.
+// §7.2 stale-running heuristic (mtime>SBI_RUNNING_STALE_MS→idle) is preserved
+// in the Cc aggregation (variable name kept for grep continuity).
 check(
-  'IIFE.39 SBI stale-running heuristic (mtime>SBI_RUNNING_STALE_MS→idle)',
+  'IIFE.37 Cc stale-running heuristic (mtime>SBI_RUNNING_STALE_MS→idle)',
   /\(\s*Date\.now\s*\(\s*\)\s*-\s*mt\s*\)\s*>\s*SBI_RUNNING_STALE_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}/.test(iife),
 );
-// v0.1.11 singleton timer: aggregation lifted off the per-panel tick into
-// globalThis.__ccsdSbiTimer so P panels → 1 aggregation tick per 500ms.
+// v0.1.13 interrupted retention (architecture-review fix): interrupted files
+// older than 24h decay to idle so the 🔴 red light doesn't monotonically grow
+// from accumulated abandoned interrupted sessions (crashed/killed CC never
+// sends SessionEnd). File is NOT deleted — only the count drops. Lock the
+// constant + the decay branch so a regression that dropped the GC would
+// re-open the unbounded 🔴 growth.
 check(
-  'IIFE.40 SBI singleton timer guard',
-  /if\s*\(\s*!globalThis\.__ccsdSbiTimer\s*\)\s*\{globalThis\.__ccsdSbiTimer\s*=\s*setInterval/.test(iife),
-);
-// v0.1.11 panel counter: enables "last panel out → hide SBI + clear timer"
-// so the bar can't freeze on a stale count when no panel remains to refresh.
-check(
-  'IIFE.41 SBI panel counter increment at IIFE entry',
-  /globalThis\.__ccsdPanelCount\s*=\s*\(\s*globalThis\.__ccsdPanelCount\s*\|\|\s*0\s*\)\s*\+\s*1/.test(iife),
+  'IIFE.37b Cc INTERRUPTED_RETENTION_MS constant (24h decay for 🔴)',
+  /var\s+INTERRUPTED_RETENTION_MS\s*=\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/.test(iife),
 );
 check(
-  'IIFE.42 SBI panel counter decrement + last-out teardown in onDidDispose',
-  /globalThis\.__ccsdPanelCount\s*=\s*\(\s*globalThis\.__ccsdPanelCount\s*\|\|\s*1\s*\)\s*-\s*1/.test(iife) &&
-    /if\s*\(\s*globalThis\.__ccsdPanelCount\s*<=\s*0\s*\)/.test(iife) &&
-    /clearInterval\s*\(\s*globalThis\.__ccsdSbiTimer\s*\)/.test(iife),
-);
-
-// --- 13. v0.1.12 round-3 review: SBI setup-isolation + teardown wrap --------
-// R3-1 (HIGH): the SBI singleton creation (vs.window.createStatusBarItem) and
-// the SBI singleton timer creation (setInterval) must each be wrapped in their
-// OWN try/catch. A throw inside createStatusBarItem (disposed host, transient
-// VSCode API failure) would otherwise propagate up through the comma-operator
-// chain into CC's update_session_state handler — bricking session-state
-// tracking AND skipping the per-tab setInterval AND skipping onDidDispose
-// registration (so the panel counter bumped at IIFE entry would never
-// decrement, a permanent leak). The aggregation BODY's try/catch (IIFE.32)
-// does NOT cover the SETUP — these are separate concerns, locked separately.
-check(
-  'IIFE.43 SBI singleton-item creation wrapped in try/catch (v0.1.12)',
-  /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdSbi\s*\)\s*\{globalThis\.__ccsdSbi\s*=\s*vs\.window\.createStatusBarItem/.test(
+  'IIFE.37c Cc interrupted>24h mtime decay →idle (bounds 🔴 growth)',
+  /else if\s*\(\s*st\s*===\s*"interrupted"\s*\)\s*\{\s*var\s+mt\s*=\s*0;try\s*\{\s*mt\s*=\s*fs\.statSync\s*\(\s*fp\s*\)\.mtimeMs\s*\}\s*catch\s*\(\s*e2\s*\)\s*\{\s*\}\s*;?\s*if\s*\(\s*mt\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*mt\s*\)\s*>\s*INTERRUPTED_RETENTION_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}\s*\}/.test(
     iife,
   ),
 );
+// v0.1.13 LL map derivation: previously the IIFE hardcoded its own LL map
+// with divergent wording while CC_LIGHTS.label was dead code. The fix makes
+// CC_LIGHTS.tooltip the single source — buildIIFE interpolates a literal
+// derived from CC_LIGHTS so adding a 5th light only touches CC_LIGHTS. Lock
+// each of the 4 tooltip strings inside the IIFE so a regression that
+// reverted to the hardcoded form (or dropped a tooltip) would surface.
 check(
-  'IIFE.44 SBI singleton-timer creation wrapped in try/catch (v0.1.12)',
-  /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdSbiTimer\s*\)\s*\{globalThis\.__ccsdSbiTimer\s*=\s*setInterval/.test(iife) &&
-    /,\s*500\s*\)\s*;\s*\}\s*\}\s*catch\s*\(\s*e\s*\)\s*\{/.test(iife),
+  'IIFE.37d Cc LL map carries CC_LIGHTS.tooltip for done ("turn complete (last 5 min)")',
+  iife.includes('done:"turn complete (last 5 min)"'),
 );
-// R3-4 (MEDIUM): the onDidDispose teardown registration must remain wrapped in
-// try/catch (matches the per-tab tick's existing isolation pattern since
-// v0.1.9). A regression that dropped the outer try/catch (e.g. an accidental
-// deletion during a refactor of the panel-counter teardown logic) would pass
-// IIFE.1-44 because none of them assert the wrap — only the internals. Lock
-// it explicitly so the failure-isolation guarantee cannot silently regress.
 check(
-  'IIFE.45 onDidDispose registration wrapped in try/catch',
-  /try\s*\{\s*t\.panelTab\.onDidDispose\s*\(/.test(iife) &&
-    /\)\s*\}\s*catch\s*\(\s*e\s*\)\s*\{\s*\}/.test(iife),
+  'IIFE.37e Cc LL map carries CC_LIGHTS.tooltip for pending ("awaiting user input")',
+  iife.includes('pending:"awaiting user input"'),
 );
+
+// --- 14. commandCenter command handlers (v0.1.13): 20 registerCommand calls --
+// patchPackageJson contributes 20 commands (ccStatusDot.<key>.<variant>) to
+// CC's package.json. VSCode shows "command 'X' not found" if a contributed
+// command is not registered — so the IIFE registers all 20 as info-message
+// no-ops, idempotent across panels via globalThis.__ccsdCcCmdsRegistered.
+// Lock the registration block: a regression that dropped it would make every
+// CC light click pop a "command not found" error.
+check(
+  'IIFE.38 Cc command registration guarded by __ccsdCcCmdsRegistered',
+  /if\s*\(\s*!globalThis\.__ccsdCcCmdsRegistered\s*\)\s*\{globalThis\.__ccsdCcCmdsRegistered\s*=\s*true/.test(iife),
+);
+check('IIFE.39 Cc uses vs.commands.registerCommand', /vs\.commands\.registerCommand\s*\(\s*"ccStatusDot\./.test(iife));
+// The 20 command IDs are built dynamically as `"ccStatusDot."+k+"."+v` where
+// k ∈ LK and v ∈ VR. The IIFE source therefore contains the LK array (4 light
+// keys) + VR array (5 variants); together they prove the 4×5=20 coverage
+// without needing literal IDs in source (which would balloon the IIFE).
+check(
+  'IIFE.40 Cc LK array covers all 4 lights',
+  CC_LIGHTS.every((k) => iife.includes('"' + k + '"')),
+);
+check(
+  'IIFE.40b Cc VR array covers all 5 variants (0/1/2/3/N)',
+  CC_COUNT_VARIANTS.every((v) => iife.includes('"' + v + '"')),
+);
+// Per-tab rendering is UNCHANGED by v0.1.13 — assert the iconPath assignment
+// still exists AFTER the aggregation block (regression check: a refactor that
+// dropped per-tab dots while leaving only the commandCenter lights would pass
+// every other assertion).
+check('IIFE.41 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*vs\.Uri\.file/.test(iife));
 
 // --- summary ---------------------------------------------------------------
 

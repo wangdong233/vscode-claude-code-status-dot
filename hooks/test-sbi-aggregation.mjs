@@ -78,12 +78,13 @@ const DONE_TO_IDLE_MS = 5 * 60 * 1000; // 5 min — §4 done→idle
 const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC
 const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
 
-// The 4 SBI lights in fixed left→right display order, plus the dim emoji.
-// Mirror patch.ts SBI_LIGHTS (single source of truth). Order matches the IIFE's
-// `var EM=[...]` array: done(🟢) / running(🟡) / pending(🔵) / interrupted(🔴),
-// shared dim ⚪.
-const SBI_LIGHT_EMOJI = ['\u{1F7E2}', '\u{1F7E1}', '\u{1F535}', '\u{1F534}']; // 🟢 🟡 🔵 🔴
-const SBI_DIM_EMOJI = '\u{26AA}'; // ⚪
+// v0.1.15: the SBI surface renders each light as its own StatusBarItem with
+// the count digit INSIDE a colored block (white text on themed background).
+// There is no longer a single joined SBI.text string — each of the 4 SBIs has
+// its own text (digit-or-"N" or "0" for dim). expectedSbiTexts() below returns
+// the array of 4 per-SBI texts; assertions compare via JSON.stringify.
+// (v0.1.14 baked a SBI_LIGHT_EMOJI array + SBI_DIM_EMOJI here to build the
+// joined "🟢3 🟡1 🔵2 ⚪" string — both are gone in v0.1.15.)
 
 let pass = 0;
 let fail = 0;
@@ -101,7 +102,7 @@ function check(name, cond, detail) {
 // Reads every <sid>.json under <home>/.claude/cc-tab-status and applies the
 // SAME decay/bucket rules the IIFE does. `now` is injectable so time-based
 // decay tests are deterministic (no real-time waiting). Returns the raw
-// uncapped counts; callers apply cap() + disp() to get the SBI.text value.
+// uncapped counts; callers apply cap() + sbiBlockText() to get the per-SBI texts.
 function aggregate(home, now = Date.now()) {
   const DIR = path.join(home, '.claude', 'cc-tab-status');
   const ag = { running: 0, done: 0, interrupted: 0, idle: 0, pending: 0 };
@@ -145,14 +146,19 @@ function aggregate(home, now = Date.now()) {
       if (st === 'running') ag.running++;
       else if (st === 'done') ag.done++;
       else if (st === 'interrupted') ag.interrupted++;
-      // R3 review fix (M8/M9): catch-all idle bucket. Matches the IIFE's
-      // 'else ag.idle++' — any unrecognized state (corrupt / hand-edited /
-      // forward-incompatible) is treated as idle for state-bucketing, so it
-      // is NOT silently dropped. This keeps the file's pending===true (if
-      // any) from lighting 🔵 without any state light — the pending check
-      // below sees st==="idle" and skips it too. (The replica's st variable
-      // is let-typed so we can normalize it the same way here.)
-      else ag.idle++;
+      // R3 review fix (M8/M9), round-4 close (v0.1.15): catch-all idle bucket
+      // REASSIGNS st to "idle" — matches the IIFE's `else{st="idle";ag.idle++}`.
+      // Any unrecognized state (corrupt / hand-edited / forward-incompatible) is
+      // treated as idle for state-bucketing AND normalized on the pending axis,
+      // so a corrupt file with state="foo"+pending:true does NOT light 🔵 (the
+      // prior form `else ag.idle++` ran the count but left st="foo", so the
+      // pending check below saw unknown!=="idle"===true and over-counted blue).
+      // The replica's st variable is let-typed so we can normalize it the same
+      // way the IIFE now does.
+      else {
+        st = 'idle';
+        ag.idle++;
+      }
       // pending INDEPENDENT of state, but with the idle-GC: a session downgraded
       // to idle above is NOT counted toward 🔵 (kills the stale-blue-light stick).
       // ORDER MATTERS: this check MUST run after the three decay branches above
@@ -171,31 +177,29 @@ function cap(n) {
   return n >= 4 ? 4 : n;
 }
 
-// disp() — exact replica of the IIFE's
-//   `var disp=function(em,n){return n===0?DIM:(em+" "+(n>=4?"N":n));};`
-// n===0 → dim ⚪ (no number); n=1/2/3 → colored emoji + " " + digit;
-// n>=4 (capped to 4) → colored emoji + " N".
-function disp(em, n) {
-  return n === 0 ? SBI_DIM_EMOJI : em + ' ' + (n >= 4 ? 'N' : n);
+// sbiBlockText(n) — exact replica of the v0.1.15 IIFE's per-SBI text rule:
+//   `sbi.text=n===0?"0":(n>=4?"N":""+n)`
+// n===0 → "0" (block dim: gray text + transparent bg); n=1/2/3 → digit
+// (block lit: white text on themed bg); n>=4 (capped to 4) → "N".
+// (v0.1.14 used a separate disp(em,n) that joined emoji+digit into one
+// StatusBarItem.text; v0.1.15 splits into 4 SBIs so each shows just the
+// digit inside its own colored block.)
+function sbiBlockText(n) {
+  return n === 0 ? '0' : n >= 4 ? 'N' : String(n);
 }
 
-// Compute the SBI.text the IIFE would push for an aggregation. This is the
-// user-visible bottom-bar string ("🟢3 🟡1 🔵2 ⚪" style). Locks both the
-// disp() form and the fixed left→right order done/running/pending/interrupted.
-function expectedSbiText(ag) {
-  const cd = cap(ag.done),
-    cr = cap(ag.running),
-    cp = cap(ag.pending),
-    ci = cap(ag.interrupted);
-  return (
-    disp(SBI_LIGHT_EMOJI[0], cd) +
-    ' ' +
-    disp(SBI_LIGHT_EMOJI[1], cr) +
-    ' ' +
-    disp(SBI_LIGHT_EMOJI[2], cp) +
-    ' ' +
-    disp(SBI_LIGHT_EMOJI[3], ci)
-  );
+// Compute the 4 per-SBI texts the IIFE would push for an aggregation. Returns
+// an array [doneText, runningText, pendingText, interruptedText] — each entry
+// is the digit-or-"N" the corresponding colored block shows. Indexes match
+// CFG[] / counts[] in the IIFE (done/running/pending/interrupted, left→right).
+// Callers compare via JSON.stringify for a single-shot full-array assertion.
+function expectedSbiTexts(ag) {
+  return [
+    sbiBlockText(cap(ag.done)),
+    sbiBlockText(cap(ag.running)),
+    sbiBlockText(cap(ag.pending)),
+    sbiBlockText(cap(ag.interrupted)),
+  ];
 }
 
 // --- State file / HOME helpers ---------------------------------------------
@@ -258,17 +262,17 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
 // §1.1  Capping: 0 / 1 / 2 / 3 are passthrough; 4+ clamps to 4 (the "N" variant)
 {
   const home = newTempHome();
-  // 5 fresh running sessions → uncapped ag.running=5, capped SBI shows "🟡 N"
+  // 5 fresh running sessions → uncapped ag.running=5, capped SBI block shows "N"
   for (let i = 0; i < 5; i++) {
     writeStatus(home, 'run-' + i, { state: 'running', since: Date.now(), activeSubagents: 0, pending: false });
   }
   const ag = aggregate(home);
-  const text = expectedSbiText(ag);
+  const texts = expectedSbiTexts(ag);
   check('§1.1a  5 running sessions → ag.running=5 (uncapped)', ag.running === 5, 'ag.running=' + ag.running);
   check(
-    '§1.1b  cap(5)=4 → SBI shows "⚪ 🟡 N ⚪ ⚪"',
-    text === SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[1] + ' N ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI,
-    'text=' + text,
+    '§1.1b  cap(5)=4 → SBI blocks ["0","N","0","0"] (running block lit with "N")',
+    JSON.stringify(texts) === '["0","N","0","0"]',
+    'texts=' + JSON.stringify(texts),
   );
 }
 
@@ -279,18 +283,16 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
     writeStatus(home, 'd-' + i, { state: 'done', since: Date.now(), activeSubagents: 0, pending: false });
   }
   check(
-    '§1.2a  exactly 4 done → cap=4 (boundary, "N" variant) → SBI "🟢 N ⚪ ⚪ ⚪"',
-    expectedSbiText(aggregate(home)) ===
-      SBI_LIGHT_EMOJI[0] + ' N ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI,
+    '§1.2a  exactly 4 done → cap=4 (boundary, "N" variant) → SBI blocks ["N","0","0","0"]',
+    JSON.stringify(expectedSbiTexts(aggregate(home))) === '["N","0","0","0"]',
   );
   const home2 = newTempHome();
   for (let i = 0; i < 3; i++) {
     writeStatus(home2, 'd-' + i, { state: 'done', since: Date.now(), activeSubagents: 0, pending: false });
   }
   check(
-    '§1.2b  exactly 3 done → cap=3 (literal "3" variant) → SBI "🟢 3 ⚪ ⚪ ⚪"',
-    expectedSbiText(aggregate(home2)) ===
-      SBI_LIGHT_EMOJI[0] + ' 3 ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI,
+    '§1.2b  exactly 3 done → cap=3 (literal "3" variant) → SBI blocks ["3","0","0","0"]',
+    JSON.stringify(expectedSbiTexts(aggregate(home2))) === '["3","0","0","0"]',
   );
 }
 
@@ -310,8 +312,8 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   check('§1.3a  stale done (>5min) decays to idle, NOT counted as done', ag.done === 2, 'ag.done=' + ag.done);
   check('§1.3b  stale done counted in idle bucket', ag.idle === 1, 'ag.idle=' + ag.idle);
   check(
-    '§1.3c  SBI shows "🟢 2 ⚪ ⚪ ⚪"',
-    expectedSbiText(ag) === SBI_LIGHT_EMOJI[0] + ' 2 ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI,
+    '§1.3c  SBI blocks ["2","0","0","0"] (only 2 fresh done counted; stale decayed)',
+    JSON.stringify(expectedSbiTexts(ag)) === '["2","0","0","0"]',
   );
 }
 
@@ -347,9 +349,9 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   );
   check('§1.5b  same session counted in idle (not done)', ag.idle === 1 && ag.done === 0);
   check(
-    '§1.5c  SBI all dim ⚪ ⚪ ⚪ ⚪ (nothing counted; pending NOT lit)',
-    expectedSbiText(ag) === [SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI].join(' '),
-    'text=' + expectedSbiText(ag),
+    '§1.5c  SBI blocks ["0","0","0","0"] (nothing counted; pending NOT lit)',
+    JSON.stringify(expectedSbiTexts(ag)) === '["0","0","0","0"]',
+    'texts=' + JSON.stringify(expectedSbiTexts(ag)),
   );
 }
 
@@ -469,20 +471,20 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   );
 }
 
-// §1.8  Empty state dir / missing dir → SBI shows all dim ⚪
+// §1.8  Empty state dir / missing dir → SBI all blocks "0" (dim)
 {
   const home = newTempHome();
   fs.mkdirSync(stateDir(home), { recursive: true }); // exists but empty
   const ag = aggregate(home);
-  const text = expectedSbiText(ag);
+  const texts = expectedSbiTexts(ag);
   check(
     '§1.8a  empty state dir → ag all zeros',
     ag.done === 0 && ag.running === 0 && ag.pending === 0 && ag.interrupted === 0,
   );
   check(
-    '§1.8b  empty state dir → SBI all dim ⚪ ⚪ ⚪ ⚪',
-    text === [SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI].join(' '),
-    'text=' + text,
+    '§1.8b  empty state dir → SBI blocks ["0","0","0","0"]',
+    JSON.stringify(texts) === '["0","0","0","0"]',
+    'texts=' + JSON.stringify(texts),
   );
   // No dir at all
   const home2 = newTempHome();
@@ -498,6 +500,61 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   fs.writeFileSync(path.join(stateDir(home), 's.tmp'), '{"state":"done"}');
   const ag = aggregate(home);
   check('§1.9  non-.json files ignored; only 1 running session counted', ag.running === 1 && ag.done === 0);
+}
+
+// §1.10  Round-4 close (v0.1.15): unknown-state × pending:true does NOT light 🔵.
+// The R3 catch-all idle fix claimed corrupt / forward-incompatible files were
+// normalized to idle on BOTH the state axis and the pending axis, but the
+// `else ag.idle++` arm only ran the count without reassigning st — so a file
+// with state="foo" (or undefined) + pending:true still satisfied
+// `unknown!=="idle"` and over-counted blue. This test locks the round-4
+// `else{st="idle";ag.idle++}` close: state="weird"+pending=true lands in the
+// idle bucket AND pending stays 0. The behavioral assertion here is the
+// ground truth the test-iife.mjs IIFE.29 source-regex cannot reach (regex
+// can only verify the clause exists; this verifies it RUNS correctly for the
+// unknown-state × pending combination).
+{
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  // unknown state + pending=true → must NOT light 🔵
+  fs.writeFileSync(
+    path.join(stateDir(home), 'corrupt.json'),
+    JSON.stringify({ state: 'weird', since: Date.now(), pending: true, activeSubagents: 0 }),
+  );
+  // also test missing state field (forward-incompatible / hand-deleted)
+  fs.writeFileSync(
+    path.join(stateDir(home), 'nostate.json'),
+    JSON.stringify({ since: Date.now(), pending: true, activeSubagents: 0 }),
+  );
+  // control: a known-state pending session DOES light 🔵 (proves the assertion
+  // isn't trivially satisfied by "pending never counts")
+  writeStatus(home, 'control-r-p', {
+    state: 'running',
+    since: Date.now(),
+    activeSubagents: 0,
+    pending: true,
+  });
+  const ag = aggregate(home);
+  check(
+    '§1.10a  state="weird" + pending=true → idle bucket (NOT any state light)',
+    ag.idle === 2 && ag.done === 0 && ag.interrupted === 0,
+    'ag.idle=' + ag.idle + ' ag.done=' + ag.done + ' ag.interrupted=' + ag.interrupted,
+  );
+  check(
+    '§1.10b  only the control running session counts toward running (corrupt sessions skipped)',
+    ag.running === 1,
+    'ag.running=' + ag.running + ' (expected 1: only control-r-p)',
+  );
+  check(
+    '§1.10c  pending count === 1 (only the control running session; corrupt sessions skipped)',
+    ag.pending === 1,
+    'ag.pending=' + ag.pending + ' (expected 1: only control-r-p)',
+  );
+  check(
+    '§1.10d  SBI blocks ["0","1","1","0"] (only the control session lights its lights)',
+    JSON.stringify(expectedSbiTexts(ag)) === '["0","1","1","0"]',
+    'texts=' + JSON.stringify(expectedSbiTexts(ag)),
+  );
 }
 
 // ===========================================================================
@@ -529,12 +586,11 @@ console.log('\n=== §2  Notification hook → reader aggregation → SBI.text (f
     'ag.pending=' + ag.pending,
   );
   check('§2.1d  reader: same session also counted in running (state preserved)', ag.running === 1);
-  // SBI shows "⚪ 🟡1 🔵1 ⚪" (running + pending, no done/interrupted)
+  // SBI blocks: running=1, pending=1 → ["0","1","1","0"] (running + pending blocks lit)
   check(
-    '§2.1e  SBI shows "⚪ 🟡1 🔵1 ⚪"',
-    expectedSbiText(ag) ===
-      SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[1] + ' 1 ' + SBI_LIGHT_EMOJI[2] + ' 1 ' + SBI_DIM_EMOJI,
-    'text=' + expectedSbiText(ag),
+    '§2.1e  SBI blocks ["0","1","1","0"] (running + pending lit)',
+    JSON.stringify(expectedSbiTexts(ag)) === '["0","1","1","0"]',
+    'texts=' + JSON.stringify(expectedSbiTexts(ag)),
   );
 }
 
@@ -652,13 +708,13 @@ console.log('\n=== §2  Notification hook → reader aggregation → SBI.text (f
 // ===========================================================================
 console.log('\n=== §4  End-to-end (user scenario: 3 done / 1 running / 2 pending / 0 interrupted) ===');
 
-// §4.1  Exact scenario: SBI.text = "🟢3 🟡1 🔵2 ⚪"
+// §4.1  Exact scenario: SBI blocks = ["3","1","2","0"]
 // Pending is INDEPENDENT of state, so:
 //   - s1: done + pending=true  (counts done AND pending)
 //   - s2: done                 (counts done)
 //   - s3: done                 (counts done)
 //   - s4: running + pending=true (counts running AND pending)
-//   → done=3, running=1, pending=2, interrupted=0 → "🟢3 🟡1 🔵2 ⚪"
+//   → done=3, running=1, pending=2, interrupted=0 → blocks ["3","1","2","0"]
 {
   const home = newTempHome();
   writeStatus(home, 's1', { state: 'done', since: Date.now(), activeSubagents: 0, pending: true });
@@ -666,21 +722,21 @@ console.log('\n=== §4  End-to-end (user scenario: 3 done / 1 running / 2 pendin
   writeStatus(home, 's3', { state: 'done', since: Date.now(), activeSubagents: 0, pending: false });
   writeStatus(home, 's4', { state: 'running', since: Date.now(), activeSubagents: 0, pending: true });
   const ag = aggregate(home);
-  const text = expectedSbiText(ag);
+  const texts = expectedSbiTexts(ag);
   check('§4.1a  ag.done=3', ag.done === 3, 'ag.done=' + ag.done);
   check('§4.1a2 ag.running=1', ag.running === 1, 'ag.running=' + ag.running);
   check('§4.1a3 ag.pending=2', ag.pending === 2, 'ag.pending=' + ag.pending);
   check('§4.1a4 ag.interrupted=0', ag.interrupted === 0, 'ag.interrupted=' + ag.interrupted);
   check(
-    '§4.1b  SBI.text = "🟢3 🟡1 🔵2 ⚪"',
-    text === SBI_LIGHT_EMOJI[0] + ' 3 ' + SBI_LIGHT_EMOJI[1] + ' 1 ' + SBI_LIGHT_EMOJI[2] + ' 2 ' + SBI_DIM_EMOJI,
-    'text=' + text,
+    '§4.1b  SBI blocks ["3","1","2","0"] (3 done + 1 running + 2 pending + 0 interrupted)',
+    JSON.stringify(texts) === '["3","1","2","0"]',
+    'texts=' + JSON.stringify(texts),
   );
 }
 
-// §4.2  Light-variant selection: which count form each light takes for a given
-// aggregation. dim ⚪ for 0, colored + " " + digit for 1/2/3, colored + " N"
-// for 4+ (capped). This is the disp() rule applied to all 4 lights.
+// §4.2  Per-block text selection: which digit/"N"/"0" form each block takes for
+// a given aggregation. "0" for dim (count 0), digit for 1/2/3, "N" for 4+
+// (capped). This is the sbiBlockText() rule applied to all 4 blocks.
 {
   const home = newTempHome();
   // 6 done (cap→4="N"), 2 running, 0 pending, 1 interrupted
@@ -696,11 +752,11 @@ console.log('\n=== §4  End-to-end (user scenario: 3 done / 1 running / 2 pendin
     activeSubagents: 0,
     pending: false,
   });
-  const text = expectedSbiText(aggregate(home));
+  const texts = expectedSbiTexts(aggregate(home));
   check(
-    '§4.2  6 done + 2 running + 0 pending + 1 interrupted → "🟢 N 🟡 2 ⚪ 🔴 1"',
-    text === SBI_LIGHT_EMOJI[0] + ' N ' + SBI_LIGHT_EMOJI[1] + ' 2 ' + SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[3] + ' 1',
-    'text=' + text,
+    '§4.2  6 done + 2 running + 0 pending + 1 interrupted → blocks ["N","2","0","1"]',
+    JSON.stringify(texts) === '["N","2","0","1"]',
+    'texts=' + JSON.stringify(texts),
   );
 }
 
@@ -711,7 +767,7 @@ console.log('\n=== §4  End-to-end (user scenario: 3 done / 1 running / 2 pendin
 //   B: UserPromptSubmit → Notification (running, pending=true)
 //   C: UserPromptSubmit → StopFailure (interrupted)
 //   D: UserPromptSubmit → Stop (done)
-//   → 2 done, 1 running, 1 pending, 1 interrupted → "🟢2 🟡1 🔵1 🔴1"
+//   → 2 done, 1 running, 1 pending, 1 interrupted → blocks ["2","1","1","1"]
 {
   const home = newTempHome();
   fireHook(home, 'A', 'UserPromptSubmit');
@@ -725,7 +781,7 @@ console.log('\n=== §4  End-to-end (user scenario: 3 done / 1 running / 2 pendin
   fireHook(home, 'D', 'Stop'); // done
 
   const ag = aggregate(home);
-  const text = expectedSbiText(ag);
+  const texts = expectedSbiTexts(ag);
   check('§4.3a  writer-driven: 2 done (A, D)', ag.done === 2, 'ag.done=' + ag.done);
   check('§4.3b  writer-driven: 1 running (B, paused on Notification)', ag.running === 1, 'ag.running=' + ag.running);
   check(
@@ -735,22 +791,21 @@ console.log('\n=== §4  End-to-end (user scenario: 3 done / 1 running / 2 pendin
   );
   check('§4.3d  writer-driven: 1 interrupted (C)', ag.interrupted === 1, 'ag.interrupted=' + ag.interrupted);
   check(
-    '§4.3e  SBI.text = "🟢2 🟡1 🔵1 🔴1"',
-    text ===
-      SBI_LIGHT_EMOJI[0] + ' 2 ' + SBI_LIGHT_EMOJI[1] + ' 1 ' + SBI_LIGHT_EMOJI[2] + ' 1 ' + SBI_LIGHT_EMOJI[3] + ' 1',
-    'text=' + text,
+    '§4.3e  SBI blocks ["2","1","1","1"] (all 4 blocks lit)',
+    JSON.stringify(texts) === '["2","1","1","1"]',
+    'texts=' + JSON.stringify(texts),
   );
 }
 
-// §4.4  All-dim scenario: no sessions → SBI shows all dim ⚪
+// §4.4  All-dim scenario: no sessions → all 4 SBI blocks "0"
 {
   const home = newTempHome();
   fs.mkdirSync(stateDir(home), { recursive: true });
-  const text = expectedSbiText(aggregate(home));
+  const texts = expectedSbiTexts(aggregate(home));
   check(
-    '§4.4  no sessions → SBI all dim ⚪ ⚪ ⚪ ⚪',
-    text === [SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI].join(' '),
-    'text=' + text,
+    '§4.4  no sessions → SBI blocks ["0","0","0","0"]',
+    JSON.stringify(texts) === '["0","0","0","0"]',
+    'texts=' + JSON.stringify(texts),
   );
 }
 

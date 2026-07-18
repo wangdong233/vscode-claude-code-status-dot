@@ -2,6 +2,42 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.1.15] - 2026-07-18
+
+**底部 SBI 4 灯：把数字内置到彩色块里**。根因：v0.1.14 用单个 SBI 渲染 `🟢N 🟡N 🔵N 🔴N`（emoji 球 + 数字作为分开的 token 挤在一个 `StatusBarItem.text` 里），用户反馈"球+数字分开"不满意，要"数字直接内置在彩色块里"。VSCode `StatusBarItem.backgroundColor` 字段类型是 `ThemeColor | undefined`（**不接 hex 字符串**——已核对 `mainThreadStatusBar.ts` `$setEntry` 签名），所以"4 块用任意 hex"不可能；但前景 `color` 接 `string | ThemeColor`，故**白字数字 + ThemeColor 彩色背景**可行。v0.1.15 **拆成 4 个独立 SBI**（每灯一个 `createStatusBarItem`），每块 text 就是数字本身，count>0 时块亮（`backgroundColor=ThemeColor` + `color="#ffffff"` 白字），count=0 时块暗（透明底 + `statusBarItem.deactivatedForeground` 灰字 `"0"`，块仍可见）。
+
+### 变更（Changed）
+
+- **单 SBI → 4 SBI**：`globalThis.__ccsdSbi`（单个 StatusBarItem）→ `globalThis.__ccsdSbis`（4 元素数组）。IIFE 遍历 `CFG`（新增配置表 `SBI_LIGHTS_CFG`）创建 4 个 `createStatusBarItem(StatusBarAlignment.Left, pri)`，priority `-9996`/`-9997`/`-9998`/`-9999` 让 4 块并排在 Left 项最右端（done 最左 / interrupted 最右——priority 越高越靠左）。`onDidDispose` 最后一个 panel 退出时遍历 4 块逐个 `dispose()` 并置数组为 null。
+- **数字内置彩色块**：每块 text = `n===0?"0":(n>=4?"N":""+n)`；count>0 → `backgroundColor=new ThemeColor(CFG[k].bg)` + `color="#ffffff"`；count=0 → `backgroundColor=undefined`（透明）+ `color=new ThemeColor("statusBarItem.deactivatedForeground")`（灰）。v0.1.14 的 `disp(em,n)` / `var EM=[🟢,🟡,🔵,🔴]` / `var DIM=⚪` / `var text=disp(...).join(" ")` 全部删除——4 块各自独立，无拼接。
+- **4 个内置 `statusBarItem.*Background` 主题色**（`SBI_LIGHTS_CFG` patch.ts 单一真相源，`JSON.stringify` 烘焙进 IIFE 的 `var CFG=[...]`）：
+  - 🟢 done → `statusBarItem.remoteBackground`（绿；SSH/WSL 远程指示器色，所有内置主题里都是绿）
+  - 🟡 running → `statusBarItem.warningBackground`（黄/橙；VSCode 1.66 加入的 SBI 警告色）
+  - 🔵 pending → `statusBarItem.prominentBackground`（饱和蓝；少数深色主题偏紫，仍可区分）
+  - 🔴 interrupted → `statusBarItem.errorBackground`（红；标准 SBI 错误色）
+- **click handler 适配 4 块**：`ccStatusDot.sbiClick` 的 handler 改读 `globalThis.__ccsdSbis[0].tooltip`（4 块共享同一 tooltip，每 500ms 刷新）。4 块的 `.command` 字段都设为该 ID，点击任一块都弹 `InformationMessage`。
+- **`SBI_LIGHTS` / `SBI_DIM_EMOJI` / `SBI_LEFT_PRIORITY` 常量删除**：被 `SBI_LIGHTS_CFG`（`{key,bg,pri}` 表）取代。`SBI_CLICK_CMD` 不变。
+- **IIFE 版本戳 `v0.1.14` → `v0.1.15`**：已 patch 的 v0.1.14 装在下次 install 时被检测为 STALE（version 不符 + hash 不符双重保护）→ 自动从 `extension.js.bak` 还原并重注入新 4-SBI IIFE。
+
+### 保留（Preserved，v0.1.14 设计改进完整沿用到 v0.1.15）
+
+- **🔵 pending 第 4 灯**（writer 的 `Notification` hook case + reader 独立计数 + 与 state 正交）。
+- **done/running/interrupted 三路陈旧会话 GC**：done >5min→idle（§4）；running mtime >30min→idle（§7.2，变量名 `SBI_RUNNING_STALE_MS` 保留）；interrupted mtime >24h→idle（`INTERRUPTED_RETENTION_MS`）。per-tab 渲染**不应用**后两条，聚合层应用。
+- **pending 与 idle GC 联动**：`j.pending===true && st!=="idle"`——防止被强杀的权限弹窗会话在 🟡 不计的同时 🔵 仍假粘。
+- **聚合单例 + panel 计数 lifecycle**：`__ccsdSbis`（4 元素数组） + `__ccsdSbiTimer` 窗口级单例；`__ccsdPanelCount` 入口 +1 / `onDidDispose` -1，归零时清理（v0.1.15：遍历 4 块 dispose）。
+- **三层独立 try/catch 隔离**：(1) 4-SBI 创建（循环）；(2) 单例 timer 注册；(3) aggregation body。
+- **per-tab 4 态色点、`__ccsdPending` yield、notify、`__ccsdTitle` 刷新**：完全不变。
+
+### 改进（Improved）
+
+- **配色跨平台稳定**：v0.1.14 及更早的 🟢🟡🔵🔴 emoji 在 Win7/无 emoji 字体的 Linux/headless 可能黑白或豆腐块；v0.1.15 改用 `statusBarItem.*Background` ThemeColor，**完全跟随 VSCode 主题色**，跨平台稳定。这是 v0.1.15 相对 v0.1.14 的额外收益（用户要的是"数字内置块"，附带消除了 emoji 字体依赖）。
+
+### 已知限制
+
+- **形状是圆角矩形不是正圆**：VSCode `StatusBarItem` 无 `border-radius` API、无 overlay API——"球状块"在 SBI 限制下接受最接近方案（SBI 容器自带的轻微圆角矩形）。每块约 25-30px 宽，4 块约 110-130px 总宽。
+- **`prominentBackground` 在少数深色主题偏紫**：🔵 pending 块在大多数主题是饱和蓝，某些深色主题可能偏紫；仍可与绿/黄/红区分。若不爽可在 `SBI_LIGHTS_CFG` 一处改为 `editor.selectionBackground` 或 `activityBarBadge.background`。
+- **`statusBarItem.remoteBackground` 语义复用**：这个色本意是"远程 SSH/WSL 指示器"，我们借色不借义。若用户自定义了这色（覆盖 SSH 按钮色），我们的"done 绿"会跟着变——这其实是 feature（主题一致），不是 bug。
+
 ## [0.1.14] - 2026-07-18
 
 **commandCenter 4 灯回退到底部 SBI 4 灯**。根因：v0.1.13 的 commandCenter 顶部居中 4 灯在 Reload Window + 完全重启 VSCode 后**根本不显示**——失败面太多（VSCode commandCenter 可见性开关、标题栏宽度预算、setContext→when 滤链、IIFE 仅在 CC panel 打开时才触发），在没有 VSCode 集成测试架的情况下无法定位。v0.1.12 的底部 SBI（动态 text）此前已验证可靠。v0.1.14 **保留 v0.1.13 全部设计改进**（新增 🔵 pending 第 4 灯、done/running/interrupted 三路陈旧会话 GC、pending 与 state 独立计数），**仅切换显示载体**回到单个运行时 `StatusBarItem`（`StatusBarAlignment.Left` + 极负 priority `-9999` → 在 Left 项里最靠右、最接近可见中心）。

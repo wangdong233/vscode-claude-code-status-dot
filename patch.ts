@@ -121,39 +121,53 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  to static running, or v0.1.3 removing the aggregate bar) would be silently swallowed
  *  because the bare marker still matches.
  *
+ *  v0.1.15 SBI digit-in-block pivot: the v0.1.14 single SBI rendered
+ *  "🟢N 🟡N 🔵N 🔴N" (emoji ball + digit as separate tokens inside one
+ *  StatusBarItem.text). User feedback: the ball+digit-separate read was
+ *  unsatisfying. v0.1.15 splits into FOUR runtime StatusBarItem instances
+ *  (one per light) so each light's digit renders INSIDE its own colored
+ *  block — count>0 → themed backgroundColor block + "#ffffff" white digit
+ *  text; count=0 → "0" text in statusBarItem.deactivatedForeground gray +
+ *  transparent background (block visible but dim). 4 SBI-specific built-in
+ *  ThemeColors are reused so NO package.json patch is needed (preserving
+ *  the v0.1.14 "CC upgrade doesn't break" design):
+ *    🟢 done        → statusBarItem.remoteBackground    (green, priority -9996)
+ *    🟡 running     → statusBarItem.warningBackground   (yellow, -9997)
+ *    🔵 pending     → statusBarItem.prominentBackground (saturated blue, -9998)
+ *    🔴 interrupted → statusBarItem.errorBackground     (red, -9999)
+ *  VSCode's StatusBarItem.backgroundColor field accepts ThemeColor only
+ *  (NOT hex strings) — verified against mainThreadStatusBar.ts source — so
+ *  these 4 built-in SBI theme colors are the only route to 4 distinct
+ *  colored backgrounds. Priorities -9996..-9999 keep the 4 blocks at the
+ *  rightmost end of StatusBarAlignment.Left (closest to visible center),
+ *  in fixed left→right order done/running/pending/interrupted (higher
+ *  priority = more to the left per vscode.d.ts). The aggregation GC rules
+ *  (done>5min, running>30min, interrupted>24h, pending-with-idle-GC) are
+ *  UNCHANGED — only the rendering surface changed. Per-tab 4-state dots,
+ *  __ccsdPending yield, notify, panel-counter lifecycle all preserved.
+ *  The singleton timer now mutates all 4 SBIs each tick; onDidDispose
+ *  disposes all 4 on last-panel-out. SBI_LIGHTS (emoji array) /
+ *  SBI_DIM_EMOJI / SBI_LEFT_PRIORITY are REMOVED — replaced by the
+ *  SBI_LIGHTS_CFG table (key/bg/pri per light). SBI_CLICK_CMD is unchanged.
+ *
+ *  Earlier history:
  *  v0.1.14 SBI pivot (commandCenter → bottom StatusBarItem 4-light): the
  *  v0.1.13 commandCenter 4-light redesign (20 commands + 20 commandCenter
  *  menu items + 20 palette hides + IIFE-driven setContext + VSCode title-bar
  *  commandCenter visibility) was empirically unreliable — after a Reload
  *  Window / full VSCode restart the commandCenter 4 lights often failed to
- *  render at all (the failure has too many contributing surfaces — VSCode
- *  commandCenter visibility toggle, title-bar width budget, the setContext-
- *  when filter chain, the IIFE-only-runs-on-CC-panel-open lifecycle — to
- *  diagnose without a VSCode integration test harness). v0.1.14 keeps the
- *  v0.1.13 DESIGN improvements (4-light with NEW 🔵 pending, 3-way stale-
- *  session GC for done/running/interrupted, pending counted INDEPENDENTLY
- *  of state) but moves the SURFACE back to a single StatusBarItem at the
- *  BOTTOM (StatusBarAlignment.Left, very negative priority so it sits
- *  rightmost among Left items, closest to the visible center). The v0.1.12
- *  SBI surface was verified reliable across reloads; v0.1.13 commandCenter
- *  was not. The text is "🟢N 🟡N 🔵N 🔴N" where each light is either dim ⚪
- *  (count 0) or colored + count (1/2/3/N where N means >=4, capped by reader).
- *  Tooltip carries the full breakdown ("X done, Y running, Z pending, W
- *  interrupted"). Click shows an InformationMessage with the same breakdown.
- *  package.json is NO LONGER patched by install (the v0.1.13 commandCenter
- *  contribs are removed); --revert still cleans any v0.1.13 residue via
- *  restorePackageJson, and install auto-detects + restores a stale v0.1.13
- *  patch on sight. Per-tab 4-state dots, __ccsdPending yield, notify, the
- *  panel-counter lifecycle, and the aggregation GC rules are all preserved.
- *
- *  Earlier history:
+ *  render at all. v0.1.14 kept the v0.1.13 DESIGN improvements (4-light
+ *  with NEW 🔵 pending, 3-way stale-session GC for done/running/interrupted,
+ *  pending counted INDEPENDENTLY of state) but moved the SURFACE back to a
+ *  single StatusBarItem at the BOTTOM. The text was "🟢N 🟡N 🔵N 🔴N".
+ *  package.json was NO LONGER patched by install.
  *  v0.1.13 commandCenter 4-light (now abandoned — see v0.1.14 note above).
  *  v0.1.11 SBI aggregation refactor (per-panel-tick aggregation lifted into window-
  *  scoped singleton timer; §4 done>5min→idle + §7.2 stale-running(>30min)→idle applied
  *  so SBI matches per-tab counts; __ccsdPanelCount last-panel-out teardown).
  *  v0.1.12 round-3 review fixes (SBI singleton createStatusBarItem + setInterval each
  *  in their own try/catch; §7.5→§7.2 attribution fix). */
-const INJECT_VERSION = "v0.1.14";
+const INJECT_VERSION = "v0.1.15";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -287,58 +301,73 @@ const HOOK_EVENTS = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// SBI 4-light definitions (v0.1.14; was commandCenter in v0.1.13)
+// SBI 4-light definitions (v0.1.15: 4 StatusBarItem instances, digit-in-block)
 // ---------------------------------------------------------------------------
-// The bottom StatusBarItem (StatusBarAlignment.Left, very negative priority
-// so it sits rightmost among Left items, closest to the visible center) shows
-// 4 lights in fixed left→right order: 🟢done 🟡running 🔵pending 🔴interrupted.
-// Each light is either dim (⚪ at count 0) or colored with a capped count
-// (1/2/3/N where N means >=4). The text is built every 500ms by the
-// __ccsdSbiTimer singleton (see buildIIFE) — same aggregation rules as the
-// v0.1.13 commandCenter version (done>5min→idle, running stale 30min→idle,
-// interrupted 24h→idle; pending counted independently of state). v0.1.13's
-// package.json contribution (20 commands + 20 menu items + 20 palette hides)
-// is GONE — the SBI is a single runtime createStatusBarItem whose text is
-// mutated in place, no package.json patch. The single click-command
-// `ccStatusDot.sbiClick` is registered via runtime `vs.commands.registerCommand`
-// (no contribution needed for that).
+// The bottom status bar shows 4 lights in fixed left→right order: 🟢done
+// 🟡running 🔵pending 🔴interrupted. v0.1.15 renders each light as its OWN
+// runtime StatusBarItem so the count digit sits INSIDE a colored block (the
+// v0.1.14 single-SBI "emoji ball + digit separate" read was the user-rejected
+// prior art). VSCode's StatusBarItem.backgroundColor field accepts ThemeColor
+// ONLY (not hex strings — verified against mainThreadStatusBar.ts $setEntry:
+// `backgroundColor: ThemeColor | undefined`), so we reuse 4 built-in SBI
+// theme colors. No package.json contribution is needed — createStatusBarItem
+// + .backgroundColor = new ThemeColor(id) renders any registered SBI theme
+// color (statusbarItem.ts applyColor resolves whatever the active color theme
+// provides). Priorities -9996..-9999 put the 4 blocks at the rightmost end
+// of StatusBarAlignment.Left (closest to visible center); within that, higher
+// priority = more to the left (vscode.d.ts StatusBarItem.priority doc), so
+// done(-9996) is leftmost, interrupted(-9999) rightmost. count=0 → "0" text
+// in statusBarItem.deactivatedForeground gray + transparent background (dim
+// but visible); count>0 → digit-or-"N" white text + themed bg block (lit).
+// The single click-command `ccStatusDot.sbiClick` is set on all 4 SBIs and
+// registered via runtime `vs.commands.registerCommand` (no contribution
+// needed); handler reads globalThis.__ccsdSbis[0].tooltip.
 
 /** Marker stamped into CC's package.json by the abandoned v0.1.13 commandCenter
  *  patch. Kept only so install can DETECT stale v0.1.13 residue (and --revert
  *  can clean it) — v0.1.14+ no longer writes this field. */
 const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
 
-/** The 4 lights, in fixed left→right display order. Each entry is the colored
- *  emoji (count > 0); the dim form (count 0) is shared (`SBI_DIM_EMOJI` below).
- *  Emoji is the ONLY value consumed by buildIIFE (baked into the IIFE's
- *  `var EM=[...]` via JSON.stringify). The per-tick tooltip / click-feedback
- *  text is built inline inside the IIFE aggregation tick from the raw `ag.*`
- *  counts (see the `var tip=...` literal), NOT from any per-light descriptive
- *  string — a wrapper object here would be pure indirection over a plain
- *  string[]. Emoji codepoints: 🟢 U+1F7E2 / 🟡 U+1F7E1 / 🔵 U+1F535 / 🔴 U+1F534 / ⚪ U+26AA.
- *  Color fidelity depends on the OS emoji font stack (same documented tradeoff
- *  as the v0.1.12-v0.1.13 SBI/commandCenter). */
-const SBI_LIGHTS: string[] = [
-    "\u{1F7E2}", // green circle (active done, last 5 min)
-    "\u{1F7E1}", // yellow circle
-    "\u{1F535}", // blue circle (v0.1.13)
-    "\u{1F534}", // red circle
+/** The 4 lights, in fixed left→right display order. Each entry pins the
+ *  light's background ThemeColor id (a VSCode built-in statusBarItem.*
+ *  color, stable across themes) and its StatusBarItem.priority (higher =
+ *  more to the left; -9996..-9999 keeps the 4 blocks bunched at the
+ *  rightmost end of the Left alignment). This table is the SINGLE source
+ *  of truth consumed by buildIIFE (baked into the IIFE's `var CFG=[...]`
+ *  via JSON.stringify) and mirrored in test-iife.mjs. Renaming a bg id or
+ *  reordering lights here changes both the IIFE bytes and the test
+ *  assertions in lockstep.
+ *
+ *  Why these 4 theme colors:
+ *   - statusBarItem.remoteBackground — the SSH/WSL remote-indicator button
+ *     color; green in every built-in theme. We borrow the COLOR not the
+ *     semantic (users who re-theme the remote button get their "done"
+ *     block re-themed too, which is a feature: theme consistency).
+ *   - statusBarItem.warningBackground — yellow/orange; added in VSCode 1.66
+ *     specifically for SBI warning-state backgrounds.
+ *   - statusBarItem.prominentBackground — the saturated "prominent" SBI
+ *     background; blue in most themes (purple in a few dark themes — still
+ *     distinguishable from green/yellow/red). If a user reports the pending
+ *     block reads purple in their theme, swap to editor.selectionBackground
+ *     or activityBarBadge.background (both more stably blue).
+ *   - statusBarItem.errorBackground — red; standard SBI error background.
+ *
+ *  The public StatusBarItemKind enum (normal/warning/error/prominent) only
+ *  has 4 values and gives only 3 non-default colors, so it cannot produce 4
+ *  distinct backgrounds — that's why we use the lower-level backgroundColor
+ *  = new ThemeColor(id) path instead of the `kind` API. */
+const SBI_LIGHTS_CFG: ReadonlyArray<{ key: string; bg: string; pri: number }> = [
+    { key: "done", bg: "statusBarItem.remoteBackground", pri: -9996 }, // 🟢 leftmost
+    { key: "running", bg: "statusBarItem.warningBackground", pri: -9997 }, // 🟡
+    { key: "pending", bg: "statusBarItem.prominentBackground", pri: -9998 }, // 🔵
+    { key: "interrupted", bg: "statusBarItem.errorBackground", pri: -9999 }, // 🔴 rightmost
 ];
-
-/** Off-state emoji shared by all 4 lights (medium white circle). */
-const SBI_DIM_EMOJI = "\u{26AA}";
-
-/** SBI StatusBarItem alignment priority. Very negative so the SBI sits
- *  rightmost among Left items (closest to visible center). Single source of
- *  truth — baked into the IIFE below via ${SBI_LEFT_PRIORITY}, and mirrored
- *  in test-iife.mjs (same pattern as SBI_DIM_EMOJI). */
-const SBI_LEFT_PRIORITY = -9999;
 
 /** The SBI click-command id. Registered at runtime via
  *  vs.commands.registerCommand (no package.json contribution needed for
- *  registerCommand). Single source of truth — baked into the IIFE at both
- *  the registerCommand site AND the globalThis.__ccsdSbi.command assignment
- *  via ${JSON.stringify(SBI_CLICK_CMD)}, and mirrored in test-iife.mjs.
+ *  registerCommand). Single source of truth — baked into the IIFE at the
+ *  registerCommand site AND assigned to EACH of the 4 SBIs' `.command`
+ *  field via ${JSON.stringify(SBI_CLICK_CMD)}, and mirrored in test-iife.mjs.
  *  Renaming the command touches this const once; the IIFE bytes + the test
  *  assertions both follow. */
 const SBI_CLICK_CMD = "ccStatusDot.sbiClick";
@@ -665,29 +694,36 @@ function assertCompiles(code: string, label: string): void {
 //   (otherwise the interval + its closed-over `t`/`panelTab` refs leak for
 //   the lifetime of the VSCode window).
 //
-//   SBI 4-light (v0.1.14; see docs/STATES.md §7):
-//     The v0.1.13 commandCenter 4-light was abandoned — too many contributing
-//     surfaces (package.json contribs + setContext + VSCode title-bar visibility)
-//     made it unreliable after reload / restart. v0.1.14 keeps ALL the v0.1.13
-//     design improvements (4 lights incl. NEW 🔵 pending; 3-way stale-session
-//     GC for done/running/interrupted; pending counted INDEPENDENTLY of state)
-//     but moves the surface back to a single runtime StatusBarItem at the
-//     BOTTOM (StatusBarAlignment.Left, priority -9999 → rightmost among Left
-//     items → closest to the visible center). The v0.1.12 SBI was empirically
-//     reliable across reloads; this is a return to that proven surface.
-//   Surface — StatusBarItem:
-//     One window-scoped singleton globalThis.__ccsdSbi (createStatusBarItem),
-//     text mutated in place every 500ms by __ccsdSbiTimer. NO package.json
-//     patch (the v0.1.13 commandCenter contribs are GONE). Click feedback via
-//     a single runtime-registered command `ccStatusDot.sbiClick` (no
-//     contribution needed for registerCommand) — shows an InformationMessage
-//     with the current breakdown.
-//   Text format (built each tick):
-//     "🟢N 🟡N 🔵N 🔴N" — fixed left→right order done/running/pending/interrupted.
-//     Each light: count 0 → dim ⚪ (no number); 1/2/3 → colored + " " + digit;
-//     >=4 → colored + " N" (cap() clamps to 4). Tooltip carries the uncapped
-//     breakdown ("X done, Y running, Z pending, W interrupted").
-//   Aggregation rules (SAME as v0.1.13 commandCenter — preserved across pivot):
+//   SBI 4-light (v0.1.15; see docs/STATES.md §7):
+//     v0.1.14 rendered "🟢N 🟡N 🔵N 🔴N" inside a single StatusBarItem.text
+//     (emoji ball + digit as separate tokens). v0.1.15 splits into FOUR
+//     runtime StatusBarItem instances so each light's digit renders INSIDE
+//     its own colored block (white digit on themed background). The v0.1.13
+//     commandCenter surface and the v0.1.14 single-SBI emoji format are both
+//     gone; ALL design improvements are preserved (4 lights incl. NEW 🔵
+//     pending; 3-way stale-session GC for done/running/interrupted; pending
+//     counted INDEPENDENTLY of state).
+//   Surface — 4 StatusBarItem instances (v0.1.15):
+//     globalThis.__ccsdSbis is a window-scoped ARRAY of 4 createStatusBarItem
+//     instances (one per light), each with its own backgroundColor
+//     (ThemeColor), color (white/gray), and text (the digit). Priorities
+//     -9996..-9999 keep them bunched at the rightmost end of
+//     StatusBarAlignment.Left. All 4 are mutated in place every 500ms by the
+//     __ccsdSbiTimer singleton. NO package.json patch (the v0.1.13
+//     commandCenter contribs are GONE; v0.1.15 reuses built-in SBI theme
+//     colors so no contributes.colors either). Click feedback via a single
+//     runtime-registered command `ccStatusDot.sbiClick` wired to all 4 SBIs
+//     — shows an InformationMessage with the current breakdown.
+//   Per-block render (built each tick, v0.1.15):
+//     count 0 → text "0" + color statusBarItem.deactivatedForeground (gray)
+//               + backgroundColor undefined (transparent — dim but visible).
+//     count 1/2/3 → text digit + color "#ffffff" (white) + backgroundColor
+//                   CFG[k].bg (the light's themed block color: green/yellow/
+//                   blue/red).
+//     count >=4 → text "N" (cap() clamps 4+ to 4) + white + themed bg.
+//     Tooltip (same on all 4 SBIs) carries the uncapped breakdown
+//     ("X done, Y running, Z pending, W interrupted").
+//   Aggregation rules (SAME as v0.1.13/v0.1.14 — preserved across pivot):
 //     Window-scoped singleton timer globalThis.__ccsdSbiTimer (500ms) reads
 //     every <sid>.json, applies the SAME §4 reader rules as per-tab rendering
 //     (done>5min→idle so idle sessions are NOT counted as green; running stale
@@ -703,28 +739,28 @@ function assertCompiles(code: string, label: string): void {
 //     a permission prompt). Per-tab rendering is UNCHANGED (the __ccsdPending
 //     yield still lets CC's native blue dot show through).
 //   SBI singleton scope:
-//     globalThis.__ccsdSbi + __ccsdSbiTimer are window-scoped — first CC panel
-//     creates them, every later panel reuses them, so a P-panel window ticks
-//     aggregation ONCE per 500ms (not P times). Project-scoped __ccsd* prefix
-//     keeps CC's __cc* namespace clean (see the `cc-status-bar-injected`
-//     tombstone in restoreWebview()).
+//     globalThis.__ccsdSbis (4-element array) + __ccsdSbiTimer are window-
+//     scoped — first CC panel creates them, every later panel reuses them, so
+//     a P-panel window ticks aggregation ONCE per 500ms (not P times).
+//     Project-scoped __ccsd* prefix keeps CC's __cc* namespace clean (see the
+//     `cc-status-bar-injected` tombstone in restoreWebview()).
 //   SBI panel-counter lifecycle:
 //     Each IIFE entry bumps globalThis.__ccsdPanelCount; onDidDispose
 //     decrements and, when the count hits zero (last CC panel in the window
-//     closed), clears the singleton timer AND disposes the SBI so it goes
+//     closed), clears the singleton timer AND disposes ALL 4 SBIs so they go
 //     away — the bottom bar can't freeze on a stale count when no panel
 //     survives to refresh it. Opening a fresh CC panel re-creates both; the
 //     first tick re-pushes the real counts.
 //   SBI isolation:
-//     The SBI creation, the singleton timer creation, AND the aggregation body
-//     each live in their OWN try/catch (carried over from v0.1.12/v0.1.13) —
-//     a readdir/stat/parse/text-mutate failure can never brick the per-panel
-//     tick (which has its own setInterval) nor vice-versa, and a creation or
-//     timer-creation throw cannot propagate up through the comma-operator
-//     chain into CC's update_session_state handler.
+//     The SBI creation (4-item loop), the singleton timer creation, AND the
+//     aggregation body each live in their OWN try/catch (carried over from
+//     v0.1.12/v0.1.13/v0.1.14) — a readdir/stat/parse/text-mutate failure
+//     can never brick the per-panel tick (which has its own setInterval) nor
+//     vice-versa, and a creation or timer-creation throw cannot propagate up
+//     through the comma-operator chain into CC's update_session_state handler.
 //   Naming:
 //     ALL project-injected fields — BOTH globalThis singletons
-//     (__ccsdSbi / __ccsdSbiTimer / __ccsdPanelCount / __ccsdSbiCmdRegistered)
+//     (__ccsdSbis / __ccsdSbiTimer / __ccsdPanelCount / __ccsdSbiCmdRegistered)
 //     AND per-panel-instance fields stashed on the same `this`/`t` object CC's
 //     minified code operates on (__ccsdDotStarted / __ccsdSid / __ccsdTitle /
 //     __ccsdPending) — use the project-scoped __ccsd* prefix (mirrors
@@ -736,32 +772,24 @@ function assertCompiles(code: string, label: string): void {
 //     our guard / overwriting our stash. The earlier v0.1.x field names
 //     __ccDotStarted / __ccSid / __ccTitle / __ccPending were renamed to the
 //     __ccsd* form in the v0.1.14 pivot for this consistency.
-//     Emoji handling: emoji (🟢🟡🔵🔴⚪) live ONLY in SBI_LIGHTS / SBI_DIM_EMOJI
-//     (patch.ts source) and are baked into the IIFE as JSON-stringified string
-//     literals (via JSON.stringify in buildIIFE — never as raw \u{...} escapes
-//     in the IIFE source). The only emoji that appear inside the IIFE comments
-//     are developer-facing (e.g. "🔴 growth"), not executable values.
+//     Config baking (v0.1.15): the SBI_LIGHTS_CFG table (key/bg/pri per light)
+//     is the SINGLE source of truth in patch.ts source, baked into the IIFE
+//     as a JSON-stringified array literal `var CFG=[...]` via JSON.stringify
+//     in buildIIFE — never as raw escapes in the IIFE source. The IIFE
+//     comments reference theme-color ids (e.g. "🔴 growth"), not executable
+//     color values.
 // ---------------------------------------------------------------------------
 
 function buildIIFE(resDir: string): string {
     // JSON.stringify yields a safely-quoted, escaped JS string literal for the path
     // (also handles the non-ASCII chars in the project path correctly).
     const resLiteral = JSON.stringify(resDir);
-    // SBI 4-light emoji + dim-emoji literals baked into the IIFE as JSON-stringified
-    // arrays/strings (so no raw \u{...} escapes in the IIFE source — see the buildIIFE
-    // header comment). SBI_LIGHTS is the SINGLE source of truth (patch.ts); the IIFE
-    // builds its per-tick text from this array. Order matches aggregation output:
-    // done/running/pending/interrupted.
-    const emLiteral = "[" + SBI_LIGHTS.map((e) => JSON.stringify(e)).join(",") + "]";
-    const dimLiteral = JSON.stringify(SBI_DIM_EMOJI);
-    // Initial SBI text baked once for the creation-time assignment so the SBI is
-    // visible immediately on panel-open (business-logic review round-2: the SBI
-    // was created with .tooltip set but .text NEVER set, leaving it zero-width
-    // and invisible for the ~500ms until the first aggregation tick fired — and
-    // silently permanent if the timer-setup try/catch swallowed a throw). The
-    // literal is the all-zero-count disp() output: 4 dim emojis joined with
-    // single spaces. Built at patch time so the IIFE has no runtime cost.
-    const dimTextLiteral = JSON.stringify(SBI_LIGHTS.map(() => SBI_DIM_EMOJI).join(" "));
+    // SBI 4-light config table baked into the IIFE as a JSON-stringified array
+    // literal (so no raw escapes in the IIFE source). SBI_LIGHTS_CFG is the
+    // SINGLE source of truth (patch.ts); the IIFE's per-tick loop iterates
+    // CFG[k] for {key,bg,pri}. Order matches aggregation output:
+    // done/running/pending/interrupted (left→right on the status bar).
+    const cfgLiteral = JSON.stringify(SBI_LIGHTS_CFG);
     // State machine + notification + SBI aggregation mirror docs/STATES.md §1/§4/§4b/§7. Keep in sync.
     //
     // The banner carries INJECT_VERSION + a content hash of the body (everything
@@ -773,7 +801,7 @@ function buildIIFE(resDir: string): string {
         `(function(t){`,
         `if(t.__ccsdDotStarted||!t.panelTab)return;`,
         `t.__ccsdDotStarted=true;`,
-        `/*SBI panel counter: bumped per IIFE entry so the onDidDispose teardown at the tail of this IIFE can detect the last panel out and dispose the singleton SBI + clear its timer (v0.1.14; was Cc timer + 4 setContext resets in v0.1.13; was SBI hide in v0.1.11).*/`,
+        `/*SBI panel counter: bumped per IIFE entry so the onDidDispose teardown at the tail of this IIFE can detect the last panel out and dispose the 4 singleton SBIs + clear their timer (v0.1.15: 4-SBI dispose loop; was single __ccsdSbi.dispose in v0.1.14; was Cc timer + 4 setContext resets in v0.1.13; was SBI hide in v0.1.11).*/`,
         `globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||0)+1;`,
         `var fs=require("fs"),pth=require("path"),vs=require("vscode"),os=require("os");`,
         `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");`,
@@ -799,15 +827,18 @@ function buildIIFE(resDir: string): string {
          stat failure we keep the interrupted file counted, never silently
          drop it).*/
         `var INTERRUPTED_RETENTION_MS=24*60*60*1000;`,
-        /*v0.1.14 SBI 4-light emoji array + dim emoji — baked from SBI_LIGHTS /
-         SBI_DIM_EMOJI (patch.ts single source of truth) via JSON.stringify so
-         the IIFE source contains no raw \u{...} escapes. Order matches the
-         disp() text build below: done/running/pending/interrupted. Emoji
-         codepoints: 🟢 U+1F7E2 / 🟡 U+1F7E1 / 🔵 U+1F535 / 🔴 U+1F534 / ⚪ U+26AA
-         (color fidelity depends on the OS emoji font stack — same documented
-         tradeoff as v0.1.12-v0.1.13 SBI/commandCenter).*/
-        `var EM=${emLiteral};`,
-        `var DIM=${dimLiteral};`,
+        /*v0.1.15 SBI 4-light config table — baked from SBI_LIGHTS_CFG (patch.ts
+         single source of truth) via JSON.stringify so the IIFE source contains
+         no raw escapes. Each entry pins the light's background ThemeColor id
+         (a VSCode built-in statusBarItem.* color) and StatusBarItem.priority
+         (-9996..-9999 → rightmost Left items, done leftmost / interrupted
+         rightmost). The creation loop + per-tick update loop both index CFG[k]
+         — k=0 done / k=1 running / k=2 pending / k=3 interrupted, matching the
+         counts[] array built inside the aggregation tick. VSCode's SBI
+         backgroundColor field accepts ThemeColor only (NOT hex), so these 4
+         built-in SBI theme colors are the only route to 4 distinct colored
+         blocks without re-introducing a package.json patch.*/
+        `var CFG=${cfgLiteral};`,
         `var flashSeq=0,lastTermSince=null,seeded=false;/*flashSeq: interrupted on/off frame index (flashSeq%2)*/`,
         `function notify(st,err){`,
         `var c=vs.workspace.getConfiguration("ccStatusDot");`,
@@ -822,50 +853,78 @@ function buildIIFE(resDir: string): string {
         `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var escSnd=(""+snd).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var sndStr=escSnd?(' sound name "'+escSnd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var vsMsg=function(){if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);};try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr],function(err){if(err)vsMsg()})}catch(e){vsMsg()}}`,
         `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);}`,
         `}`,
-        /*v0.1.14 SBI click command (replaces v0.1.13's 20 package.json-contributed
-         commandCenter commands). ONE command registered via runtime
+        /*v0.1.15 SBI click command (carried over from v0.1.14; handler now reads
+         globalThis.__ccsdSbis[0].tooltip since the single __ccsdSbi became a
+         4-element array). ONE command registered via runtime
          vs.commands.registerCommand — no package.json contribution needed for
          registerCommand (it adds the command to VSCode's command registry at
          runtime; package.json contribution is only needed for palette/menu/
          keybinding wiring, none of which we use here). Idempotent across panels
          via globalThis.__ccsdSbiCmdRegistered — registerCommand throws on
          re-registration of the same ID within one host, so the whole block is
-         wrapped in try/catch too. The handler reads the SBI's CURRENT tooltip
-         (kept fresh every 500ms by __ccsdSbiTimer) and shows it as an
-         InformationMessage — clicking the SBI echoes the current breakdown
-         without modal / tab-switch disruption. The SBI.command field is set to
-         this command's ID in the SBI creation block just below, so VSCode
-         executes it on click.*/
-        `try{if(!globalThis.__ccsdSbiCmdRegistered){globalThis.__ccsdSbiCmdRegistered=true;try{vs.commands.registerCommand(${JSON.stringify(SBI_CLICK_CMD)},function(){try{if(globalThis.__ccsdSbi)vs.window.showInformationMessage(globalThis.__ccsdSbi.tooltip||"cc-status-dot")}catch(e){}})}catch(e){}}}catch(e){}`,
-        /* v0.1.14 SBI 4-light singleton creation + aggregation timer (replaces
-         * the v0.1.13 commandCenter contribs + Cc singleton timer; the
-         * v0.1.10-v0.1.12 StatusBarItem-at-Right design is RESTORED to a
-         * StatusBarItem-at-Left-near-center surface). Window-scoped — first CC
-         * panel creates the SBI + the timer, every later panel reuses both, so
-         * a P-panel window ticks aggregation ONCE per 500ms. Project-scoped
-         * __ccsd* prefix keeps CC's __cc* namespace clean (see the
-         * `cc-status-bar-injected` tombstone in restoreWebview()).
+         wrapped in try/catch too. The handler reads the FIRST SBI's CURRENT
+         tooltip (all 4 SBIs carry the same full breakdown, kept fresh every
+         500ms by __ccsdSbiTimer) and shows it as an InformationMessage —
+         clicking ANY of the 4 blocks echoes the current breakdown without
+         modal / tab-switch disruption. Each SBI.command field is set to this
+         command's ID in the 4-SBI creation block just below, so VSCode
+         executes it on click of any block.*/
+        `try{if(!globalThis.__ccsdSbiCmdRegistered){globalThis.__ccsdSbiCmdRegistered=true;try{vs.commands.registerCommand(${JSON.stringify(SBI_CLICK_CMD)},function(){try{if(globalThis.__ccsdSbis&&globalThis.__ccsdSbis[0])vs.window.showInformationMessage(globalThis.__ccsdSbis[0].tooltip||"cc-status-dot")}catch(e){}})}catch(e){}}}catch(e){}`,
+        /* v0.1.15 SBI 4-light digit-in-block creation (replaces v0.1.14's single
+         * SBI). FOUR window-scoped createStatusBarItem instances — one per
+         * light — each rendered as a colored block with the count digit
+         * INSIDE it (white text on themed background). count=0 → "0" text in
+         * statusBarItem.deactivatedForeground gray + transparent background
+         * (block visible but dim); count>0 → digit-or-"N" white + themed bg
+         * block (lit). The singleton is globalThis.__ccsdSbis (ARRAY of 4
+         * StatusBarItem instances); guard `!globalThis.__ccsdSbis` ensures
+         * only the first CC panel creates them. Project-scoped __ccsd* prefix
+         * keeps CC's __cc* namespace clean (see the `cc-status-bar-injected`
+         * tombstone in restoreWebview()).
          *
          * The aggregation applies §4 reader rules (done>5min→idle so IDLE
          * sessions are NOT counted toward the green light — only ACTIVE done
          * counts; running stale>30min→idle to GC crashed sessions; interrupted
-         * >24h→idle to bound 🔴 growth) so the SBI lights agree with the
+         * >24h→idle to bound 🔴 growth) so the SBI blocks agree with the
          * per-tab dots on what "done"/"running"/"interrupted" mean. Pending is
          * counted INDEPENDENTLY of state (a session can be both running AND
          * pending — the typical case: a running turn paused on a permission
          * prompt).
          *
          * THREE independent try/catch wrappers (carried over from v0.1.12/
-         * v0.1.13 round-3 fix):
-         *   (1) SBI CREATION (createStatusBarItem + registerCommand wiring) is
-         *       wrapped individually — a throw here is swallowed and the IIFE
-         *       continues to the per-tab tick.
+         * v0.1.13/v0.1.14 round-3 fix):
+         *   (1) SBI CREATION (the 4-item createStatusBarItem loop +
+         *       registerCommand wiring) is wrapped individually — a throw
+         *       here is swallowed and the IIFE continues to the per-tab tick.
+         *       Round-4 hardening (v0.1.15): the loop body is now per-iteration
+         *       try/catch + commit-atomic. The guard is a LENGTH check
+         *       (`!__ccsdSbis || __ccsdSbis.length !== CFG.length`) — a prior
+         *       partial-failure run that left a length<4 truthy array is
+         *       detected, the residual items are disposed, and the array is
+         *       rebuilt from scratch. The 4 createStatusBarItem results are
+         *       accumulated in a LOCAL `arr`; only when `arr.length===CFG.length`
+         *       (all 4 succeeded) is the array committed to globalThis — a
+         *       partial run leaves globalThis unset so the next panel retries.
+         *       This closes the "permanently stuck at N<4 lights" silent
+         *       degradation that v0.1.14's single-SBI path could not have.
+         *       Round-5 leak fix (v0.1.15): the prior round-4 comment claimed
+         *       "a partial run leaves globalThis unset so the next panel
+         *       retries" — but said nothing about the N<4 SBIs that were
+         *       already `.show()`n inside the loop before the iteration that
+         *       threw. Those SBIs are visible on the status bar yet unreachable
+         *       (never assigned to globalThis), so neither the per-tick update
+         *       loop nor the last-panel-out teardown can dispose them — every
+         *       retry would stack another partial set of orphan blocks. The
+         *       commit-atomic `if` now has an `else` that walks `arr` and
+         *       disposes each already-shown SBI before discarding it, so a
+         *       partial failure leaves ZERO visible residue (the next panel
+         *       retries from a clean slate).
          *   (2) The singleton TIMER SETUP is wrapped individually — a throw
          *       inside setInterval registration (disposed host, transient
          *       VSCode API failure) is swallowed and the IIFE continues to the
-         *       per-tab tick + onDidDispose registration. Without this, a throw
-         *       would propagate up through the comma-operator chain into CC's
-         *       `update_session_state` handler (bricking session-state
+         *       per-tab tick + onDidDispose registration. Without this, a
+         *       throw would propagate up through the comma-operator chain into
+         *       CC's `update_session_state` handler (bricking session-state
          *       tracking), skip the per-tab setInterval, AND skip onDidDispose
          *       registration (so the panel counter bumped at IIFE entry would
          *       never decrement — a permanent leak).
@@ -873,7 +932,7 @@ function buildIIFE(resDir: string): string {
          *       own try/catch so a readdir/stat/parse/text-mutate failure can
          *       never brick the per-panel tick (which has its own setInterval).
          */
-        `try{if(!globalThis.__ccsdSbi){globalThis.__ccsdSbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,${SBI_LEFT_PRIORITY});globalThis.__ccsdSbi.name="CC Status Dot";globalThis.__ccsdSbi.text=${dimTextLiteral};globalThis.__ccsdSbi.tooltip="Claude Code: 0 done, 0 running, 0 pending, 0 interrupted";try{globalThis.__ccsdSbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};globalThis.__ccsdSbi.show()}}catch(e){}`,
+        `try{if(!globalThis.__ccsdSbis||globalThis.__ccsdSbis.length!==CFG.length){if(globalThis.__ccsdSbis){for(var j=0;j<globalThis.__ccsdSbis.length;j++){try{globalThis.__ccsdSbis[j].dispose()}catch(e){}};globalThis.__ccsdSbis=null;}var arr=[];var litBgs=[];var dimClr=new vs.ThemeColor("statusBarItem.deactivatedForeground");for(var k=0;k<CFG.length;k++){try{var sbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,CFG[k].pri);sbi.name="CC "+CFG[k].key;sbi.text="0";sbi.tooltip="Claude Code: 0 done, 0 running, 0 pending, 0 interrupted";try{sbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};sbi.color=dimClr;sbi.show();litBgs.push(new vs.ThemeColor(CFG[k].bg));arr.push(sbi)}catch(e){}};if(arr.length===CFG.length){globalThis.__ccsdSbis=arr;globalThis.__ccsdSbiLitBgs=litBgs;globalThis.__ccsdSbiDimClr=dimClr;globalThis.__ccsdSbiLastKey=null;}else{for(var f=0;f<arr.length;f++){try{arr[f].dispose()}catch(e){}};}}}catch(e){}`,
         `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
         `try{`,
         `var ag={running:0,done:0,interrupted:0,idle:0,pending:0};`,
@@ -894,8 +953,8 @@ function buildIIFE(resDir: string): string {
         `if(st==="running")ag.running++;`,
         `else if(st==="done")ag.done++;`,
         `else if(st==="interrupted")ag.interrupted++;`,
-        `/*R3 review fix (M8/M9): catch-all idle bucket. The prior 'else if(st==="idle")ag.idle++;' chain silently dropped any file whose state field was neither of the four known values — a hand-edited / corrupt / forward-incompatible file with state="foo" or state=undefined matched NONE of the branches, so its counts vanished from ALL state totals while its pending===true STILL counted toward 🔵 (because undefined!=="idle" is true). That incoherence ("too corrupt to bucket by state yet trusted for pending") is now closed two ways: (1) any unknown state is treated as idle (matches the aggregation's unknown→idle posture already used on stat failure); (2) the pending check below then sees st==="idle" and skips pending too — consistent treatment of the same corrupt file across both axes. The writer never produces such files (every deriveStatus return has a known state), so this is pure defensive hardening.*/`,
-        `else ag.idle++;`,
+        `/*R3 review fix (M8/M9): catch-all idle bucket. The prior 'else if(st==="idle")ag.idle++;' chain silently dropped any file whose state field was neither of the four known values — a hand-edited / corrupt / forward-incompatible file with state="foo" or state=undefined matched NONE of the branches, so its counts vanished from ALL state totals while its pending===true STILL counted toward 🔵 (because undefined!=="idle" is true). That incoherence ("too corrupt to bucket by state yet trusted for pending") is now closed two ways: (1) any unknown state is treated as idle (matches the aggregation's unknown→idle posture already used on stat failure) AND its st is REASSIGNED to "idle" so the pending check below sees the normalized value; (2) the pending check below then sees st==="idle" and skips pending too — consistent treatment of the same corrupt file across both axes. Round-4 (v0.1.15) closes the half-fix where the prior else arm only ran ag.idle++ without reassigning st — that left st at the original unknown value (e.g. 'foo'/undefined), so the pending check still evaluated unknown!=="idle" as true and over-counted 🔵. The writer never produces such files (every deriveStatus return has a known state), so this is pure defensive hardening.*/`,
+        `else{st="idle";ag.idle++;}`,
         `/*v0.1.13/v0.1.14: pending counted INDEPENDENTLY of state — a session can be both running AND pending (running turn paused on a permission prompt). The writer marks pending:true on Notification and clears it on user/turn-driven events (UserPromptSubmit / Pre/PostToolUse / Stop / StopFailure); SubagentStart / SubagentStop PRESERVE cur.pending (background events carry no signal about the parent's open prompt). GC: skip pending for sessions downgraded to "idle" above (crashed running with pending:true, stale done with pending:true, or interrupted>24h with pending:true) — otherwise a session killed mid-permission-prompt would false-stick the 🔵 light forever (SessionEnd never fires on crash). This mirrors the §7.2 / interrupted-retention treatment: the SAME 'st' value computed above (with all three decay rules applied) gates both the state buckets AND the pending bucket, so a single stale session cannot be "not yellow" yet "still blue".*/`,
         `if(j.pending===true&&st!=="idle")ag.pending++;`,
         `}catch(e){}`,
@@ -904,13 +963,37 @@ function buildIIFE(resDir: string): string {
         `/*cap each light's count at 4 so the "N" variant displays for >=4. Clamps via inline ternary — no helper fn to keep IIFE flat.*/`,
         `var cap=function(n){return n>=4?4:n;};`,
         `var cd=cap(ag.done),cr=cap(ag.running),cp=cap(ag.pending),ci=cap(ag.interrupted);`,
-        `/*disp: count 0 -> dim ⚪ (no number); count 1/2/3 -> colored emoji + " " + digit; count >=4 (already capped to 4) -> colored emoji + " N".*/`,
-        `var disp=function(em,n){return n===0?DIM:(em+" "+(n>=4?"N":n));};`,
-        `/*text: 4 lights joined with single space, fixed left→right order done/running/pending/interrupted (matches SBI_LIGHTS order).*/`,
-        `var text=disp(EM[0],cd)+" "+disp(EM[1],cr)+" "+disp(EM[2],cp)+" "+disp(EM[3],ci);`,
-        `/*tooltip carries the UNcapped breakdown so the user can see actual counts even when the lights cap at N.*/`,
+        /*v0.1.15 digit-in-block render: each of the 4 SBIs shows just the
+         count digit INSIDE its own colored block. counts[] indexes match
+         CFG[] (done/running/pending/interrupted). Per-SBI update rules:
+           n===0 → text "0" + deactivatedForeground gray + transparent bg
+                   (block visible but dim; user always sees the 4 categories)
+           n>0   → text (n>=4?"N":""+n) + "#ffffff" white + themed bg block
+                   (lit colored block with white digit inside)
+         The dim/lit flip is the v0.1.15 equivalent of v0.1.14's disp()/DIM
+         emoji swap — same semantic (0=dim, non-0=lit), new visual primitive
+         (transparent+gray vs themed-block+white). No disp()/EM/DIM needed
+         anymore. cap() still clamps 4+ to 4 so the "N" variant kicks in.*/
+        `var counts=[cd,cr,cp,ci];`,
+        `/*tooltip carries the UNcapped breakdown so the user can see actual counts even when the lights cap at N. All 4 SBIs carry the same tooltip (hovering any block shows the full breakdown).*/`,
         `var tip="Claude Code: "+ag.done+" done, "+ag.running+" running, "+ag.pending+" pending, "+ag.interrupted+" interrupted";`,
-        `try{if(globalThis.__ccsdSbi){globalThis.__ccsdSbi.text=text;globalThis.__ccsdSbi.tooltip=tip;globalThis.__ccsdSbi.show()}}catch(e){}`,
+        /*v0.1.15 round-4 hardening: per-tick SBI update loop now (a) wraps each
+         SBI mutate in its OWN try/catch (was a single outer try/catch over the
+         whole for-loop — one disposed SBI throwing froze ALL later blocks for
+         that tick AND every subsequent tick); (b) reuses cached ThemeColor
+         instances built once at creation time (globalThis.__ccsdSbiLitBgs +
+         __ccsdSbiDimClr) instead of allocating `new vs.ThemeColor(...)` per
+         block per tick — ThemeColor is an immutable id wrapper so cross-tick
+         reuse is safe, and this cuts ~8 allocations/tick to 0 in steady state;
+         (c) short-circuits via a lastKey memo (globalThis.__ccsdSbiLastKey)
+         keyed on the UNcapped aggregation tuple — long-running sessions where
+         the capped counts don't change for hours skip the mutate loop entirely
+         (~40 IPC writes/s → 0 in steady state). The key uses uncapped values
+         so an ag.done 4→5 (both cap to "N") still refreshes the tooltip's "4 done"
+         → "5 done" breakdown. Per-iteration try/catch aligns with the dispose
+         loop's existing isolation pattern (round-3 already had try/catch IN
+         the dispose loop — only create/update were the asymmetric outliers).*/
+        `try{if(globalThis.__ccsdSbis&&globalThis.__ccsdSbiLitBgs){var key=ag.done+","+ag.running+","+ag.pending+","+ag.interrupted;if(key!==globalThis.__ccsdSbiLastKey){globalThis.__ccsdSbiLastKey=key;for(var k=0;k<globalThis.__ccsdSbis.length;k++){try{var sbi=globalThis.__ccsdSbis[k];var n=counts[k];sbi.text=n===0?"0":(n>=4?"N":""+n);sbi.tooltip=tip;if(n>0){sbi.backgroundColor=globalThis.__ccsdSbiLitBgs[k];sbi.color="#ffffff"}else{sbi.backgroundColor=undefined;sbi.color=globalThis.__ccsdSbiDimClr};sbi.show()}catch(e){}}}}}catch(e){}`,
         `}catch(e){}`,
         `},${TICK_MS});}}catch(e){}`,
         `var timer=setInterval(function(){`,
@@ -931,8 +1014,8 @@ function buildIIFE(resDir: string): string {
         `flashSeq++;`,
         `try{p.iconPath=vs.Uri.file(svg)}catch(e){}`,
         `},${TICK_MS});`,
-        `/*release this panel's 500ms tick + closed-over refs when the panel closes; also decrement the SBI panel counter, and on the LAST panel out (count→0) clear the singleton SBI timer AND dispose the SBI itself so it goes away — the bottom bar can't freeze on a stale count with no surviving panel to refresh it (v0.1.14; was Cc timer + 4 setContext resets in v0.1.13; was SBI hide in v0.1.11).*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;}}})}catch(e){}`,
+        `/*release this panel's 500ms tick + closed-over refs when the panel closes; also decrement the SBI panel counter, and on the LAST panel out (count→0) clear the singleton SBI timer AND dispose ALL 4 SBIs so they go away — the bottom bar can't freeze on a stale count with no surviving panel to refresh it (v0.1.15: 4-SBI dispose loop; was single __ccsdSbi.dispose in v0.1.14; was Cc timer + 4 setContext resets in v0.1.13; was SBI hide in v0.1.11).*/`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbis){for(var k=0;k<globalThis.__ccsdSbis.length;k++){try{globalThis.__ccsdSbis[k].dispose()}catch(e){}};globalThis.__ccsdSbis=null;globalThis.__ccsdSbiLitBgs=null;globalThis.__ccsdSbiDimClr=null;globalThis.__ccsdSbiLastKey=null;}}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -1147,6 +1230,73 @@ function bakedResPath(content: string): string | null {
     }
 }
 
+/** Inverse of injectFresh — strip our injected IIFE + the stash-field
+ *  assignments we added around ANCHOR_A / ANCHOR_B from a patched
+ *  extension.js. Returns the recovered original (suitable for re-inject), or
+ *  null if the input doesn't match our injection shape (so callers can fall
+ *  back to the baked-RES rewrite without crashing).
+ *
+ *  Round-4 (v0.1.15) addition: when `patchExtension` detects a stale IIFE
+ *  (version or content-hash mismatch) and `extension.js.bak` is missing OR
+ *  itself patched, this helper lets us recover by stripping from the CURRENT
+ *  extension.js. Without this, a stale-but-no-.bak install was permanently
+ *  stuck on the old IIFE body with no in-product recovery path (the user had
+ *  to wait for the next CC update to reset extension.js to fresh).
+ *
+ *  Strategy: at each anchor we injected a single contiguous segment —
+ *    anchor A: `this.__ccsdSid=…,this.__ccsdTitle=…,` + IIFE + `,`
+ *              (between `return ` and `this.onSessionStateChanged`)
+ *    anchor B: `this.__ccsdTitle=…;this.__ccsdPending=…;` + IIFE + `;`
+ *              (between `…title=…;` and `let r`)
+ *  We match each segment as ONE regex (stash + IIFE + trailing separator) so
+ *  removing it leaves the original byte sequence intact. The IIFE banner is
+ *  `/*cc-status-dot-injected:…*\/(function(t){…})(this)` and the body has no
+ *  internal `})(this)` (setInterval/arrows close with `},N)` or `})`), so
+ *  non-greedy `[\s\S]*?` to the first `})(this)` is safe.
+ *
+ *  Sanity checks before returning: assertCompiles + no leftover stash tokens +
+ *  INJECT_MARKER-free. The caller (patchExtension) further verifies ANCHOR_A
+ *  appears exactly once before trusting the result.
+ *
+ *  The segment patterns are pinned to the EXACT forms produced by replA /
+ *  replB in injectFresh. A future refactor that changes those forms MUST
+ *  update the patterns here in lockstep — the post-strip INJECT_MARKER-free
+ *  check is the safety net if a pattern drifts undetected. */
+function stripIifeInPlace(content: string): string | null {
+    // Anchor A segment: stash fields + IIFE + trailing comma. The leading
+    // `this.__ccsdSid=…` is unique to our injection (never appears in fresh
+    // CC code), so a failed match here means the on-disk form is something we
+    // don't recognize — bail to the safe RES-rewrite path.
+    const segA =
+        /this\.__ccsdSid=e\.request\.sessionId,this\.__ccsdTitle=e\.request\.title,\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\),/g;
+    // Anchor B segment: stash fields + IIFE + trailing semicolon. The leading
+    // `this.__ccsdTitle=…;this.__ccsdPending=…` pair is unique to our injection.
+    const segB =
+        /this\.__ccsdTitle=e\.request\.title;this\.__ccsdPending=!!e\.request\.hasPendingPermissions;\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
+
+    // Pre-check: at least one segment must match, otherwise this isn't ours.
+    if (!segA.test(content) && !segB.test(content)) return null;
+    segA.lastIndex = 0;
+    segB.lastIndex = 0;
+
+    let out = content.replace(segA, "").replace(segB, "");
+
+    // Sanity check the result compiles (anchor shape preserved). If anything
+    // looks off, return null so the caller falls through to the safe RES
+    // rewrite path.
+    try {
+        assertCompiles(out, "stripIifeInPlace output (recovered original)");
+    } catch {
+        return null;
+    }
+    if (out.includes(INJECT_MARKER)) {
+        // A segment didn't match the form we expected and an IIFE fragment
+        // survived — bail.
+        return null;
+    }
+    return out;
+}
+
 function patchExtension(extDir: string): void {
     const extJs = path.join(extDir, "extension.js");
     if (!fs.existsSync(extJs)) fail(`extension.js not found in ${extDir}`);
@@ -1188,12 +1338,28 @@ function patchExtension(extDir: string): void {
                 injectFresh(extJs, original);
                 return;
             }
-            warn(`extension.js.bak is itself patched — cannot cleanly re-inject; falling back to RES rewrite`);
+            warn(`extension.js.bak is itself patched — trying to strip IIFE from current extension.js`);
         } else {
             warn(
-                `stale injected IIFE (${why}) but no extension.js.bak — cannot re-inject; falling back to RES rewrite`,
+                `stale injected IIFE (${why}) but no extension.js.bak — trying to strip IIFE from current extension.js`,
             );
         }
+        // Round-4 fallback (architecture-review fix): when .bak is missing OR
+        // itself patched, recover the original by INVERTING the splice in-place
+        // — strip our IIFE + the stash-field assignments we added around it.
+        // If the strip yields a clean (unpatched, INJECT_MARKER-free) text with
+        // the anchor intact, we feed it to injectFresh and the user gets the
+        // current IIFE body. If the strip is inconclusive (unrecognized stash
+        // form from a future version, or anchor shape changed), we fall through
+        // to the baked-RES rewrite so the install is never left worse than
+        // "stale IIFE but RES path corrected".
+        const stripped = stripIifeInPlace(src);
+        if (stripped !== null && !isExtensionPatched(stripped)) {
+            log(`stripped stale IIFE from current extension.js — re-injecting fresh`);
+            injectFresh(extJs, stripped);
+            return;
+        }
+        warn(`could not cleanly strip IIFE from current extension.js — falling back to RES rewrite`);
         // Fall through to baked-RES check as a best-effort refresh.
     }
 

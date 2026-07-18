@@ -31,9 +31,9 @@
  * those steps — so the journey proves writer→reader composition, not just
  * reader behavior on hand-written JSON.
  *
- * Phases (each prints BEFORE → AFTER SBI.text so the journey reads top-down):
- *   §0  Cold start — empty editor, SBI all dim ⚪ ⚪ ⚪ ⚪
- *   §1  Open first tab — 1 running → "⚪ 🟡1 ⚪ ⚪"
+ * Phases (each prints BEFORE → AFTER SBI texts so the journey reads top-down):
+ *   §0  Cold start — empty editor, SBI all dim ["0","0","0","0"]
+ *   §1  Open first tab — 1 running → ["0","1","0","0"]
  *   §2  Open more tabs — count grows through 2 / 3 / N (cap@4+)
  *   §3  Some finish, one crashes — done + interrupted lit, running drops
  *   §4  Permission prompt fires — 🔵 pending INDEPENDENT of running state
@@ -42,7 +42,7 @@
  *       all decay to idle; IDLE sessions do NOT light 🟢 (灰不计绿)
  *   §7  Crashed-mid-permission GC — pending on an idle-decayed session does
  *       NOT false-stick 🔵 (stale-blue-light fix)
- *   §8  Close all tabs — back to ⚪ ⚪ ⚪ ⚪
+ *   §8  Close all tabs — back to ["0","0","0","0"]
  *
  * Run:  node hooks/test-smoke-journey.mjs
  */
@@ -65,13 +65,11 @@ const DONE_TO_IDLE_MS = 5 * 60 * 1000; // 5 min — §4 done→idle
 const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC
 const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
 
-// The 4 SBI lights in fixed left→right display order, plus the dim emoji.
-// Mirror patch.ts SBI_LIGHTS (single source of truth). Order matches the IIFE's
-// `var EM=[...]` array: done(🟢) / running(🟡) / pending(🔵) / interrupted(🔴),
-// shared dim ⚪.
-const SBI_LIGHT_EMOJI = ['\u{1F7E2}', '\u{1F7E1}', '\u{1F535}', '\u{1F534}']; // 🟢 🟡 🔵 🔴
-const SBI_DIM_EMOJI = '\u{26AA}'; // ⚪
-// Human-readable names for the journey log (purely cosmetic — not consumed by logic).
+// v0.1.15: each SBI is its own StatusBarItem with the digit INSIDE a colored
+// block. There is no single joined SBI.text — sbiTexts() below returns the
+// array of 4 per-SBI texts. (v0.1.14 kept SBI_LIGHT_EMOJI + SBI_DIM_EMOJI
+// here to build the joined "🟢3 🟡1 🔵2 ⚪" string; both are gone in v0.1.15.)
+// The LIGHT_NAMES array below stays — it's used for cosmetic journey-log lines.
 const LIGHT_NAMES = ['done', 'running', 'pending', 'interrupted'];
 
 let pass = 0;
@@ -135,7 +133,15 @@ function aggregate(home, now = Date.now()) {
       if (st === 'running') ag.running++;
       else if (st === 'done') ag.done++;
       else if (st === 'interrupted') ag.interrupted++;
-      else ag.idle++; // includes unknown / corrupt / forward-incompatible states
+      // round-4 close (v0.1.15): unknown / corrupt / forward-incompatible
+      // states are normalized to "idle" so the pending check below sees
+      // st==="idle" and skips them — matches the IIFE's `else{st="idle";ag.idle++}`.
+      // (The prior `else ag.idle++;` left st at the unknown value, so
+      // state="foo"+pending:true still lit 🔵.)
+      else {
+        st = 'idle';
+        ag.idle++;
+      }
       // pending INDEPENDENT of state, with idle-GC: a session downgraded to idle
       // above does NOT count toward 🔵 (kills the stale-blue-light false-stick).
       // ORDER MATTERS: this check MUST run AFTER the three decay branches above
@@ -153,21 +159,24 @@ function cap(n) {
   return n >= 4 ? 4 : n;
 }
 
-// disp() — exact replica of the IIFE's
-//   `var disp=function(em,n){return n===0?DIM:(em+" "+(n>=4?"N":n));};`
-function disp(em, n) {
-  return n === 0 ? SBI_DIM_EMOJI : em + ' ' + (n >= 4 ? 'N' : n);
+// sbiBlockText(n) — exact replica of the v0.1.15 IIFE's per-SBI text rule:
+//   `sbi.text=n===0?"0":(n>=4?"N":""+n)`
+// n===0 → "0" (dim block); n=1/2/3 → digit (lit block); n>=4 (capped) → "N".
+// (v0.1.14 used disp(em,n) that joined emoji+digit; v0.1.15 splits into 4 SBIs.)
+function sbiBlockText(n) {
+  return n === 0 ? '0' : n >= 4 ? 'N' : String(n);
 }
 
-// Compute SBI.text from raw aggregation. Fixed order done/running/pending/
-// interrupted, joined with single space.
-function sbiText(ag) {
+// Compute the 4 per-SBI texts the IIFE would push for an aggregation. Returns
+// an array [doneText, runningText, pendingText, interruptedText]. Fixed order
+// done/running/pending/interrupted matches CFG[]/counts[] in the IIFE.
+function sbiTexts(ag) {
   return [
-    disp(SBI_LIGHT_EMOJI[0], cap(ag.done)),
-    disp(SBI_LIGHT_EMOJI[1], cap(ag.running)),
-    disp(SBI_LIGHT_EMOJI[2], cap(ag.pending)),
-    disp(SBI_LIGHT_EMOJI[3], cap(ag.interrupted)),
-  ].join(' ');
+    sbiBlockText(cap(ag.done)),
+    sbiBlockText(cap(ag.running)),
+    sbiBlockText(cap(ag.pending)),
+    sbiBlockText(cap(ag.interrupted)),
+  ];
 }
 
 // --- State file / HOME helpers ---------------------------------------------
@@ -230,18 +239,18 @@ function fireHook(home, sid, event, extra = {}) {
 
 // --- Journey log helpers (cosmetic — make the BEFORE/AFTER narrative read) ---
 function dimOf(ag) {
-  // Return a 4-char string showing which lights are dim (⚪) vs colored (●)
+  // Return a 4-char string showing which blocks are dim ("0") vs lit ("●")
   // purely for the journey log. Not consumed by assertions.
-  return [ag.done, ag.running, ag.pending, ag.interrupted].map((n) => (n === 0 ? SBI_DIM_EMOJI : '●')).join('');
+  return [ag.done, ag.running, ag.pending, ag.interrupted].map((n) => (n === 0 ? '0' : '●')).join('');
 }
 
 function logPhase(title) {
   console.log('\n--- ' + title + ' ---');
 }
 
-function logStep(label, home, expectedText, expectedAg) {
+function logStep(label, home, expectedTexts, expectedAg) {
   const ag = aggregate(home);
-  const text = sbiText(ag);
+  const texts = sbiTexts(ag);
   const agStr =
     '{done:' +
     ag.done +
@@ -255,10 +264,14 @@ function logStep(label, home, expectedText, expectedAg) {
     ag.idle +
     '}';
   console.log('    step: ' + label);
-  console.log('      ag = ' + agStr + '   lights=' + dimOf(ag));
-  console.log('      SBI.text = ' + JSON.stringify(text));
-  if (expectedText !== undefined) {
-    check('SBI.text === ' + JSON.stringify(expectedText), text === expectedText, 'got=' + text);
+  console.log('      ag = ' + agStr + '   blocks=' + dimOf(ag));
+  console.log('      SBI texts = ' + JSON.stringify(texts));
+  if (expectedTexts !== undefined) {
+    check(
+      'SBI texts === ' + JSON.stringify(expectedTexts),
+      JSON.stringify(texts) === JSON.stringify(expectedTexts),
+      'got=' + JSON.stringify(texts),
+    );
   }
   if (expectedAg !== undefined) {
     for (const k of Object.keys(expectedAg)) {
@@ -271,9 +284,9 @@ function logStep(label, home, expectedText, expectedAg) {
 // ===========================================================================
 // THE JOURNEY
 // ===========================================================================
-console.log('SBI user-journey smoke test (v0.1.14)');
+console.log('SBI user-journey smoke test (v0.1.15)');
 console.log('(real cc-status.js writer + replica IIFE aggregation, isolated HOME)');
-console.log('Legend: 🟢done  🟡running  🔵pending  🔴interrupted  ⚪dim(0)  ● colored(non-zero)');
+console.log('Legend: 🟢done  🟡running  🔵pending  🔴interrupted  0=dim block  ● colored block (non-zero)');
 
 let home;
 try {
@@ -288,14 +301,14 @@ logPhase('§0  Cold start — no CC tabs open');
 // State dir does not even exist yet (fresh HOME). Aggregation must NOT throw.
 {
   const ag = aggregate(home);
-  const text = sbiText(ag);
-  console.log('    ag = {all zeros}   lights=' + dimOf(ag));
-  console.log('    SBI.text = ' + JSON.stringify(text));
+  const texts = sbiTexts(ag);
+  console.log('    ag = {all zeros}   blocks=' + dimOf(ag));
+  console.log('    SBI texts = ' + JSON.stringify(texts));
   check('§0a  cold-start ag all zeros', ag.done === 0 && ag.running === 0 && ag.pending === 0 && ag.interrupted === 0);
   check(
-    '§0b  cold-start SBI all dim ⚪ ⚪ ⚪ ⚪',
-    text === [SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI].join(' '),
-    'text=' + text,
+    '§0b  cold-start SBI all dim ["0","0","0","0"]',
+    JSON.stringify(texts) === '["0","0","0","0"]',
+    'texts=' + JSON.stringify(texts),
   );
 }
 
@@ -303,45 +316,26 @@ logPhase('§0  Cold start — no CC tabs open');
 logPhase('§1  Open first CC tab — session A starts running');
 // Drive through the real writer so the journey exercises the writer→reader chain.
 fireHook(home, 'A', 'UserPromptSubmit');
-logStep(
-  'A: UserPromptSubmit',
-  home,
-  SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[1] + ' 1 ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI,
-  { running: 1, done: 0, pending: 0, interrupted: 0, idle: 0 },
-);
+logStep('A: UserPromptSubmit', home, ['0', '1', '0', '0'], {
+  running: 1,
+  done: 0,
+  pending: 0,
+  interrupted: 0,
+  idle: 0,
+});
 
 // === §2  Open more tabs — count grows 2 → 3 → N (cap@4+) ====================
 logPhase('§2  Spawn more tabs — 🟡 count grows through 2 / 3 / N (cap clamps 4+ to "N")');
 fireHook(home, 'B', 'UserPromptSubmit');
-logStep(
-  'B: UserPromptSubmit (2 running)',
-  home,
-  SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[1] + ' 2 ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI,
-  { running: 2 },
-);
+logStep('B: UserPromptSubmit (2 running)', home, ['0', '2', '0', '0'], { running: 2 });
 fireHook(home, 'C', 'UserPromptSubmit');
-logStep(
-  'C: UserPromptSubmit (3 running)',
-  home,
-  SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[1] + ' 3 ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI,
-  { running: 3 },
-);
+logStep('C: UserPromptSubmit (3 running)', home, ['0', '3', '0', '0'], { running: 3 });
 // Cap boundary: 4 sessions → "N" (the cap() variant), not literal "4".
 fireHook(home, 'D', 'UserPromptSubmit');
-logStep(
-  'D: UserPromptSubmit (4 running → cap=4 → "N")',
-  home,
-  SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[1] + ' N ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI,
-  { running: 4 },
-);
+logStep('D: UserPromptSubmit (4 running → cap=4 → "N")', home, ['0', 'N', '0', '0'], { running: 4 });
 // 5 sessions — still "N" (cap stays at 4 once you cross it).
 fireHook(home, 'E', 'UserPromptSubmit');
-logStep(
-  'E: UserPromptSubmit (5 running → still "N")',
-  home,
-  SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[1] + ' N ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI,
-  { running: 5 },
-);
+logStep('E: UserPromptSubmit (5 running → still "N")', home, ['0', 'N', '0', '0'], { running: 5 });
 
 // === §3  Some finish, one crashes ===========================================
 logPhase('§3  A finishes (done), C crashes (interrupted) — three different lights turn on');
@@ -351,10 +345,8 @@ fireHook(home, 'C', 'StopFailure', { error: 'rate_limit' }); // C → interrupte
 logStep(
   'A: Stop (done)  C: StopFailure (interrupted)',
   home,
-  // 1 done + 3 running (B,D,E) + 0 pending + 1 interrupted → "🟢1 🟡 N ⚪ 🔴1"
-  // running is still 3 but cap shows "N" — wait, 3 sessions = literal "3", not N.
-  // Recompute: B,D,E running = 3 → literal "3" (not "N"). done=1, interrupted=1.
-  SBI_LIGHT_EMOJI[0] + ' 1 ' + SBI_LIGHT_EMOJI[1] + ' 3 ' + SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[3] + ' 1',
+  // 1 done + 3 running (B,D,E) + 0 pending + 1 interrupted → ["1","3","0","1"]
+  ['1', '3', '0', '1'],
   { done: 1, running: 3, pending: 0, interrupted: 1 },
 );
 
@@ -381,33 +373,30 @@ logStep(
   'D: Notification (running + pending)',
   home,
   // done=1, running=3 (B,D,E — D is BOTH running and pending), pending=1, interrupted=1
-  SBI_LIGHT_EMOJI[0] + ' 1 ' + SBI_LIGHT_EMOJI[1] + ' 3 ' + SBI_LIGHT_EMOJI[2] + ' 1 ' + SBI_LIGHT_EMOJI[3] + ' 1',
+  ['1', '3', '1', '1'],
   { done: 1, running: 3, pending: 1, interrupted: 1 },
 );
 
 // === §5  All 4 lights lit ===================================================
-logPhase('§5  Confirm ALL 4 lights lit simultaneously (the v0.1.14 4-light headline)');
+logPhase('§5  Confirm ALL 4 lights lit simultaneously (the v0.1.15 4-light headline)');
 {
   const ag = aggregate(home);
   check('§5a  🟢 done > 0', ag.done > 0);
   check('§5b  🟡 running > 0', ag.running > 0);
   check('§5c  🔵 pending > 0', ag.pending > 0);
   check('§5d  🔴 interrupted > 0', ag.interrupted > 0);
-  // No dim ⚪ in the SBI text — all 4 lights are colored (non-zero).
-  const text = sbiText(ag);
-  check('§5e  SBI.text contains NO dim ⚪', !text.includes(SBI_DIM_EMOJI), 'text=' + text);
-  // §5f locks the literal form of a fully-lit 4-light SBI.text. At this step
+  // No dim "0" in the SBI texts — all 4 blocks are lit (non-zero).
+  const texts = sbiTexts(ag);
+  check('§5e  SBI texts contain NO "0" (all 4 blocks lit)', !texts.includes('0'), 'texts=' + JSON.stringify(texts));
+  // §5f locks the literal form of a fully-lit 4-block SBI. At this step
   // (per §3 + §4) the counts are concrete: done=1, running=3, pending=1,
-  // interrupted=1. Each non-zero light renders as "EMOJI + space + digit-or-N",
-  // so the full text has 4 light groups joined by single spaces (8 raw tokens
-  // after .split(' '), since each colored light is 2 tokens). Asserting the
-  // exact literal is the cleanest way to lock both the per-light form AND the
+  // interrupted=1. Each non-zero block renders as its digit. Asserting the
+  // exact array is the cleanest way to lock both the per-block form AND the
   // fixed left→right order (done/running/pending/interrupted).
   check(
-    '§5f  SBI.text exact form "🟢 1 🟡 3 🔵 1 🔴 1" (4 colored lights, fixed order)',
-    text ===
-      SBI_LIGHT_EMOJI[0] + ' 1 ' + SBI_LIGHT_EMOJI[1] + ' 3 ' + SBI_LIGHT_EMOJI[2] + ' 1 ' + SBI_LIGHT_EMOJI[3] + ' 1',
-    'text=' + text,
+    '§5f  SBI texts exactly ["1","3","1","1"] (4 colored blocks, fixed order)',
+    JSON.stringify(texts) === '["1","3","1","1"]',
+    'texts=' + JSON.stringify(texts),
   );
 }
 
@@ -417,12 +406,12 @@ logPhase('§6  Coffee break — idle decay kicks in (灰/idle sessions do NOT li
 fireHook(home, 'B', 'Stop'); // B → done
 fireHook(home, 'E', 'Stop'); // E → done
 // Now: done=3 (A,B,E), running=1 (D), pending=1 (D), interrupted=1 (C)
-logStep(
-  'B,E: Stop → done (now 3 done + 1 running+pending + 1 interrupted)',
-  home,
-  SBI_LIGHT_EMOJI[0] + ' 3 ' + SBI_LIGHT_EMOJI[1] + ' 1 ' + SBI_LIGHT_EMOJI[2] + ' 1 ' + SBI_LIGHT_EMOJI[3] + ' 1',
-  { done: 3, running: 1, pending: 1, interrupted: 1 },
-);
+logStep('B,E: Stop → done (now 3 done + 1 running+pending + 1 interrupted)', home, ['3', '1', '1', '1'], {
+  done: 3,
+  running: 1,
+  pending: 1,
+  interrupted: 1,
+});
 
 // Time-travel: 10 minutes pass. A's done (since=10min-ago-ish) decays to idle
 // — the 🟢 light should DROP by however many sessions crossed the 5-min line,
@@ -442,7 +431,7 @@ logStep(
   'A: done.since aged to 6min ago (past 5min decay) → A is now idle (NOT green)',
   home,
   // done drops 3→2 (A decayed), running=1 (D), pending=1 (D), interrupted=1 (C)
-  SBI_LIGHT_EMOJI[0] + ' 2 ' + SBI_LIGHT_EMOJI[1] + ' 1 ' + SBI_LIGHT_EMOJI[2] + ' 1 ' + SBI_LIGHT_EMOJI[3] + ' 1',
+  ['2', '1', '1', '1'],
   { done: 2, running: 1, pending: 1, interrupted: 1, idle: 1 },
 );
 
@@ -465,27 +454,28 @@ logStep(
   // D decayed from running to idle. running drops 1→0 (D was the only running),
   // pending drops 1→0 (D held pending but is now idle — stale-blue fix).
   // done=2 (B,E), interrupted=1 (C), idle=2 (A,D).
-  SBI_LIGHT_EMOJI[0] + ' 2 ' + SBI_DIM_EMOJI + ' ' + SBI_DIM_EMOJI + ' ' + SBI_LIGHT_EMOJI[3] + ' 1',
+  ['2', '0', '0', '1'],
   { done: 2, running: 0, pending: 0, interrupted: 1, idle: 2 },
 );
 
-// === §8  Close all tabs — back to ⚪ ⚪ ⚪ ⚪ =================================
+// === §8  Close all tabs — back to all dim ===================================
 logPhase('§8  Close all tabs — editor returns to all-dim');
 // Remove every session file (simulates SessionEnd firing on each as tabs close).
 for (const sid of ['A', 'B', 'C', 'D', 'E']) {
   removeStatus(home, sid);
 }
-logStep(
-  'all sessions removed (SessionEnd)',
-  home,
-  [SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI].join(' '),
-  { done: 0, running: 0, pending: 0, interrupted: 0, idle: 0 },
-);
+logStep('all sessions removed (SessionEnd)', home, ['0', '0', '0', '0'], {
+  done: 0,
+  running: 0,
+  pending: 0,
+  interrupted: 0,
+  idle: 0,
+});
 
 // === §9  Bonus: explicit 0→1→2→3→N cap sweep for EACH light ================
 // The journey above naturally sweeps the running light through 0..N. This block
 // sweeps each of the OTHER three lights (done / pending / interrupted) through
-// the same cap progression in isolation, so the 0-灭⚪ / 非0-亮 / 0-3-digit /
+// the same cap progression in isolation, so the 0-dim / non0-lit / 0-3-digit /
 // N-cap contract is asserted per light (not just running).
 logPhase('§9  Per-light cap sweep — 0→1→2→3→N for done, pending, interrupted (isolated)');
 
@@ -493,49 +483,48 @@ function capSweep(stateName, lightIdx, plant, opts = {}) {
   // plant(count, home) writes `count` sessions of the target state into home.
   // opts.otherLights = { lightIdx: countFn(n), ... } — for lights OTHER than the
   //   target that will ALSO light up because of how the plant works. Default {}
-  //   means "all other lights are dim ⚪" (true for done / interrupted sweeps).
+  //   means "all other lights are 0/dim" (true for done / interrupted sweeps).
   //   The pending sweep plants running+pending sessions (pending REQUIRES a non-
   //   idle state — there is NO way to plant pending without also lighting some
   //   state light), so its `otherLights` is { 1: (n) => n } (running lit too).
-  // For each count 0..5 we build the EXPECTED 4-light text directly (no split-
-  // based indexing — the SBI text has variable token count per light, so
-  // positional indexing is wrong) and compare to the actual sbiText().
+  // For each count 0..5 we build the EXPECTED 4-block texts array directly and
+  // compare to the actual sbiTexts().
   const otherLights = opts.otherLights || {};
   const allIdx = [0, 1, 2, 3];
   for (const n of [0, 1, 2, 3, 4, 5]) {
     const h = newTempHome();
     if (n > 0) plant(n, h);
     const ag = aggregate(h);
-    const text = sbiText(ag);
-    // Build expected: 4 light slots, fixed order. Default every slot to dim ⚪,
-    // then set the target light AND any co-lit lights from otherLights.
-    const slots = [SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI, SBI_DIM_EMOJI];
+    const texts = sbiTexts(ag);
+    // Build expected: 4 block texts, fixed order. Default every block to "0",
+    // then set the target block AND any co-lit blocks from otherLights.
     const rawCounts = { 0: 0, 1: 0, 2: 0, 3: 0 };
     rawCounts[lightIdx] = n; // target light's raw (uncapped) count
     for (const i of allIdx) {
       if (otherLights[i]) rawCounts[i] = otherLights[i](n);
     }
-    for (const i of allIdx) {
-      slots[i] = disp(SBI_LIGHT_EMOJI[i], cap(rawCounts[i]));
-    }
-    const expected = slots.join(' ');
-    check(stateName + ' x' + n + ' → SBI.text === ' + JSON.stringify(expected), text === expected, 'got=' + text);
-    // Assert each OTHER light matches its expected form (dim by default, or the
+    const expected = allIdx.map((i) => sbiBlockText(cap(rawCounts[i])));
+    check(
+      stateName + ' x' + n + ' → SBI texts === ' + JSON.stringify(expected),
+      JSON.stringify(texts) === JSON.stringify(expected),
+      'got=' + JSON.stringify(texts),
+    );
+    // Assert each OTHER block matches its expected text ("0" by default, or the
     // co-lit count if the plant makes it light up too).
     for (const i of allIdx) {
       if (i === lightIdx) continue;
-      const expectedOther = disp(SBI_LIGHT_EMOJI[i], cap(rawCounts[i]));
+      const expectedOther = sbiBlockText(cap(rawCounts[i]));
       check(
         stateName +
           ' x' +
           n +
-          ' → light[' +
+          ' → block[' +
           i +
           '] (' +
           ['done', 'running', 'pending', 'interrupted'][i] +
           ') === ' +
           JSON.stringify(expectedOther),
-        text === expected && slots[i] === expectedOther,
+        JSON.stringify(texts) === JSON.stringify(expected) && texts[i] === expectedOther,
         'expected=' + JSON.stringify(expectedOther),
       );
     }

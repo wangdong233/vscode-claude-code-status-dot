@@ -25,7 +25,7 @@
 - 🔔 **完了 / 中断通知**——セッションの完了 / 中断時に macOS システム通知（画面右上からドロップ、サウンド付き、ボタンなし、数秒で自動消滅）をポップアップ。フォアグラウンドでもバックグラウンドでも（`notifyWhenFocused` デフォルト true）。見守り続ける必要なし
 - ⚙️ **workflow 実行中は running を維持**——バックグラウンド subagent / cron が動いているとき誤って緑にせず、`Stop` が権威判定
 - 📂 **Open Editors と同期**——左上の「開いているエディター」ビューの CC タブにも状態ドットが付く
-- 📊 **下部 SBI 4 ランプ**——ステータスバー左側（`StatusBarAlignment.Left` + 極端に負の priority `-9999`、可視中心の近く）に `🟢完了 🟡実行中 🔵入力待ち 🔴中断` を並べて表示（v0.1.14 は v0.1.13 の commandCenter 上部 4 ランプを置換——後者は reload/再起動後に不安定だった）、各ランプは 0/1/2/3/N で頭打ち（>=4 は N 表示）、0 は ⚪ アップ。🔵 = ユーザー入力待ち（permission/question/elicit、Notification hook case 経由）。完了 >5 分は idle 扱い（緑に含まない）。v0.1.14 は**1 つのランタイム StatusBarItem** に簡素化——CC の package.json をパッチせず、IIFE が 500ms ごとに直接 text を mutate、v0.1.13 の setContext→when チェーンは削除済み。
+- 📊 **下部 SBI 4 色ブロック（数字をブロック内に内蔵）**——ステータスバー左側（`StatusBarAlignment.Left` + 4 ブロック priority `-9996..-9999`、可視中心の近く）に**数字を内蔵した色付きブロック**を4つ並べて表示（v0.1.15 は v0.1.14 の「emoji 球 + 数字 分離」形式を置換）：🟢完了（緑ブロック）/ 🟡実行中（黄ブロック）/ 🔵入力待ち（青ブロック）/ 🔴中断（赤ブロック）。各ブロックは 0/1/2/3/N で頭打ち（>=4 は N 表示）；count>0 → ブロック点灯（`statusBarItem.*Background` テーマ色 + 白字数字をブロック内に内蔵）、count=0 → ブロック暗（透明背景 + グレー字「0」、ブロックは見えるまま）。🔵 = ユーザー入力待ち（permission/question/elicit、Notification hook case 経由）。完了 >5 分は idle 扱い（緑に含まない）。v0.1.15 は **4 つの独立したランタイム StatusBarItem インスタンス + 4 つの組み込みテーマ色**を使用（CC の package.json をパッチせず、IIFE が 500ms ごとに各ブロックの text/color/backgroundColor を直接 mutate）——色は VSCode テーマに追従し、クロスプラットフォームで安定（emoji フォント依存を解消）。
 - ↩️ **副作用ゼロの1行復元**——`--revert` が `.bak` から extension.js を完全復元、hooks を外科的に除去、ユーザーデータは保持
 
 > ⚠️ **正直な声明**: 本プロジェクトは **patch（パッチ）であり、独立した拡張ではありません**——VSCode はサードパーティ拡張が別の拡張の webview タブアイコンを変更することを許可しない。唯一現実的な経路は CC 自身の `extension.js` にパッチを当てること。代償：CC の自動更新で上書きされるため、コマンドの再実行が必要。

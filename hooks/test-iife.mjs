@@ -60,17 +60,17 @@ function check(name, cond, detail) {
 // the v0.1.15 `bg` field (a ThemeColor id for a colored block background)
 // with the `em` field (the "on" emoji ball codepoint — a pre-colored Unicode
 // circle that carries its own green/yellow/blue/red fill, no theme
-// dependency). The shared dim/zero ball SBI_DIM_EM (🟤 U+1F7E4 brown circle,
-// same Geometric Shapes Extended block as 🟢🟡 — chosen over the earlier ⚪
-// U+26AA to retire the cross-Unicode-block width gamble; see patch.ts
-// SBI_DIM_EM JSDoc + docs/STATES.md §7.5) replaces any light's colored ball
-// when its count is 0.
+// dependency). The shared dim/zero ball SBI_DIM_EM (⚪ U+26AA white/gray
+// medium circle, in the Miscellaneous Symbols block — v0.2.0 reverted the
+// v0.1.17 ⚪→🟤 pivot back to gray because the user prefers gray over brown,
+// commit 55e18b4; see patch.ts SBI_DIM_EM JSDoc + docs/STATES.md §7.5)
+// replaces any light's colored ball when its count is 0.
 // v0.1.17 DROPPED the v0.1.15/v0.1.16 `pri` field — the 4 lights now render
-// inside ONE StatusBarItem (concatenated text, 0px inter-light gap), so
-// per-light priority became dead data. The single SBI's priority lives in
-// its own SBI_PRIORITY const (-9996, leftmost-of-the-old-4 → preserves
-// screen position across the 4-SBI → 1-SBI pivot). Order matches the IIFE's
-// `var CFG=[...]` array: done(🟢) / running(🟡) / pending(🔵) /
+// inside ONE StatusBarItem (concatenated text, single-space separator since
+// v0.1.18), so per-light priority became dead data. The single SBI's
+// priority lives in its own SBI_PRIORITY const (-9996, leftmost-of-the-old-4
+// → preserves screen position across the 4-SBI → 1-SBI pivot). Order matches
+// the IIFE's `var CFG=[...]` array: done(🟢) / running(🟡) / pending(🔵) /
 // interrupted(🔴). Used to assert the IIFE bakes the same config via
 // JSON.stringify in buildIIFE. Emoji written as \u{XXXX} escapes so the
 // test file mirrors patch.ts source form (ASCII-only); the parsed values
@@ -224,7 +224,7 @@ check(
 // v0.1.17 banner specifically: locks the single-SBI compact-concat pivot
 // (a regression that rolled back to v0.1.16 4-SBI would surface here
 // before any SBI assertion fires).
-check('IIFE.21c banner carries v0.1.19 stamp', /\/\*cc-status-dot-injected:v0\.1\.19:/.test(iife));
+check('IIFE.21c banner carries v0.2.0 stamp', /\/\*cc-status-dot-injected:v0\.1\.19:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -253,13 +253,14 @@ check('IIFE.23 no bare `seq` counter (M8 rename)', !/\bseq\s*%/.test(iife) && !/
 // leaving it zero-width/invisible for the ~500ms until the first tick —
 // and silently permanent if the timer-setup try/catch swallowed a throw.
 // v0.1.17 creates ONE SBI starting at the all-zero form: text
-// DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0" (= "🟤0🟤0🟤0🟤0" since the
-// ⚪→🟤 pivot — four zero-slots concatenated, dim ball + "0" each) so the
-// slot is born at the full 4-light row width and visible from the very
-// first paint. The first aggregation tick rewrites text to the live concat
-// (e.g. "🟢3🟡1🟤0🟤0"). Assert the literal creation-time text appears at
-// the creation site so a regression that dropped the assignment would
-// re-open the invisibility window.
+// DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0" (= "⚪0⚪0⚪0⚪0" since v0.2.0
+// reverted the ⚪→🟤 pivot back to gray — four zero-slots concatenated, dim
+// ball + "0" each) so the slot is born at the full 4-light row width and
+// visible from the very first paint. The first aggregation tick rewrites
+// text to the live concat (e.g. "🟢3 🟡1 ⚪0 ⚪0" with v0.1.18+ space
+// separator). Assert the literal creation-time text appears at the creation
+// site so a regression that dropped the assignment would re-open the
+// invisibility window.
 check(
   'IIFE.23b SBI.text=DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0" set at creation (no 500ms invisibility window)',
   iife.includes('sbi.text=DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"'),
@@ -278,17 +279,18 @@ check(
 check(
   'IIFE.23e NO deactivatedForeground ThemeColor (v0.1.15 dim color gone)',
   !/statusBarItem\.deactivatedForeground/.test(iife),
-  'v0.1.16+ uses a dim emoji ball (⚪ pre-pivot, 🟤 post-v0.1.17-pivot) for dim, not statusBarItem.deactivatedForeground',
+  'v0.1.16+ uses a dim emoji ball (⚪ — v0.2.0 reverted the v0.1.17 ⚪→🟤 pivot back to gray) for dim, not statusBarItem.deactivatedForeground',
 );
 
 // v0.1.17 SINGLE-SBI creation — collapses the v0.1.15/v0.1.16 4-SBI loop
 // (4 independent createStatusBarItem at priority -9996..-9999) into ONE
 // StatusBarItem at priority SBI_PRIORITY (-9996). The 4 lights now render
-// as concatenated text inside the single SBI's `.text` (0px inter-light
-// gap), NOT as 4 separate statusbar items. Why: VSCode's statusbarpart.css
-// hardcodes `margin:0 3px;padding:0 5px` per SBI (6-16px gap, uncontrollable
-// via public API — the internal IStatusbarEntryLocation.compact flag is
-// not reachable from extension code); 4 SBIs therefore always looked loose.
+// as concatenated text inside the single SBI's `.text` (single-space
+// separator since v0.1.18; was no-separator in v0.1.17), NOT as 4 separate
+// statusbar items. Why: VSCode's statusbarpart.css hardcodes
+// `margin:0 3px;padding:0 5px` per SBI (6-16px gap, uncontrollable via
+// public API — the internal IStatusbarEntryLocation.compact flag is not
+// reachable from extension code); 4 SBIs therefore always looked loose.
 // Single-SBI guard is idempotent across panels via `if(!globalThis.__ccsdSbi)`.
 // Per-failure try/catch wraps the whole create-call so a throw inside
 // createStatusBarItem / .command= / .show() is swallowed and the IIFE
@@ -493,20 +495,21 @@ check(
 
 // --- 14. v0.1.17 per-tick concat render (single SBI, compact text) ----------
 // v0.1.17 collapses the v0.1.15/v0.1.16 4-SBI loop back into a SINGLE SBI
-// whose text is a 4-token concatenation `🟢N🟡N🔵N🔴N` (0px inter-light
-// gap — the user's "4 圆点之间间隔不紧凑" feedback under v0.1.16 is fixed
-// by removing the 4-SBI row that VSCode's CSS forces ~6-16px gap between).
-// Position stability (digits never shift the row on count change) is
-// guaranteed by VSCode's statusbarpart.css `font-variant-numeric:tabular-
-// nums`, which forces ASCII digits 0-9 to equal advance width regardless
-// of font — the explicit "数字不位移" requirement is satisfied by this
-// CSS rule alone, independent of emoji rendering width.
+// whose text is a 4-token concatenation `🟢N 🟡N 🔵N 🔴N` (single-space
+// separator since v0.1.18 — the user's "4 圆点之间间隔不紧凑" feedback
+// under v0.1.16 is fixed by removing the 4-SBI row that VSCode's CSS
+// forces ~6-16px gap between). Position stability (digits never shift the
+// row on count change) is guaranteed by VSCode's statusbarpart.css
+// `font-variant-numeric:tabular-nums`, which forces ASCII digits 0-9 to
+// equal advance width regardless of font — the explicit "数字不位移"
+// requirement is satisfied by this CSS rule alone, independent of emoji
+// rendering width.
 //
 // Per-token render rule (UNCHANGED from v0.1.16, just collected into txt):
 //   txt += (n===0 ? DIM_EM : CFG[k].em) + (n>=4 ? "N" : ""+n)
-// → "🟢3🟡1🟤0🟤0" (v0.1.17 compact, 0px gap; 🟤 since the ⚪→🟤 pivot,
-//   pre-pivot this example read "🟢3🟡1⚪0⚪0")
-//   was v0.1.16 4 separate SBI texts "🟢3" / "🟡1" / "🟤0" / "🟤0" with
+// → "🟢3 🟡1 ⚪0 ⚪0" (v0.1.18 space-separated; ⚪ since v0.2.0 reverted
+//   the ⚪→🟤 pivot back to gray)
+//   was v0.1.16 4 separate SBI texts "🟢3" / "🟡1" / "⚪0" / "⚪0" with
 //   ~16px gap between each pair.
 check(
   'IIFE.38 per-tick concat: parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)) + parts.join(" ") (v0.1.18 space-separated)',
@@ -584,11 +587,11 @@ check(
   iife.includes('var CFG=' + JSON.stringify(SBI_LIGHTS_CFG) + ';'),
 );
 // DIM_EM baked as a sibling string literal — locks the shared zero-count
-// dim ball. JSON.stringify emits the 🟤 literal (astral codepoint U+1F7E4
-// since the v0.1.17 ⚪→🟤 pivot; was the lone BMP ⚪ U+26AA pre-pivot),
-// which VSCode parses back to 🟤 at load time.
+// dim ball. JSON.stringify emits the ⚪ literal (BMP codepoint U+26AA;
+// v0.2.0 reverted the v0.1.17 ⚪→🟤 pivot back to gray), which VSCode
+// parses back to ⚪ at load time.
 check(
-  'IIFE.41a SBI DIM_EM baked from SBI_DIM_EM (shared zero-count dim ball 🟤)',
+  'IIFE.41a SBI DIM_EM baked from SBI_DIM_EM (shared zero-count dim ball ⚪)',
   iife.includes('var DIM_EM=' + JSON.stringify(SBI_DIM_EM) + ';'),
 );
 // Lock the 4 on-color emoji codepoints explicitly so a wrong codepoint (e.g.

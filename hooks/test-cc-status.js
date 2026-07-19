@@ -464,24 +464,62 @@ checkBoth(
 
 // 18. Notification on an interrupted session preserves interrupted state +
 //     adds pending:true (e.g. user is prompted while an error is showing).
-//     error is dropped by the writer on every non-StopFailure write — locks
-//     the existing behavior pattern (every other case also drops error).
+//     v0.1.20 contract fix (data-logic round-2 review): Notification now
+//     ALSO preserves cur.error, mirroring SubagentStop's preserveError
+//     guard. The pre-fix Notification branch returned {state, since,
+//     pending:true} with NO error field, so a StopFailure→Notification
+//     sequence on the same session silently dropped the error enum from
+//     disk (writeJsonAtomic overwrote the file). The reader's notify()
+//     would then surface generic "interrupted" wording instead of the
+//     specific failure reason (e.g. "tool_blocked"). This test locks the
+//     symmetric contract: any path that preserves cur.state on an
+//     interrupted session MUST also preserve cur.error.
 {
   const home = newTempHome();
   fire(home, 'UserPromptSubmit');
   fire(home, 'StopFailure', { error: 'rate_limit' });
   const final = fire(home, 'Notification');
-  const ok = final && final.state === 'interrupted' && final.pending === true;
+  const ok = final && final.state === 'interrupted' && final.pending === true && final.error === 'rate_limit';
   if (ok) {
     pass++;
-    console.log('  PASS  18. Notification on interrupted preserves state, sets pending=true');
+    console.log('  PASS  18. Notification on interrupted preserves state + error, sets pending=true');
   } else {
     fail++;
     console.log(
-      '  FAIL  18. expected interrupted+pending=true, got state=' +
+      '  FAIL  18. expected interrupted+pending=true+error=rate_limit, got state=' +
         (final && final.state) +
         ' pending=' +
-        (final && final.pending),
+        (final && final.pending) +
+        ' error=' +
+        (final && final.error),
+    );
+  }
+}
+
+// 18b. Notification on an interrupted session does NOT invent an error when
+//      cur.error is absent (a hand-edited or pre-v0.1.20 file may have
+//      {state:'interrupted'} with no error field). Locks the guard's strict
+//      type check — only a string error from cur is preserved (no
+//      defaulting to 'interrupted' or any other enum).
+{
+  const home = newTempHome();
+  // Plant an interrupted file with NO error field (mimics a hand-edited
+  // / pre-v0.1.20 disk state).
+  plantStatus(home, SID, { state: 'interrupted', since: Date.now(), activeSubagents: 0 });
+  const final = fire(home, 'Notification');
+  const ok = final && final.state === 'interrupted' && final.pending === true && final.error === undefined;
+  if (ok) {
+    pass++;
+    console.log('  PASS  18b. Notification on interrupted (no cur.error) does NOT invent error');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  18b. expected interrupted+pending=true+error=undefined, got state=' +
+        (final && final.state) +
+        ' pending=' +
+        (final && final.pending) +
+        ' error=' +
+        (final && final.error),
     );
   }
 }

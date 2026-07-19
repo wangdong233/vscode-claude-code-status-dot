@@ -1,6 +1,6 @@
 {
   "name": "vscode-claude-code-status-dot",
-  "version": "0.1.19",
+  "version": "0.2.0",
   "description": "Colorize Claude Code's VSCode tab icon with 4-state status dots (idle/running/done/interrupted) and add a bottom status-bar 4-light aggregate (done/running/pending/interrupted) via a minimal, reversible patch.",
   "type": "module",
   "license": "MIT",
@@ -9,15 +9,20 @@
   },
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run build && npm run companion:install && npm run companion:build && npm run companion:package && cp companion/cc-status-dot-companion-*.vsix dist/ && node hooks/assert-companion-vsix.mjs",
     "patch": "npx tsx patch.ts",
     "revert": "npx tsx patch.ts --revert",
     "status": "npx tsx patch.ts --status",
-    "test": "node hooks/test-cc-status.js && node hooks/test-iife.mjs && node hooks/test-sbi-aggregation.mjs && node hooks/test-smoke-journey.mjs",
+    "test": "node hooks/test-cc-status.js && node hooks/test-iife.mjs && node hooks/test-sbi-aggregation.mjs && node hooks/test-smoke-journey.mjs && node hooks/test-patcher-io.mjs && node hooks/test-version-sync.mjs",
     "test:writer": "node hooks/test-cc-status.js",
     "test:reader": "node hooks/test-iife.mjs",
     "test:aggregation": "node hooks/test-sbi-aggregation.mjs",
     "test:smoke": "node hooks/test-smoke-journey.mjs",
+    "test:patcher-io": "node hooks/test-patcher-io.mjs",
+    "test:version-sync": "node hooks/test-version-sync.mjs",
+    "companion:install": "cd companion && npm install --no-audit --no-fund",
+    "companion:build": "cd companion && npm run build",
+    "companion:package": "cd companion && npm run package:vsix",
     "format:check": "prettier --check patch.ts hooks/**/*.js hooks/**/*.mjs",
     "format": "prettier --write patch.ts hooks/**/*.js hooks/**/*.mjs",
     "prepare": "husky"
@@ -44,11 +49,12 @@
   "files": [
     "dist/",
     "resources/*.svg",
-    "hooks/",
+    "hooks/cc-status.js",
     "docs/",
     "*.md",
     "LICENSE",
-    "tsconfig.json"
+    "tsconfig.json",
+    "companion/"
   ],
   "devDependencies": {
     "@types/node": "^20.11.0",

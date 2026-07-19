@@ -125,7 +125,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.1.19";
+const INJECT_VERSION = "v0.2.0";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -266,6 +266,84 @@ const HOOK_EVENTS = [
 // SBI 4-light definitions (visual rationale: see docs/STATES.md §7 + CHANGELOG.md)
 // ---------------------------------------------------------------------------
 
+/** v0.2.0 — companion VS Code extension (NOT published to Marketplace; shipped
+ *  inside this npm package as dist/cc-status-dot-companion-<ver>.vsix and
+ *  installed into the user's VS Code via `code --install-extension` at install
+ *  time). The companion watches CC auto-updates and re-applies this patcher
+ *  automatically, so the user no longer needs to re-run
+ *  `npx vscode-claude-code-status-dot` after every CC release.
+ *
+ *  - Id (publisher.name) used by every `code --install-extension` / uninstall
+ *    command. MUST match companion/package.json's `publisher.name`.
+ *  - VSIX_FILE is the relative path from PROJECT_ROOT to the prebuilt .vsix
+ *    (produced by `npm run companion:package`). The filename is derived from
+ *    companion/package.json's `version` so the patcher never has a stale
+ *    version literal locked in — single source of truth is the .json. If the
+ *    companion package.json can't be read (rare — corrupt install), we fall
+ *    back to a hardcoded version constant so install still surfaces SOMETHING.
+ *  - COMPANION_VERSION is the parsed version string; used for surfacing in
+ *    --status and for the --force downgrade guard. */
+const COMPANION_EXT_ID = "wangdong.cc-status-dot-companion";
+const COMPANION_VERSION = (() => {
+    // Single source of truth: companion/package.json. Read at runtime so a
+    // version bump in companion/package.json flows everywhere automatically
+    // (vsix filename + --status + downgrade guard + log lines).
+    try {
+        const p = path.join(PROJECT_ROOT, "companion", "package.json");
+        const meta = JSON.parse(fs.readFileSync(p, "utf8")) as { version?: string };
+        if (meta.version && /^\d+\.\d+\.\d+/.test(meta.version)) return meta.version;
+    } catch {
+        // fall through — corrupt or missing companion/package.json
+    }
+    // Last-resort fallback so the patcher never hard-fails on a missing
+    // companion manifest. Bump this only when bumping the minimum supported
+    // companion shape; the manifest above stays authoritative at runtime.
+    return "0.2.0";
+})();
+const COMPANION_VSIX = `dist/cc-status-dot-companion-${COMPANION_VERSION}.vsix`;
+
+/** This patcher's own version — single source of truth is the top-level
+ *  package.json (`version` field). Read at runtime so a bump in package.json
+ *  flows everywhere automatically. Used to stamp `INSTALL_DIR/companion-config.json`
+ *  + `INSTALL_DIR/last-repatch.json` so the companion can detect a stale
+ *  `INSTALL_DIR/patch.js` snapshot (the copy is taken once at install time and
+ *  is NOT refreshed by `npm install -g vscode-claude-code-status-dot@latest`
+ *  alone — only re-running the bin copies the new patch.js). The companion
+ *  reads `patcherVersion` from companion-config.json and compares it to its
+ *  own MIN_PATCHER_VERSION constant; if older, it warns the user to re-run
+ *  `npx vscode-claude-code-status-dot`. */
+const PATCHER_VERSION = (() => {
+    try {
+        const p = path.join(PROJECT_ROOT, "package.json");
+        const meta = JSON.parse(fs.readFileSync(p, "utf8")) as { version?: string };
+        if (meta.version && /^\d+\.\d+\.\d+/.test(meta.version)) return meta.version;
+    } catch {
+        // fall through — corrupt or missing top-level package.json
+    }
+    // Last-resort fallback. Bump only when bumping the package version itself.
+    return "0.2.0";
+})();
+
+/** Path of the JSON config the patcher writes into INSTALL_DIR at install time
+ *  so the companion can read its constants (INSTALL_DIR / INJECT_MARKER /
+ *  INJECT_VERSION / SEARCH_DIRS / ccExtIdPrefix / patchJsPath / patcherVersion)
+ *  from one place instead of hand-mirroring them in companion/extension.ts.
+ *  Decouples the companion's build cadence from the patcher's internals — a
+ *  future patch.ts that adds a new VS Code flavor to SEARCH_DIRS no longer
+ *  requires shipping a new .vsix; the next `npx` run refreshes the config and
+ *  the already-installed companion picks it up. */
+const COMPANION_CONFIG_PATH = path.join(INSTALL_DIR, "companion-config.json");
+
+/** Path of the JSON "repatch flag" the patcher writes after every successful
+ *  --patch-only run (so the companion that did the patch writes it, AND so do
+ *  subsequent companion runs in OTHER VS Code windows / a manual `npx` run).
+ *  Companion instances in other still-running VS Code windows poll this file's
+ *  embedded `ts` field; when it advances past what they last saw AND the
+ *  `extDir` matches their own CC install, they prompt the user to reload —
+ *  closing the "Window 2/3 still have stale CC memory after Window 1 patched"
+ *  gap. */
+const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
+
 /** Marker stamped into CC's package.json by the abandoned v0.1.13 commandCenter
  *  patch. Kept only so install can DETECT stale v0.1.13 residue (and --revert
  *  can clean it) — v0.1.14+ no longer writes this field. */
@@ -277,29 +355,34 @@ const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
  *  and mirrored in test-iife.mjs. Renaming an emoji codepoint or reordering
  *  lights here changes both the IIFE bytes and the test assertions in lockstep.
  *
- *  v0.1.17 dropped the v0.1.15/v0.1.16 `pri` field: the 4 lights now render
+ *  v0.1.17 dropped the v0.1.15/v0.1.16 `pri` field: the 4 lights render
  *  inside ONE window-scoped StatusBarItem (single-SBI concatenated text
- *  `<ball><digit><ball><digit>...`, 0px inter-light gap — VSCode's per-SBI
- *  CSS `margin:0 3px;padding:0 5px` makes a 4-SBI row look ~16px loose,
- *  uncontrollable via the public API). The single SBI's priority is pinned
- *  by the sibling SBI_PRIORITY constant. Position stability (digits never
- *  shift the row) comes from VSCode's `statusbarpart.css` forcing
+ *  `<ball><digit><space><ball><digit>...`, see buildIIFE's per-tick join —
+ *  VSCode's per-SBI CSS `margin:0 3px;padding:0 5px` makes a 4-SBI row look
+ *  ~16px loose, uncontrollable via the public API). The single SBI's priority
+ *  is pinned by the sibling SBI_PRIORITY constant. Position stability (digits
+ *  never shift the row) comes from VSCode's `statusbarpart.css` forcing
  *  `font-variant-numeric:tabular-nums` on every statusbar item — ASCII digits
  *  0-9 render at equal width regardless of font, so count 0→1→2→3→N keeps the
  *  row byte-stable as long as the surrounding emoji are equal-width too.
- *  SBI_DIM_EM is 🟤 (U+1F7E4, Geometric Shapes Extended) — the SAME Unicode
- *  block as 🟢🟡, so all three balls share the font vendor's 1em square glyph
- *  by construction (no cross-block width gamble). 🔵🔴 sit in the adjacent
- *  Miscellaneous Symbols And Pictographs block but ship as the same 1em
- *  square in every modern emoji font (Apple Color Emoji / Noto Color Emoji /
- *  Segoe UI Emoji). v0.1.17 originally used ⚪ (U+26AA, Miscellaneous Symbols)
- *  which sat in a THIRD block — switched to 🟤 to retire the residual
- *  cross-block width risk. See docs/STATES.md §7.5 for the rationale trail.
+ *
+ *  SBI_DIM_EM is ⚪ (U+26AA, Miscellaneous Symbols) — v0.2.0 reverted the
+ *  v0.1.17 ⚪→🟤 pivot because the user prefers gray over brown (commit
+ *  55e18b4). The 5 balls therefore span 3 Unicode blocks again
+ *  (🟢🟡 Geometric Shapes Extended / 🔴🔵 Miscellaneous Symbols And
+ *  Pictographs / ⚪ Miscellaneous Symbols). Theoretical cross-block width
+ *  risk is the trade-off for the gray visual —实测 modern emoji fonts (Apple
+ *  Color Emoji / Noto Color Emoji / Segoe UI Emoji) render every emoji at
+ *  1em square regardless of block, so the risk is latent rather than
+ *  observable on mainstream fonts. The v0.1.17 ⚪→🟤 pivot's "guarantee
+ *  equal width by Unicode-block allocation" argument is no longer in effect;
+ *  see docs/STATES.md §7.5 for the v0.1.17 → v0.2.0 trail (pivot then
+ *  revert).
  *
  *  Emoji escapes: patch.ts SOURCE stays ASCII-only (`\u{XXXX}`); the baked
- *  IIFE bytes do NOT — JSON.stringify embeds literal emoji chars (astral
- *  surrogate pairs only, since v0.1.17 switched SBI_DIM_EM from BMP ⚪ to
- *  astral 🟤). VSCode loads extension.js as UTF-8 and recovers the emoji at
+ *  IIFE bytes do NOT — JSON.stringify embeds literal emoji chars. ⚪ is a BMP
+ *  codepoint (single UTF-16 code unit), while 🟢🟡🔵🔴 are astral (surrogate
+ *  pairs). VSCode loads extension.js as UTF-8 and recovers the emoji at
  *  parse time. Do NOT "fix" JSON.stringify to emit escapes: changing the IIFE
  *  bytes would shift the content hash and force unnecessary re-injects.
  *
@@ -328,14 +411,13 @@ const SBI_PRIORITY = -9996;
  *  `var DIM_EM=<JSON.stringify(SBI_DIM_EM)>`. Visual rationale + baking
  *  discipline: see SBI_LIGHTS_CFG above + docs/STATES.md §7.
  *
- *  v0.1.17 originally shipped ⚪ (U+1F7E4's predecessor U+26AA — white medium
- *  circle, Miscellaneous Symbols block). Switched to 🟤 (U+1F7E4, Geometric
- *  Shapes Extended — the SAME block as 🟢🟡) to retire the cross-Unicode-block
- *  width gamble: with ⚪ the 5 balls sat in 3 different blocks and a width
- *  mismatch on cold fonts could shift the row 1-2px on count changes. 🟤
- *  stays in the colored-ball block so width parity is enforced by Unicode
- *  allocation, not by per-font rendering luck. (See docs/STATES.md §7.5 for
- *  the v0.1.17 ⚪→🟤 pivot rationale.) */
+ *  History: ⚪ (U+26AA, BMP) — v0.1.17 pivoted to 🟤 (U+1F7E4, Geometric
+ *  Shapes Extended, same block as 🟢🟡) to retire a theoretical cross-block
+ *  width gamble; v0.2.0 reverted to ⚪ (commit 55e18b4) because the user
+ *  prefers gray over brown. The cross-block width argument is now latent
+ *  rather than enforced (modern emoji fonts render every emoji at 1em square
+ *  regardless of block, so the practical risk is zero on mainstream fonts).
+ *  See docs/STATES.md §7.5 for the full v0.1.17 → v0.2.0 trail. */
 const SBI_DIM_EM = "\u{26AA}"; // ⚪ (white/gray medium circle; user prefers gray over brown)
 
 /** The SBI click-command id. Registered at runtime via
@@ -405,7 +487,55 @@ function fail(msg: string): never {
 // Strip them with a tiny scanner that respects string literals, then JSON.parse.
 // ---------------------------------------------------------------------------
 
+/** Skip whitespace + JSONC comments (both `// line` and `/* block *​/`)
+ *  starting at offset `i` in `raw`. Returns the index of the next
+ *  significant (non-ws, non-comment) character, or `raw.length` if the rest
+ *  of the string is all ws/comments.
+ *
+ *  Centralized helper for the 7+ sites that previously inlined this same
+ *  scan (stripJsonc / scanJsonValueEnd / findTopLevelKey / surgicalSet… /
+ *  surgicalRemove…) — the e2e code-style review flagged the triplication as
+ *  a DRY violation that amplified any tweak (e.g. supporting `#` line
+ *  comments) into a 7-site edit. Returns the new offset; callers MUST NOT
+ *  assume the returned char is a value boundary (it could be `}`, `]`, `,`,
+ *  or any structural char).
+ *
+ *  Does NOT track `inString` — callers that need string-aware scanning
+ *  (stripJsonc's main loop) keep their own inString state and call this
+ *  only at known syntax-level positions (e.g. right after a `,`). */
+function skipWsAndComments(raw: string, i: number): number {
+    while (i < raw.length) {
+        const c = raw[i];
+        const next = raw[i + 1];
+        if (/\s/.test(c)) {
+            i += 1;
+            continue;
+        }
+        if (c === "/" && next === "/") {
+            while (i < raw.length && raw[i] !== "\n") i += 1;
+            continue;
+        }
+        if (c === "/" && next === "*") {
+            i += 2;
+            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
+            i += 2;
+            continue;
+        }
+        break;
+    }
+    return i;
+}
+
 function stripJsonc(text: string): string {
+    // Single-pass scanner: copies every byte that isn't a // or /* */ comment
+    // verbatim, while tracking `inString` so a `,}` or `,]` SEQUENCE INSIDE A
+    // STRING (e.g. a regex char class `[,}]` or a JSON one-liner arg) is NEVER
+    // mistaken for JSON syntax. The trailing-comma tolerance is done INLINE
+    // (not as a post-pass regex) precisely because a post-pass regex was a
+    // silent-corruption bug: it operated on the full flattened output, blind
+    // to string boundaries, so any user settings.json string holding `,}` or
+    // `,]` had its comma dropped at parse time and was then persisted back to
+    // disk via both the surgical-splice and round-trip write paths.
     let out = "";
     let i = 0;
     let inString = false;
@@ -442,11 +572,23 @@ function stripJsonc(text: string): string {
             i += 2;
             continue;
         }
+        // Trailing-comma tolerance (string-aware): when we see a comma at the
+        // syntax level (not inString), peek ahead past ws + comments; if the
+        // next significant char closes a `}` or `]`, drop the comma. Uses
+        // the canonical skipWsAndComments helper so any future tweak to the
+        // comment-skip discipline (e.g. supporting `#` line comments) lands
+        // in one place instead of seven.
+        if (c === ",") {
+            const j = skipWsAndComments(text, i + 1);
+            if (text[j] === "}" || text[j] === "]") {
+                i += 1; // drop the comma — it's trailing.
+                continue;
+            }
+        }
         out += c;
         i += 1;
     }
-    // Tolerate trailing commas before } or ].
-    return out.replace(/,(\s*[}\]])/g, "$1");
+    return out;
 }
 
 function parseJsonc(text: string, sourceLabel: string): Record<string, unknown> {
@@ -488,30 +630,12 @@ function parseJsonc(text: string, sourceLabel: string): Record<string, unknown> 
  * false, null, and skips // and /* *​/ comments inside composite values.
  */
 function scanJsonValueEnd(raw: string, start: number): number {
-    let i = start;
-    // Skip leading whitespace + comments.
-    while (i < raw.length) {
-        const c = raw[i];
-        const next = raw[i + 1];
-        if (/\s/.test(c)) {
-            i += 1;
-            continue;
-        }
-        if (c === "/" && next === "/") {
-            while (i < raw.length && raw[i] !== "\n") i += 1;
-            continue;
-        }
-        if (c === "/" && next === "*") {
-            i += 2;
-            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
-            i += 2;
-            continue;
-        }
-        break;
-    }
-    const valueStart = i;
-    if (valueStart >= raw.length) return valueStart;
-    const opener = raw[valueStart];
+    // Skip leading whitespace + comments (canonical helper — DRY across the
+    // 7+ sites that previously inlined this scan).
+    const valueStart = skipWsAndComments(raw, start);
+    let i = valueStart;
+    if (i >= raw.length) return i;
+    const opener = raw[i];
     // Composite value: { ... } or [ ... ] — walk depth, skip strings + comments.
     if (opener === "{" || opener === "[") {
         let depth = 0;
@@ -693,24 +817,11 @@ function findTopLevelKey(raw: string, key: string): KeyRange | null {
                 i += 1;
             }
             const keyEnd = i;
-            // Find the colon.
-            while (i < raw.length && /\s/.test(raw[i])) i += 1;
-            // Allow comments between key and colon (uncommon but valid JSONC).
-            while (i < raw.length) {
-                if (raw[i] === "/" && raw[i + 1] === "/") {
-                    while (i < raw.length && raw[i] !== "\n") i += 1;
-                    continue;
-                }
-                if (raw[i] === "/" && raw[i + 1] === "*") {
-                    i += 2;
-                    while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
-                    i += 2;
-                    continue;
-                }
-                break;
-            }
-            // Also allow whitespace after comments.
-            while (i < raw.length && /\s/.test(raw[i])) i += 1;
+            // Find the colon, allowing ws + JSONC comments between key and
+            // colon (uncommon but valid JSONC). Uses the canonical
+            // skipWsAndComments helper so the comment-skip discipline is
+            // shared with stripJsonc / scanJsonValueEnd.
+            i = skipWsAndComments(raw, i);
             if (raw[i] !== ":") {
                 // Malformed — bail.
                 return null;
@@ -719,53 +830,16 @@ function findTopLevelKey(raw: string, key: string): KeyRange | null {
             i += 1;
             const valueEnd = scanJsonValueEnd(raw, i);
             // scanJsonValueEnd returns offset past leading whitespace+comments
-            // too — recompute valueStart as the first non-ws/non-comment char.
-            // Simpler: walk forward from i skipping ws + comments.
-            let vStart = i;
-            while (vStart < raw.length) {
-                const vc = raw[vStart];
-                const vn = raw[vStart + 1];
-                if (/\s/.test(vc)) {
-                    vStart += 1;
-                    continue;
-                }
-                if (vc === "/" && vn === "/") {
-                    while (vStart < raw.length && raw[vStart] !== "\n") vStart += 1;
-                    continue;
-                }
-                if (vc === "/" && vn === "*") {
-                    vStart += 2;
-                    while (vStart < raw.length && !(raw[vStart] === "*" && raw[vStart + 1] === "/")) vStart += 1;
-                    vStart += 2;
-                    continue;
-                }
-                break;
-            }
+            // too — recompute valueStart as the first non-ws/non-comment char
+            // via the canonical helper.
+            const vStart = skipWsAndComments(raw, i);
             if (keyValue === key) {
                 return { keyStart, keyEnd, colon, valueStart: vStart, valueEnd };
             }
             i = valueEnd;
             // Skip the trailing comma if present (and any comments / ws around it).
-            while (i < raw.length) {
-                const cc = raw[i];
-                const cn = raw[i + 1];
-                if (/\s/.test(cc)) {
-                    i += 1;
-                    continue;
-                }
-                if (cc === "/" && cn === "/") {
-                    while (i < raw.length && raw[i] !== "\n") i += 1;
-                    continue;
-                }
-                if (cc === "/" && cn === "*") {
-                    i += 2;
-                    while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
-                    i += 2;
-                    continue;
-                }
-                if (cc === ",") i += 1;
-                break;
-            }
+            i = skipWsAndComments(raw, i);
+            if (raw[i] === ",") i += 1;
             continue;
         }
         // Unexpected token at top level — bail.
@@ -791,45 +865,18 @@ function surgicalSetTopLevelKey(raw: string, key: string, valueJson: string): st
         return raw.slice(0, range.valueStart) + valueJson + raw.slice(range.valueEnd);
     }
     // Key absent — insert after the opening brace of the root object.
-    // Find the opening brace (skipping leading comments / whitespace / BOM).
-    let braceIdx = -1;
-    let i = 0;
-    let inString = false;
-    let quote = "";
-    while (i < raw.length) {
-        const c = raw[i];
-        const next = raw[i + 1];
-        if (inString) {
-            if (c === "\\") {
-                i += 2;
-                continue;
-            }
-            if (c === quote) inString = false;
-            i += 1;
-            continue;
-        }
-        if (c === "/" && next === "/") {
-            while (i < raw.length && raw[i] !== "\n") i += 1;
-            continue;
-        }
-        if (c === "/" && next === "*") {
-            i += 2;
-            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
-            i += 2;
-            continue;
-        }
-        if (c === "{") {
-            braceIdx = i;
-            break;
-        }
-        if (c === "[") {
-            // Root is an array, not an object — can't safely splice. Fall back
-            // to letting the caller handle (return raw unchanged).
-            return raw;
-        }
-        i += 1;
+    // Find the opening brace, skipping leading comments / whitespace / BOM
+    // via the canonical helper. (The prior hand-rolled loop tracked
+    // inString against the pathological "string before root brace" case,
+    // which is invalid JSONC anyway — skipWsAndComments covers every
+    // real-world prefix: BOM, whitespace, // line notes, /* file headers */.)
+    const braceIdx = skipWsAndComments(raw, 0);
+    if (raw[braceIdx] !== "{") {
+        // Root is not an object (could be `[`, end-of-input, or any other
+        // unexpected token) — can't safely splice. Return raw unchanged so
+        // the caller falls through to its non-surgical handling.
+        return raw;
     }
-    if (braceIdx < 0) return raw; // no root object — give up, caller will fall back
     // Heuristic indentation: 2 spaces (matches the JSON.stringify(obj, null, 2)
     // style the prior code wrote). If the existing file uses a different indent,
     // the inserted block still parses correctly (JSON is whitespace-agnostic).
@@ -849,29 +896,11 @@ function surgicalRemoveTopLevelKey(raw: string, key: string): string {
     const range = findTopLevelKey(raw, key);
     if (!range) return raw;
     // We need to remove the key token + colon + value + trailing comma (if any).
-    // Start from keyStart; end at valueEnd, then consume any trailing comma.
-    let end = range.valueEnd;
-    // Skip whitespace + comments after the value.
-    while (end < raw.length) {
-        const c = raw[end];
-        const next = raw[end + 1];
-        if (/\s/.test(c)) {
-            end += 1;
-            continue;
-        }
-        if (c === "/" && next === "/") {
-            while (end < raw.length && raw[end] !== "\n") end += 1;
-            continue;
-        }
-        if (c === "/" && next === "*") {
-            end += 2;
-            while (end < raw.length && !(raw[end] === "*" && raw[end + 1] === "/")) end += 1;
-            end += 2;
-            continue;
-        }
-        break;
-    }
-    if (raw[end] === ",") end += 1;
+    // Start from keyStart; end at valueEnd, then consume any trailing comma
+    // (skipping ws + comments via the canonical helper).
+    const end = skipWsAndComments(raw, range.valueEnd);
+    let consume = end;
+    if (raw[consume] === ",") consume += 1;
     // Also trim trailing whitespace on the value's line so we don't leave a
     // dangling blank line. Walk start backward to include the key's leading
     // newline (if present) so we don't leave a blank line above either.
@@ -880,18 +909,48 @@ function surgicalRemoveTopLevelKey(raw: string, key: string): string {
     // the indentation + the preceding newline (cleaner result).
     while (start > 0 && /[ \t]/.test(raw[start - 1])) start -= 1;
     if (start > 0 && raw[start - 1] === "\n") start -= 1;
-    return raw.slice(0, start) + raw.slice(end);
+    return raw.slice(0, start) + raw.slice(consume);
 }
 
 // ---------------------------------------------------------------------------
 // Extension discovery — find the highest-version anthropic.claude-code-* dir
 // ---------------------------------------------------------------------------
 
+/** Compare two `X.Y.Z` (or `X.Y`, or any segment count) version strings.
+ *  Returns >0 if a>b, <0 if a<b, 0 if equal. Numeric per-segment comparison
+ *  (not lexical). Missing segments on either side are treated as 0.
+ *
+ *  Canonical helper for ALL semver comparisons in this file + the companion
+ *  (companion/extension.ts has its own cmpVerStr that MIRRORS this body —
+ *  keep them in lockstep; the companion compiles standalone into a .vsix so
+ *  it cannot import from patch.ts at runtime). A future 4-segment or
+ *  pre-release-tag change touches ONE function (this one) + the mirror. */
+function cmpSemver(a: string, b: string): number {
+    const pa = a.split(".").map((x) => Number(x) || 0);
+    const pb = b.split(".").map((x) => Number(x) || 0);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+        const ai = pa[i] ?? 0;
+        const bi = pb[i] ?? 0;
+        if (ai !== bi) return ai - bi;
+    }
+    return 0;
+}
+
+function cmpVerStr(a: string, b: string): number {
+    // Thin wrapper around cmpSemver — kept as a local alias so existing call
+    // sites stay readable; the canonical helper name is cmpSemver.
+    return cmpSemver(a, b);
+}
+
 function cmpVer(a: number[], b: number[]): number {
     // Compare semver-style numeric arrays component-wise, treating a missing
     // component as 0 (so [1,2] === [1,2,0]). Robust to future 4-segment
     // version schemes without a magic count; coupled to but not hard-tied to
-    // the 3-capture regex in discoverExtension.
+    // the 3-capture regex in discoverExtension. Uses the same per-segment
+    // logic as cmpSemver (canonical comparator) — kept as a number[]-flavored
+    // alias because discoverExtension already parses versions into number[]s
+    // at scan time and a round-trip through string join/split would be silly.
     const len = Math.max(a.length, b.length);
     for (let i = 0; i < len; i++) {
         const ai = a[i] ?? 0;
@@ -1089,21 +1148,19 @@ function buildIIFE(resDir: string): string {
     // SBI_LIGHTS_CFG + SBI_PRIORITY JSDoc above). Each entry pins only the
     // light's "on" emoji ball. Patch.ts SOURCE is ASCII-only (emoji as
     // `\u{XXXX}` escapes); the baked IIFE bytes are NOT — JSON.stringify
-    // embeds literal emoji chars (all astral surrogate pairs since the
-    // v0.1.17 ⚪→🟤 pivot; previously SBI_DIM_EM was the lone BMP ⚪), not
-    // `\uXXXX` escapes, so the on-disk IIFE contains literal UTF-8 emoji
-    // bytes. VSCode loads as UTF-8 and recovers the emoji at parse time.
-    // SBI_LIGHTS_CFG is the SINGLE source of truth (patch.ts); the IIFE's
-    // per-tick loop iterates CFG[k] for {key,em}. Order matches aggregation
-    // output: done/running/pending/interrupted (left→right in concatenated
-    // text).
+    // embeds literal emoji chars, not `\uXXXX` escapes, so the on-disk IIFE
+    // contains literal UTF-8 emoji bytes. VSCode loads as UTF-8 and recovers
+    // the emoji at parse time. SBI_LIGHTS_CFG is the SINGLE source of truth
+    // (patch.ts); the IIFE's per-tick loop iterates CFG[k] for {key,em}.
+    // Order matches aggregation output: done/running/pending/interrupted
+    // (left→right in concatenated text).
     const cfgLiteral = JSON.stringify(SBI_LIGHTS_CFG);
-    // dim/zero emoji (🟤 U+1F7E4 since the v0.1.17 ⚪→🟤 pivot; was ⚪ U+26AA)
-    // baked as a JSON-stringified string literal — used by the per-tick loop
-    // for any light whose count is 0 (dim ball + digit "0", keeping the slot
-    // width fixed). Same baking discipline as cfgLiteral: patch.ts SOURCE is
-    // ASCII-only, the baked IIFE contains literal UTF-8 emoji bytes (see
-    // cfgLiteral above).
+    // dim/zero emoji (⚪ U+26AA since v0.2.0, which reverted the v0.1.17 ⚪→🟤
+    // pivot — see SBI_DIM_EM JSDoc) baked as a JSON-stringified string
+    // literal — used by the per-tick loop for any light whose count is 0
+    // (dim ball + digit "0", keeping the slot width fixed). Same baking
+    // discipline as cfgLiteral: patch.ts SOURCE is ASCII-only, the baked IIFE
+    // contains literal UTF-8 emoji bytes (see cfgLiteral above).
     const dimEmLiteral = JSON.stringify(SBI_DIM_EM);
     // State machine + notification + SBI aggregation mirror docs/STATES.md §1/§4/§4b/§7. Keep in sync.
     //
@@ -1170,11 +1227,12 @@ function buildIIFE(resDir: string): string {
         // `margin:0 3px;padding:0 5px` per item → ~6-16px inter-SBI gap that
         // NO public API can compress; the internal IStatusbarEntryLocation.compact
         // flag is not reachable from extension code). v0.1.17 renders the 4
-        // lights inside ONE SBI as concatenated text `<ball><digit>`×4 → 0px
-        // inter-light gap (lights touch). Position-stability (digits never
-        // shift the row on count change) is guaranteed by VSCode's own
-        // statusbarpart.css `font-variant-numeric:tabular-nums`, which forces
-        // ASCII digits 0-9 to equal advance width regardless of font.
+        // lights inside ONE SBI as concatenated text `<ball><digit> `×4 (one
+        // space between tokens since v0.1.18 — see per-tick join below).
+        // Position-stability (digits never shift the row on count change) is
+        // guaranteed by VSCode's own statusbarpart.css
+        // `font-variant-numeric:tabular-nums`, which forces ASCII digits 0-9
+        // to equal advance width regardless of font.
         // Wrapped in try/catch (isolation layer 1 of 3 — see docs/STATES.md §7.5).
         `try{if(!globalThis.__ccsdSbi){try{var sbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,${SBI_PRIORITY});sbi.name="CC Status";sbi.text=DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0";sbi.tooltip="Claude Code: 0 done, 0 running, 0 pending, 0 interrupted";try{sbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};sbi.show();globalThis.__ccsdSbi=sbi;globalThis.__ccsdSbiLastKey=null;}catch(e){}}}catch(e){}`,
         `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
@@ -1230,17 +1288,20 @@ function buildIIFE(resDir: string): string {
         `/*tooltip carries the UNcapped breakdown so the user sees actual counts even when lights cap at N.*/`,
         `var tip="Claude Code: "+ag.done+" done, "+ag.running+" running, "+ag.pending+" pending, "+ag.interrupted+" interrupted";`,
         // v0.1.17 per-tick SBI update: concatenate 4 (ball+digit) tokens into
-        // ONE text string assigned to the single SBI. Replaces the v0.1.16
-        // per-iteration try/catch loop over __ccsdSbis (no longer needed —
-        // there's only one SBI; a per-token failure would only corrupt a
-        // locally-scoped string, not a global StatusBarItem reference).
-        // Preserves the lastKey memo short-circuit keyed on the UNcapped
-        // aggregation tuple (steady-state IPC writes drop from ~40/s to 0).
+        // ONE text string assigned to the single SBI. v0.1.18 changed the
+        // join from `""` to `" "` (single space) for token-to-token visual
+        // separation; the tabular-nums CSS still keeps digits equal-width so
+        // count changes don't shift the row. Replaces the v0.1.16 per-iteration
+        // try/catch loop over __ccsdSbis (no longer needed — there's only one
+        // SBI; a per-token failure would only corrupt a locally-scoped string,
+        // not a global StatusBarItem reference). Preserves the lastKey memo
+        // short-circuit keyed on the UNcapped aggregation tuple (steady-state
+        // IPC writes drop from ~40/s to 0).
         // Per-token render rule (unchanged from v0.1.16):
         //   txt += (n===0 ? DIM_EM : CFG[k].em) + (n>=4 ? "N" : ""+n)
-        // → "🟢3🟡1🟤0🟤0" (v0.1.17 compact, 0px gap; 🟤 since the ⚪→🟤 pivot)
-        //   was v0.1.16 "🟢3" / "🟡1" / "🟤0" / "🟤0" as 4 separate SBI texts
-        //   (v0.1.16–v0.1.17 pre-pivot used ⚪ here).
+        // → "🟢3 🟡1 ⚪0 ⚪0" (v0.1.18 space-separated; ⚪ since v0.2.0
+        //   reverted the ⚪→🟤 pivot back to gray)
+        //   was v0.1.16 "🟢3" / "🟡1" / "⚪0" / "⚪0" as 4 separate SBI texts.
         `try{if(globalThis.__ccsdSbi){var key=ag.done+","+ag.running+","+ag.pending+","+ag.interrupted;if(key!==globalThis.__ccsdSbiLastKey){globalThis.__ccsdSbiLastKey=key;var parts=[];for(var k=0;k<CFG.length;k++){var n=counts[k];parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n));}globalThis.__ccsdSbi.text=parts.join(" ");globalThis.__ccsdSbi.tooltip=tip;globalThis.__ccsdSbi.show();}}}catch(e){}`,
         `}catch(e){}`,
         `},${TICK_MS});}}catch(e){}`,
@@ -2124,6 +2185,551 @@ function unwireHooks(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Companion VS Code extension (v0.2.0)
+// ---------------------------------------------------------------------------
+// The companion is a tiny .vsix that watches CC auto-updates and re-applies
+// this patcher automatically. It is NOT published to the Marketplace — it ships
+// inside this npm package (dist/cc-status-dot-companion-<ver>.vsix) and
+// gets installed into the user's VS Code via the `code --install-extension` CLI
+// (or cursor / codium / insiders — we probe each). If NO code CLI is on PATH
+// we warn and continue: the IIFE patch still works without the companion, the
+// user just loses the auto-re-patch convenience.
+//
+// Why CLI vs unzip-into-~/.vscode/extensions:
+//   - `code --install-extension` is the official install path; VS Code's
+//     extension manager then tracks the extension (shows in the Extensions
+//     panel, can be uninstalled from the UI, survives `code --update-extensions`).
+//   - Manually unzipping bypasses that tracking and risks corruption if VS Code
+//     is mid-startup. We only fall back to unzip when the CLI is genuinely
+//     unavailable AND the user has no other option.
+//
+// Cross-platform note:
+//   - The `code` executable is `code` on POSIX, `code.cmd` on Windows (cmd.exe
+//     looks up PATHEXT). cp.execSync("code --version") works on both because
+//     Node spawns through the shell on Windows.
+//   - We probe `code`, `vscode`, `vscode-insiders`, `cursor`, `codium` so the
+//     companion lands in whatever VS Code-family editors the user has. Each
+//     install is independent and best-effort.
+// ---------------------------------------------------------------------------
+
+/** The set of VS Code-family CLI binaries we'll probe for companion install.
+ *  Order matters only for log clarity — each is tried independently and the
+ *  user may have several installed simultaneously (e.g. VS Code stable + VS
+ *  Code Insiders + Cursor). `code.cmd` on Windows is resolved automatically by
+ *  cmd.exe PATHEXT, so we list the bare names here. */
+const VSCODE_CLIS = ["code", "code-insiders", "vscode-insiders", "cursor", "codium", "vscode"];
+
+/** Probe whether a single CLI binary exists and is invokable. Returns the
+ *  trimmed first-line output of `<cli> --version` (e.g. "1.129.1") on success,
+ *  or null on any spawn failure / non-zero exit. We use `--version` (not
+ *  `--list-extensions`) because it's the cheapest invocable command and exists
+ *  on every VS Code-family fork.
+ *
+ *  v0.2.0 — known-install-path fallback: macOS users who never ran "Shell
+ *  Command: Install 'code' command in PATH" have `code` only inside the .app
+ *  bundle (e.g. /Applications/Visual Studio Code.app/Contents/Resources/app/
+ *  bin/code). Windows installs similarly land in %ProgramFiles%\Microsoft VS
+ *  Code\bin\code.cmd. We probe these well-known paths as a fallback when the
+ *  bare CLI name is not on PATH, so the companion auto-installs for the
+ *  common "I just dragged VS Code to /Applications" case instead of warning
+ *  "no VS Code-family CLI detected". Each fallback path is stat-checked first
+ *  so we don't spawn a process we know will fail.
+ *
+ *  Callers that need to invoke the CLI after probing MUST call
+ *  resolveVscodeCli (not the bare `cli` name) — that's the function that
+ *  returns the actual executable path (bare name if on PATH, or the resolved
+ *  known install path otherwise). probeVscodeCli is for "is it present?"
+ *  detection only. */
+function probeVscodeCli(cli: string): string | null {
+    // hideOutput: spawn through shell on Windows so PATHEXT resolves `code.cmd`.
+    try {
+        const out = cp.execSync(`${cli} --version`, {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 8000,
+        });
+        const firstLine = (out.split(/\r?\n/)[0] || "").trim();
+        // VS Code prints 3 lines (version, hash, arch). We only care that it ran.
+        return firstLine || "(present)";
+    } catch {
+        /* not on PATH — fall through to known-install-path probe */
+    }
+    return probeKnownVscodeCliPath(cli);
+}
+
+/** Resolve the executable path for a VS Code-family CLI. Returns the bare
+ *  `cli` name if it's invokable on PATH (preferred — survives app updates that
+ *  move the .app bundle), or the first well-known install path that actually
+ *  exists + runs, or null if neither works. Callers should use the returned
+ *  value verbatim when invoking the CLI (it's already shell-quoted-safe via
+ *  the surrounding `"${resolved}"` template — bare names contain no spaces,
+ *  absolute paths may). */
+function resolveVscodeCli(cli: string): string | null {
+    // Fast path — bare name on PATH. execSync is the same check probeVscodeCli
+    // uses; cheaper than re-implementing with `which`.
+    try {
+        cp.execSync(`${cli} --version`, {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 8000,
+        });
+        return cli;
+    } catch {
+        /* fall through to known paths */
+    }
+    return resolveKnownVscodeCliPath(cli);
+}
+
+/** Per-platform well-known install paths for each VS Code-family CLI. Used as
+ *  a fallback when the bare CLI name is not on PATH (common on macOS where
+ *  users must explicitly run "Shell Command: Install 'code' command in PATH"
+ *  from the command palette). Returns the trimmed --version first line on
+ *  success, or null if no known path resolves. */
+function probeKnownVscodeCliPath(cli: string): string | null {
+    const candidates = knownVscodeCliCandidates(cli);
+    for (const c of candidates) {
+        if (!fs.existsSync(c)) continue;
+        try {
+            const out = cp.execSync(`"${c}" --version`, {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "pipe"],
+                timeout: 8000,
+            });
+            const firstLine = (out.split(/\r?\n/)[0] || "").trim();
+            log(`  ${cli}: not on PATH but found at ${c} (use 'Shell Command: Install code in PATH' to fix)`);
+            return firstLine || "(present)";
+        } catch {
+            /* continue to next candidate */
+        }
+    }
+    return null;
+}
+
+/** Same path enumeration as probeKnownVscodeCliPath but returns the resolved
+ *  executable path (or null). Used by resolveVscodeCli so install/uninstall
+ *  can invoke the CLI at the discovered location, not just detect it. */
+function resolveKnownVscodeCliPath(cli: string): string | null {
+    for (const c of knownVscodeCliCandidates(cli)) {
+        if (!fs.existsSync(c)) continue;
+        try {
+            cp.execSync(`"${c}" --version`, {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "pipe"],
+                timeout: 8000,
+            });
+            log(`  ${cli}: not on PATH but found at ${c} (use 'Shell Command: Install code in PATH' to fix)`);
+            return c;
+        } catch {
+            /* continue to next candidate */
+        }
+    }
+    return null;
+}
+
+/** Enumerate the well-known install paths for `cli` on the current platform.
+ *  Pure data — no stat, no spawn — so callers can reuse the list for both
+ *  probe (return version string) and resolve (return path). */
+function knownVscodeCliCandidates(cli: string): string[] {
+    const candidates: string[] = [];
+    const home = os.homedir();
+    if (process.platform === "darwin") {
+        // macOS .app bundles ship the CLI under Contents/Resources/app/bin.
+        // User-installed (default): /Applications; per-user: ~/Applications.
+        const appRoots = ["/Applications", path.join(home, "Applications")];
+        const appDirs: Record<string, string[]> = {
+            code: ["Visual Studio Code.app/Contents/Resources/app/bin/code"],
+            "code-insiders": ["Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code-insiders"],
+            cursor: ["Cursor.app/Contents/Resources/app/bin/cursor"],
+            codium: ["VSCodium.app/Contents/Resources/app/bin/codium"],
+        };
+        const rels = appDirs[cli] ?? [];
+        for (const root of appRoots) for (const rel of rels) candidates.push(path.join(root, rel));
+    } else if (process.platform === "win32") {
+        const progFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+        const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
+        const winDirs: Record<string, string[]> = {
+            code: [
+                `${progFiles}\\Microsoft VS Code\\bin\\code.cmd`,
+                `${localAppData}\\Programs\\Microsoft VS Code\\bin\\code.cmd`,
+            ],
+            "code-insiders": [
+                `${progFiles}\\Microsoft VS Code Insiders\\bin\\code-insiders.cmd`,
+                `${localAppData}\\Programs\\Microsoft VS Code Insiders\\bin\\code-insiders.cmd`,
+            ],
+            cursor: [`${localAppData}\\Programs\\cursor\\resources\\app\\bin\\cursor.cmd`],
+        };
+        const rels = winDirs[cli] ?? [];
+        for (const rel of rels) candidates.push(rel);
+    }
+    return candidates;
+}
+
+/** Run `code --install-extension <vsix>` (idempotent — VS Code skips if the
+ *  same version is already installed; --force re-installs otherwise). Returns
+ *  true on exit 0, false on any failure. We pass `--force` so a same-version
+ *  re-install (user re-runs npx) refreshes the bits instead of being skipped
+ *  silently.
+ *
+ *  v0.2.0 — downgrade guard: BEFORE the `--force` we ask the CLI what version
+ *  of the companion it already has installed (`--list-extensions --show-
+ *  versions` prints `publisher.name@x.y.z`). If the installed version is
+ *  STRICTLY GREATER than the .vsix we're about to install, we SKIP that CLI
+ *  (and log why) instead of `--force`-downgrading it. This protects users who
+ *  installed a newer companion from some other source (self-build, separate
+ *  npm publish, etc.) from a silent regression. Equal / older / absent all
+ *  still go through `--force` as before.
+ *
+ *  `cliName` is the bare CLI name (e.g. "code") for log readability; `cliPath`
+ *  is the resolved executable path (bare name OR an absolute well-known
+ *  install path returned by resolveVscodeCli) used for the actual spawn. */
+function installCompanionIntoCli(cliName: string, cliPath: string, vsixAbs: string, vsixVersion: string): boolean {
+    // Downgrade guard — query the installed version (if any) and bail out if
+    // the user already has a strictly newer one. Failures to query are non-
+    // fatal (treat as "version unknown, proceed with --force").
+    const installed = installedCompanionVersion(cliPath);
+    if (installed !== null && cmpVerStr(installed, vsixVersion) > 0) {
+        log(
+            `  ${cliName}: SKIP — installed companion ${installed} is newer than the .vsix ${vsixVersion} (downgrade guard). Run \`code --uninstall-extension ${COMPANION_EXT_ID}\` first if you want to install the older version.`,
+        );
+        return false;
+    }
+    try {
+        const out = cp.execSync(`"${cliPath}" --install-extension "${vsixAbs}" --force`, {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 30000,
+        });
+        // VS Code prints "Successfully installed" or "already installed" on
+        // success; surface a trimmed hint for the install log.
+        const last = (out.split(/\r?\n/).filter(Boolean).pop() || "").trim();
+        log(`  ${cliName}: ${last || "installed"}`);
+        return true;
+    } catch (e) {
+        warn(`  ${cliName}: install-extension failed (${(e as Error).message ?? String(e)})`);
+        return false;
+    }
+}
+
+/** Parse the installed companion version out of `<cliPath> --list-extensions
+ *  --show-versions` (prints `publisher.name@x.y.z`, one per line). Returns the
+ *  version string ("0.2.0") if the companion is installed, or null if not
+ *  installed / the CLI failed / the version line didn't parse. `cliPath` is
+ *  the resolved executable path (bare name OR absolute path from
+ *  resolveVscodeCli). */
+function installedCompanionVersion(cliPath: string): string | null {
+    try {
+        const out = cp.execSync(`"${cliPath}" --list-extensions --show-versions`, {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 10000,
+        });
+        // Match "wangdong.cc-status-dot-companion@1.2.3" anywhere on a line.
+        const m = out.match(
+            new RegExp(`${COMPANION_EXT_ID.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}@(\\d+\\.\\d+\\.\\d+)`),
+        );
+        return m ? m[1] : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Locate the prebuilt companion .vsix. Dev (`tsx patch.ts`) resolves it from
+ *  PROJECT_ROOT/companion/<vsix>; the published package ships the same path
+ *  (companion/ is listed in package.json `files`). Returns the absolute path
+ *  or null if absent (caller warns + continues — install must NOT fail just
+ *  because the .vsix is missing, the IIFE patch is the critical surface). */
+function locateCompanionVsix(): string | null {
+    const candidate = path.join(PROJECT_ROOT, COMPANION_VSIX);
+    return fs.existsSync(candidate) ? candidate : null;
+}
+
+/** Write `INSTALL_DIR/companion-config.json` containing every constant the
+ *  companion currently hand-mirrors in companion/extension.ts: installDir,
+ *  patchJsPath, patcherVersion, injectMarker, injectVersion, ccExtIdPrefix,
+ *  searchDirs. The companion reads this at activate() and uses the values
+ *  instead of its hardcoded fallbacks — decoupling the companion's build
+ *  cadence from the patcher's internals.
+ *
+ *  Architecture rationale (review finding: "INSTALL_DIR/patch.js snapshot +
+ *  SEARCH_DIRS hand-mirrored"): the v0.2.0 companion mirrored INSTALL_DIR /
+ *  INJECT_MARKER / INJECT_VERSION / SEARCH_DIRS as TypeScript consts with a
+ *  "must match patch.ts:LINE" comment but no compile-time check. A future
+ *  patch.ts that added a new VS Code flavor to SEARCH_DIRS would silently
+ *  break the companion's fallback disk scan — only the next .vsix rebuild
+ *  would carry the new list. Writing the constants to a JSON config the
+ *  companion reads at runtime means a simple `npx` re-run refreshes the
+ *  companion's behavior WITHOUT rebuilding / re-shipping the .vsix.
+ *
+ *  The config also carries `patcherVersion` so the companion can detect a
+ *  stale `INSTALL_DIR/patch.js` snapshot: if the user did
+ *  `npm install -g vscode-claude-code-status-dot@latest` (updates the npm
+ *  package) WITHOUT re-running the bin, INSTALL_DIR/patch.js is the OLD
+ *  version while companion-config.json... is ALSO old (it's written by the
+ *  same old patch.js). To detect this case the companion compares
+ *  `config.patcherVersion` against its own MIN_PATCHER_VERSION constant; if
+ *  older, it warns the user to re-run `npx` so both patch.js AND config.json
+ *  get refreshed together.
+ *
+ *  Best-effort: a write failure is warned, never fatal (the IIFE patch is
+ *  the critical surface, not this config file — the companion falls back to
+ *  its hardcoded constants). Idempotent: re-writing on every install
+ *  refreshes the values. */
+function writeCompanionConfig(): void {
+    const config = {
+        patcherVersion: PATCHER_VERSION,
+        installDir: INSTALL_DIR,
+        patchJsPath: path.join(INSTALL_DIR, "patch.js"),
+        injectMarker: INJECT_MARKER,
+        injectVersion: INJECT_VERSION,
+        // Same prefix the patcher's discoverExtension regex matches against
+        // (`^anthropic\.claude-code-(\d+)\.(\d+)\.(\d+)`). The companion uses
+        // this in its vscode.extensions.all scan as a startsWith filter.
+        ccExtIdPrefix: "anthropic.claude-code",
+        searchDirs: SEARCH_DIRS,
+        writtenAt: Date.now(),
+    };
+    try {
+        fs.mkdirSync(INSTALL_DIR, { recursive: true });
+        writeAtomicSync(COMPANION_CONFIG_PATH, JSON.stringify(config, null, 2));
+        log(`wrote companion config → ${COMPANION_CONFIG_PATH} (patcherVersion ${PATCHER_VERSION})`);
+    } catch (e) {
+        warn(
+            `failed to write ${COMPANION_CONFIG_PATH} (non-fatal — companion will fall back to its hardcoded constants): ${(e as Error).message ?? String(e)}`,
+        );
+    }
+}
+
+/** Write `INSTALL_DIR/last-repatch.json` after a successful --patch-only run so
+ *  companion instances in OTHER still-running VS Code windows can detect that
+ *  the CC extension.js was just re-patched and prompt their users to reload.
+ *  Closes the multi-window gap: pre-fix, Window 1 patched → reloaded → happy,
+ *  but Windows 2/3 still had the OLD CC in memory and never prompted.
+ *
+ *  Schema: { ts, extDir, version, anchorB, patcherVersion, source }.
+ *  - `ts` (epoch ms) is what other windows poll to detect change.
+ *  - `extDir` lets a multi-flavor install (stable + insiders) discriminate:
+ *    stable's companion only prompts when insiders' CC was patched if stable
+ *    shares the SAME CC install (it doesn't — different flavors have different
+ *    ext dirs). So this scoping prevents cross-flavor false positives.
+ *  - `anchorB` is reused in the prompt body ("with warnings" vs "clean").
+ *  - `source` is "companion" when the companion triggered the patch (via
+ *    `--patch-only`) or "npx" when the user ran the bin manually — informational.
+ *
+ *  Best-effort: write failure is warned but does NOT fail the patch (the
+ *  on-disk extension.js is already correct; only the cross-window signal
+ *  is lost — those windows will catch up on their own reload). */
+function writeRepatchFlag(extDir: string, anchorB: boolean, source: "companion" | "npx"): void {
+    const flag = {
+        ts: Date.now(),
+        extDir,
+        version: INJECT_VERSION,
+        anchorB,
+        patcherVersion: PATCHER_VERSION,
+        source,
+    };
+    try {
+        fs.mkdirSync(INSTALL_DIR, { recursive: true });
+        writeAtomicSync(LAST_REPATCH_PATH, JSON.stringify(flag, null, 2));
+    } catch (e) {
+        warn(
+            `failed to write ${LAST_REPATCH_PATH} (non-fatal — other VS Code windows won't get the cross-window reload signal): ${(e as Error).message ?? String(e)}`,
+        );
+    }
+}
+
+/** Install (or refresh) the companion .vsix into every detected VS Code-family
+ *  CLI on PATH. Idempotent: re-running refreshes via `--force`. If NO CLI is
+ *  detected we warn and continue — the IIFE patch alone still works. Also
+ *  copies our compiled patch.js to INSTALL_DIR so the companion has a stable
+ *  path to re-exec at VS Code startup (see companion/extension.ts). */
+function installCompanion(): void {
+    // 1. Copy dist/patch.js → INSTALL_DIR/patch.js so the companion can re-exec
+    //    the patcher without depending on the user's npx cache (which may be
+    //    purged). dist/patch.js exists in the published package; in dev
+    //    (`tsx patch.ts`) it may be absent — best-effort copy.
+    const srcPatchJs = path.join(SCRIPT_DIR, "patch.js");
+    const dstPatchJs = path.join(INSTALL_DIR, "patch.js");
+    try {
+        if (fs.existsSync(srcPatchJs)) {
+            fs.mkdirSync(INSTALL_DIR, { recursive: true });
+            fs.copyFileSync(srcPatchJs, dstPatchJs);
+            log(`copied patch.js → ${dstPatchJs} (companion re-execs this)`);
+        } else {
+            // Dev mode without a build: warn — the companion will fall through
+            // to its "patcher not found" message at startup. Non-fatal.
+            warn(
+                `dist/patch.js not found at ${srcPatchJs} — companion will not be able to re-patch until \`npm run build\` is run`,
+            );
+        }
+    } catch (e) {
+        warn(`failed to copy patch.js to INSTALL_DIR (non-fatal): ${(e as Error).message ?? String(e)}`);
+    }
+
+    // 1b. Write INSTALL_DIR/companion-config.json with the constants the
+    //     companion currently hand-mirrors (INSTALL_DIR / INJECT_MARKER /
+    //     INJECT_VERSION / SEARCH_DIRS / ccExtIdPrefix / patchJsPath /
+    //     patcherVersion). Best-effort — companion falls back to its hardcoded
+    //     values if this file is missing or stale. See writeCompanionConfig.
+    writeCompanionConfig();
+
+    // 2. Install the .vsix into every detected VS Code-family CLI.
+    const vsixAbs = locateCompanionVsix();
+    if (!vsixAbs) {
+        warn(
+            `companion .vsix not found at ${path.join(PROJECT_ROOT, COMPANION_VSIX)} — run \`npm run companion:package\` to build it (the patch still works without the companion; you just won't get auto-re-patch after a CC update)`,
+        );
+        return;
+    }
+    log(`installing companion extension (${COMPANION_VERSION}) into detected VS Code-family CLIs…`);
+    log(`  vsix: ${vsixAbs}`);
+    let anyOk = false;
+    let anyDetected = false;
+    for (const cli of VSCODE_CLIS) {
+        const resolved = resolveVscodeCli(cli);
+        if (resolved === null) continue;
+        const probe = probeVscodeCli(cli);
+        anyDetected = true;
+        log(`  ${cli}: detected (${probe})${resolved !== cli ? ` at ${resolved}` : ""}`);
+        if (installCompanionIntoCli(cli, resolved, vsixAbs, COMPANION_VERSION)) anyOk = true;
+    }
+    if (!anyDetected) {
+        warn(
+            "no VS Code-family CLI detected on PATH or at well-known install paths " +
+                "(looked for: " +
+                VSCODE_CLIS.join(", ") +
+                "; on macOS also try /Applications/<App>.app/Contents/Resources/app/bin/). " +
+                "The patch is installed, but the companion extension was NOT installed. " +
+                "Open VS Code → Cmd/Ctrl+Shift+P → 'Shell Command: Install code in PATH' and re-run if you want auto-re-patch.",
+        );
+        return;
+    }
+    if (anyOk) {
+        log(`companion extension installed — CC auto-updates will be self-healed (reload VS Code once)`);
+    } else {
+        warn("companion .vsix install failed for every detected CLI — see warnings above. Patch is still active.");
+    }
+}
+
+/** Uninstall the companion extension from every detected VS Code-family CLI.
+ *  Best-effort: failures are warned, never fatal (the .vsix may already be gone
+ *  or the CLI may be locked). v0.2.0: uses resolveVscodeCli so the uninstall
+ *  works even when `code` is not on PATH (macOS well-known install paths). */
+function uninstallCompanion(): void {
+    log("uninstalling companion extension from detected VS Code-family CLIs…");
+    let anyDetected = false;
+    for (const cli of VSCODE_CLIS) {
+        const resolved = resolveVscodeCli(cli);
+        if (resolved === null) continue;
+        anyDetected = true;
+        try {
+            cp.execSync(`"${resolved}" --uninstall-extension ${COMPANION_EXT_ID}`, {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "pipe"],
+                timeout: 15000,
+            });
+            log(`  ${cli}: uninstalled ${COMPANION_EXT_ID}`);
+        } catch (e) {
+            // Non-fatal — most likely "extension not installed" which is the
+            // desired post-condition anyway. Surface the trimmed stderr.
+            const msg = (e as { stderr?: string; message?: string }).stderr || (e as Error).message || String(e);
+            const trimmed = String(msg).split(/\r?\n/)[0]?.trim() || "(unknown)";
+            log(`  ${cli}: ${trimmed}`);
+        }
+    }
+    if (!anyDetected) {
+        // v0.2.0: surface this as a warn (not log) so the user notices the
+        // companion .vsix is left behind — the previous bare log line was
+        // easy to miss in scrollback. The next companion startup (post-fix)
+        // would then warn "patcher not found" because removeInstallDir()
+        // below already deleted INSTALL_DIR/patch.js.
+        warn(
+            `no VS Code-family CLI on PATH or at well-known install paths — companion .vsix left installed. Manually run \`code --uninstall-extension ${COMPANION_EXT_ID}\` if you want it gone.`,
+        );
+    }
+    // Also remove the INSTALL_DIR/patch.js copy we placed for the companion.
+    const dstPatchJs = path.join(INSTALL_DIR, "patch.js");
+    try {
+        if (fs.existsSync(dstPatchJs)) {
+            fs.unlinkSync(dstPatchJs);
+            log(`removed companion patch.js copy: ${dstPatchJs}`);
+        }
+    } catch (e) {
+        warn(`could not remove ${dstPatchJs}: ${(e as Error).message ?? String(e)} (remove manually)`);
+    }
+}
+
+/** Surface companion install health in --status. Reports: vsix presence in the
+ *  package, each detected CLI's install state + version (queried via
+ *  `code --list-extensions --show-versions`), and the INSTALL_DIR/patch.js copy.
+ *  v0.2.0: surfaces installed-vs-packaged version drift per CLI so a user
+ *  running an older companion can see "installed 0.1.0 (packaged 0.2.0) —
+ *  re-run npx to upgrade" instead of a bare "INSTALLED" with no signal. */
+function reportCompanionStatus(): void {
+    log(`companion version: ${COMPANION_VERSION}`);
+    const vsixAbs = locateCompanionVsix();
+    log(`  packaged .vsix: ${vsixAbs ? vsixAbs : "(missing — run `npm run companion:package`)"}`);
+    const dstPatchJs = path.join(INSTALL_DIR, "patch.js");
+    log(
+        `  INSTALL_DIR/patch.js: ${fs.existsSync(dstPatchJs) ? "present" : "(missing — companion will warn at startup)"}`,
+    );
+    // v0.2.1: also surface the companion-config.json + last-repatch.json files
+    // the patcher writes for the companion to read. A missing config means
+    // the companion will fall back to its hardcoded constants (v0.2.0
+    // behavior); a missing repatch flag means cross-window reload signaling
+    // is inactive. Both are non-fatal but worth surfacing so a user
+    // diagnosing "why doesn't the companion pick up my new patcher version?"
+    // can see immediately that the config wasn't written.
+    const configExists = fs.existsSync(COMPANION_CONFIG_PATH);
+    let configVer = "(missing)";
+    if (configExists) {
+        try {
+            const parsed = JSON.parse(fs.readFileSync(COMPANION_CONFIG_PATH, "utf8")) as { patcherVersion?: string };
+            if (parsed.patcherVersion) configVer = parsed.patcherVersion;
+        } catch {
+            configVer = "(corrupt)";
+        }
+    }
+    log(
+        `  INSTALL_DIR/companion-config.json: ${configExists ? `present (patcherVersion ${configVer})` : "(missing — companion falls back to hardcoded constants)"}`,
+    );
+    const flagExists = fs.existsSync(LAST_REPATCH_PATH);
+    let flagTs = "(missing)";
+    if (flagExists) {
+        try {
+            const parsed = JSON.parse(fs.readFileSync(LAST_REPATCH_PATH, "utf8")) as { ts?: number };
+            if (typeof parsed.ts === "number") flagTs = new Date(parsed.ts).toISOString();
+        } catch {
+            flagTs = "(corrupt)";
+        }
+    }
+    log(
+        `  INSTALL_DIR/last-repatch.json: ${flagExists ? `present (ts ${flagTs})` : "(missing — cross-window reload signal inactive until next patch)"}`,
+    );
+    let anyDetected = false;
+    for (const cli of VSCODE_CLIS) {
+        if (probeVscodeCli(cli) === null) continue;
+        anyDetected = true;
+        const installed = installedCompanionVersion(cli);
+        if (installed === null) {
+            log(`  ${cli}: companion not installed`);
+        } else if (cmpVerStr(installed, COMPANION_VERSION) < 0) {
+            // Installed older than packaged → user is behind.
+            log(
+                `  ${cli}: companion INSTALLED ${installed} (packaged ${COMPANION_VERSION} — re-run \`npx vscode-claude-code-status-dot\` to upgrade)`,
+            );
+        } else if (cmpVerStr(installed, COMPANION_VERSION) > 0) {
+            // Installed newer than packaged → user is ahead (self-build etc.).
+            log(`  ${cli}: companion INSTALLED ${installed} (newer than packaged ${COMPANION_VERSION} — keeping)`);
+        } else {
+            log(`  ${cli}: companion INSTALLED ${installed} (matches packaged)`);
+        }
+    }
+    if (!anyDetected) {
+        log(`  no VS Code-family CLI on PATH (looked for: ${VSCODE_CLIS.join(", ")})`);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Misc helpers
 // ---------------------------------------------------------------------------
 
@@ -2526,6 +3132,7 @@ function reportStatus(): void {
     reportExtensionPatchHealth(dir, extSrc);
     reportLegacyResidue(dir);
     reportRuntimeFiles();
+    reportCompanionStatus();
 }
 
 function printHelp(): void {
@@ -2534,23 +3141,184 @@ function printHelp(): void {
             "cc-status-dot patcher",
             "",
             "Usage:",
-            "  vscode-claude-code-status-dot            install patch + wire hooks (idempotent)",
-            "  vscode-claude-code-status-dot --revert   restore extension.js + package.json (cleans v0.1.13 commandCenter residue + legacy v0.1.2 webview), remove hooks + runtime copy",
-            "  vscode-claude-code-status-dot --status   show detection results, change nothing",
-            "  vscode-claude-code-status-dot --help     this message",
+            "  vscode-claude-code-status-dot                  install patch + wire hooks (idempotent)",
+            "  vscode-claude-code-status-dot --patch-only     re-apply ONLY the extension.js patch (used by the companion; skips hooks/runtime/companion install)",
+            "  vscode-claude-code-status-dot --revert         restore extension.js + package.json (cleans v0.1.13 commandCenter residue + legacy v0.1.2 webview), remove hooks + runtime copy",
+            "  vscode-claude-code-status-dot --status         show detection results, change nothing",
+            "  vscode-claude-code-status-dot --help           this message",
             "",
             "  (from source, replace the command with: npx tsx patch.ts)",
             "",
             "Runtime files (resources/*.svg, hooks/cc-status.js) are copied to:",
             "  " + INSTALL_DIR,
             "",
-            "After install/revert, reload VS Code: Cmd+Shift+P → 'Developer: Reload Window'.",
+            "After install/revert, reload VS Code: Cmd+Shift+P (macOS) / Ctrl+Shift+P (Win/Linux) → 'Developer: Reload Window'.",
         ].join("\n"),
     );
 }
 
 function reloadHint(): void {
-    log("Done. Reload VS Code to apply: Cmd+Shift+P → 'Developer: Reload Window'.");
+    // v0.2.0: cross-platform shortcut hint. Cmd+Shift+P on macOS, Ctrl+Shift+P
+    // everywhere else (Win/Linux). Older builds printed a Mac-only hint that
+    // Win/Linux users saw verbatim — accurate shortcut matters because this is
+    // the only on-screen instruction the user gets after install/revert.
+    const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
+    log(`Done. Reload VS Code to apply: ${palette} → 'Developer: Reload Window'.`);
+}
+
+// ---------------------------------------------------------------------------
+// Self-test I/O — fixture corpus for the pure patcher functions.
+//
+// Invoked via `--self-test-io`. Emits a JSON array of { name, pass, expected,
+// actual } rows; hooks/test-patcher-io.mjs parses the array and asserts every
+// row pass===true. Closes the e2e-review HIGH gap: wireHooks /
+// commitSettingsSurgically / surgicalSetTopLevelKey / surgicalRemoveTopLevelKey
+// / stripJsonc / parseJsonc had ZERO automated coverage, so a 4-line unit test
+// over `,}` inside a string would have caught the trailing-comma regex
+// string-boundary bug that corrupted user settings.json before this round.
+//
+// Fixtures live IN patch.ts (not in the test file) because the functions under
+// test are module-private; exposing them via `export` would widen the public
+// API for a dev-only need. The test driver stays trivial (spawn + parse JSON).
+// ---------------------------------------------------------------------------
+
+interface SelfTestRow {
+    name: string;
+    pass: boolean;
+    expected: string;
+    actual: string;
+}
+
+function runSelfTestIo(): void {
+    const rows: SelfTestRow[] = [];
+    const eq = (name: string, expected: unknown, actual: unknown): void => {
+        const e = JSON.stringify(expected);
+        const a = JSON.stringify(actual);
+        rows.push({ name, pass: e === a, expected: e, actual: a });
+    };
+
+    // --- stripJsonc: comments stripped, strings preserved ---
+    // Note: the scanner removes only the comment bytes themselves; surrounding
+    // whitespace + the newline that terminates a // comment are preserved
+    // byte-for-byte (this is intentional — surgicalSetTopLevelKey relies on
+    // the scanner leaving the file's overall layout alone).
+    eq("stripJsonc strips // line comment but keeps newline", `{ "a": 1 \n }`, stripJsonc(`{ "a": 1 // hello\n }`));
+    eq("stripJsonc strips /* block comment */ bytes only", `{ "a": 1  }`, stripJsonc(`{ "a": 1 /* hello */ }`));
+    // CRITICAL regression: a `,}` substring inside a string literal MUST be
+    // preserved byte-for-byte. The pre-fix post-pass regex dropped the comma.
+    // Use a content-agnostic fixture (X,}Y) so the assertion is unambiguous
+    // about what is being protected: the literal substring `,}` inside a
+    // JSON string value.
+    eq(
+        "stripJsonc preserves ',}' inside a string (regex char class / JSON arg)",
+        `{"x":"X,}Y"}`,
+        stripJsonc(`{"x":"X,}Y"}`),
+    );
+    eq("stripJsonc preserves ',]' inside a string", `{"x":"X,]Y"}`, stripJsonc(`{"x":"X,]Y"}`));
+    eq("stripJsonc preserves ',}' at string boundaries", `{"x":",}a"}`, stripJsonc(`{"x":",}a"}`));
+    // Trailing-comma tolerance still works at the syntax level.
+    eq("stripJsonc tolerates trailing comma in object", `{"a":1}`, stripJsonc(`{"a":1,}`));
+    eq("stripJsonc tolerates trailing comma in array", `{"a":[1,2]}`, stripJsonc(`{"a":[1,2,]}`));
+    eq("stripJsonc tolerates trailing comma with whitespace", `{"a":1   }`, stripJsonc(`{"a":1 ,  }`));
+    eq("stripJsonc tolerates trailing comma with block comment between", `{"a":1  }`, stripJsonc(`{"a":1, /* c */ }`));
+    eq("stripJsonc tolerates trailing comma with line comment between", `{"a":1 \n }`, stripJsonc(`{"a":1, // c\n }`));
+    // CRITICAL regression guard: a comma OUTSIDE a string but immediately
+    // followed by a string-value whose first char is `}` (extremely contrived
+    // but pins the string/syntax boundary).
+    eq(
+        "stripJsonc leaves comma before a string-value that starts with }",
+        `{"a":1,"x":"}leaf"}`,
+        stripJsonc(`{"a":1,"x":"}leaf"}`),
+    );
+
+    // --- parseJsonc: JSONC → object ---
+    eq("parseJsonc parses trailing comma", { a: 1 }, parseJsonc(`{"a":1,}`, "test"));
+    eq("parseJsonc parses comments", { a: 1, b: "2" }, parseJsonc(`{ "a": 1, // x\n "b": "2" /* y */ }`, "test"));
+    eq(
+        "parseJsonc preserves string with ,} substring (regex char class)",
+        { x: "X,}Y" },
+        parseJsonc(`{"x":"X,}Y"}`, "test"),
+    );
+    eq("parseJsonc preserves string with ,] substring (JSON arg)", { x: "X,]Y" }, parseJsonc(`{"x":"X,]Y"}`, "test"));
+
+    // --- surgicalSetTopLevelKey: byte-preserving splice ---
+    // Replace existing key — surrounding comments + sibling keys preserved.
+    {
+        const src = `{
+  // my config
+  "a": 1,
+  "hooks": { "old": true },
+  "b": 2
+}`;
+        const want = `{
+  // my config
+  "a": 1,
+  "hooks": {"new":true},
+  "b": 2
+}`;
+        eq(
+            "surgicalSetTopLevelKey replaces value, preserves surroundings",
+            want,
+            surgicalSetTopLevelKey(src, "hooks", `{"new":true}`),
+        );
+    }
+    // Insert absent key — adds after opening brace.
+    {
+        const src = `{\n  "a": 1\n}`;
+        const want = `{\n  "hooks": {"x":1},\n  "a": 1\n}`;
+        eq("surgicalSetTopLevelKey inserts new key after brace", want, surgicalSetTopLevelKey(src, "hooks", `{"x":1}`));
+    }
+    // Insert into empty object.
+    eq(
+        "surgicalSetTopLevelKey inserts into empty object",
+        `{\n  "hooks": {"x":1},}`,
+        surgicalSetTopLevelKey(`{}`, "hooks", `{"x":1}`),
+    );
+
+    // --- surgicalRemoveTopLevelKey: byte-preserving deletion ---
+    {
+        const src = `{
+  "a": 1,
+  "hooks": { "old": true },
+  "b": 2
+}`;
+        const want = `{
+  "a": 1,
+  "b": 2
+}`;
+        eq("surgicalRemoveTopLevelKey removes key + trailing comma", want, surgicalRemoveTopLevelKey(src, "hooks"));
+    }
+    // Remove absent key is a no-op.
+    {
+        const src = `{"a":1}`;
+        eq("surgicalRemoveTopLevelKey absent key is a no-op", src, surgicalRemoveTopLevelKey(src, "hooks"));
+    }
+    // Remove last key with trailing comma doesn't leave a dangling comma.
+    // (The splice removes the `,"hooks":{...}` token range but leaves the
+    // preceding `,` if any; this is acceptable — JSONC tolerates it.)
+    {
+        const src = `{"a":1, "hooks":{"x":1},}`;
+        const want = `{"a":1,}`;
+        eq(
+            "surgicalRemoveTopLevelKey removes last-member trailing comma",
+            want,
+            surgicalRemoveTopLevelKey(src, "hooks"),
+        );
+    }
+
+    // --- cmpSemver / cmpVer / cmpVerStr ---
+    eq("cmpSemver equal", 0, cmpSemver("1.2.3", "1.2.3"));
+    eq("cmpSemver a>b (major)", 1, Math.sign(cmpSemver("2.0.0", "1.9.9")));
+    eq("cmpSemver a<b (patch)", -1, Math.sign(cmpSemver("1.0.0", "1.0.1")));
+    eq("cmpSemver missing segment treated as 0", 0, cmpSemver("1.2", "1.2.0"));
+    eq("cmpSemver X.Y vs X.Y.Z", -1, Math.sign(cmpSemver("1.2", "1.2.1")));
+    eq("cmpVer [1,2,3] vs [1,2,3]", 0, cmpVer([1, 2, 3], [1, 2, 3]));
+    eq("cmpVer [2,0] vs [1,9,9]", 1, Math.sign(cmpVer([2, 0], [1, 9, 9])));
+    eq("cmpVerStr equal", 0, cmpVerStr("0.2.0", "0.2.0"));
+    eq("cmpVerStr a>b", 1, Math.sign(cmpVerStr("0.2.0", "0.1.99")));
+    eq("cmpVerStr a<b", -1, Math.sign(cmpVerStr("0.1.18", "0.2.0")));
+
+    process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -2568,8 +3336,66 @@ function run(argv: string[]): void {
         console.log(buildIIFE(RUNTIME_RES_DIR));
         return;
     }
+    if (args.includes("--self-test-io")) {
+        // Dev: run the patcher's pure I/O functions (stripJsonc / parseJsonc /
+        // surgicalSetTopLevelKey / surgicalRemoveTopLevelKey / cmpSemver /
+        // cmpVer) over a fixed fixture corpus and emit a JSON array of
+        // { name, pass, expected, actual } rows. hooks/test-patcher-io.mjs
+        // invokes this and asserts every row is `pass:true` — the patcher's
+        // I/O surface had ZERO automated coverage before this gate (e2e
+        // review HIGH finding), so silent regressions in the JSONC editor
+        // (e.g. the trailing-comma regex string-boundary bug that corrupted
+        // user settings.json strings containing `,}`) shipped uncaught.
+        runSelfTestIo();
+        return;
+    }
     if (args.includes("--status")) {
         reportStatus();
+        return;
+    }
+    if (args.includes("--patch-only")) {
+        // v0.2.0: companion-only entry. Runs ONLY discoverExtension +
+        // patchExtension. Deliberately skips installRuntimeFiles / wireHooks /
+        // installNodeWrapper / installCompanion — the companion re-execs this
+        // at every VS Code startup and we must NOT re-run installNodeWrapper
+        // (would bake the EH's Electron path into the wrapper), re-spawn N
+        // `code --install-extension` calls (freezes the EH), or duplicate I/O
+        // that already ran at the user's last `npx` install.
+        //
+        // Output discipline: emit only the lines companion/extension.ts parses
+        // for its post-verify + reload UI:
+        //   - "patched extension.js (anchors injected: A only)"  → work done, partial
+        //   - "patched extension.js (anchors injected: A+B)"     → work done, full
+        //   - "extension.js already patched — skipping injection" → no-op (fresh)
+        //   - "updated stale baked RES path: …"                   → work done (RES only)
+        //   - "[WARN] Anchor B not found …"                       → warning (downgrade UI)
+        // patchExtension itself is idempotent — fresh installs log "already
+        // patched — skipping" and exit 0 with zero disk writes, so the
+        // companion can safely run this on EVERY startup without a separate
+        // marker check (the companion still pre-checks the marker to avoid
+        // the ~300ms spawn in the steady state — see extension.ts).
+        const { dir, version } = discoverExtension();
+        log(`CC extension v${version}: ${dir}`);
+        patchExtension(dir);
+        // After a successful patch, write the cross-window reload signal so
+        // companion instances in OTHER still-running VS Code windows can detect
+        // the change and prompt their users to reload. anchorB is parsed from
+        // the on-disk marker count (2 = A+B applied, 1 = A only). source =
+        // "companion" when triggered by the companion (we can't tell from here
+        // who invoked us, so we look at the CCSD_INVOKED_BY_COMPANION env var
+        // the companion sets before spawning us — see companion/extension.ts).
+        try {
+            const extJsPath = path.join(dir, "extension.js");
+            const extSrc = fs.existsSync(extJsPath) ? fs.readFileSync(extJsPath, "utf8") : "";
+            const markerN = countOccurrences(extSrc, INJECT_MARKER);
+            const anchorB = markerN >= 2;
+            const source: "companion" | "npx" = process.env.CCSD_INVOKED_BY_COMPANION === "1" ? "companion" : "npx";
+            writeRepatchFlag(dir, anchorB, source);
+        } catch (e) {
+            // Non-fatal — extension.js is already patched; only the cross-window
+            // signal is lost. Other windows will catch up on their own reload.
+            warn(`failed to write repatch flag (non-fatal): ${(e as Error).message ?? String(e)}`);
+        }
         return;
     }
     if (args.includes("--revert")) {
@@ -2588,6 +3414,10 @@ function run(argv: string[]): void {
             ["restoreWebview", () => restoreWebview(dir)],
             ["restorePackageJson", () => restorePackageJson(dir)],
             ["unwireHooks", () => unwireHooks()],
+            // v0.2.0: also uninstall the companion .vsix from every detected
+            // VS Code-family CLI. Best-effort — failures are warned, never
+            // fatal (an already-uninstalled extension is the desired state).
+            ["uninstallCompanion", () => uninstallCompanion()],
             // Remove our persistent runtime copy (resources + hook). STATE_DIR
             // holds per-session USER DATA and is intentionally kept.
             ["removeInstallDir", () => removeInstallDir()],
@@ -2654,7 +3484,7 @@ function run(argv: string[]): void {
     // wireHooks can throw (read-only settings.json, EACCES, disk full, corrupt
     // JSONC, parseJsonc->fail). Without rollback, an exception here would leave
     // extension.js patched (reader IIFE active) with NO writer wired — the SBI
-    // would render 🟤0🟡0🔵0🔴0 forever and no per-tab dots. The .bak written
+    // would render ⚪0🟡0🔵0🔴0 forever and no per-tab dots. The .bak written
     // inside injectFresh() is the original unpatched CC bytes, so restoreExtension
     // makes install atomic: either BOTH reader+writer land or neither does.
     // Best-effort rollback (restoreExtension itself wrapped) — even if rollback
@@ -2677,6 +3507,16 @@ function run(argv: string[]): void {
         );
     }
     checkSvgs(RUNTIME_RES_DIR);
+    // v0.2.0: also install the companion .vsix into every detected VS Code-
+    // family CLI. Best-effort — failure here does NOT roll back the patch
+    // (the IIFE patch is the critical surface; the companion is a convenience
+    // that auto-re-applies this patch after a CC auto-update). installCompanion
+    // is non-throwing.
+    try {
+        installCompanion();
+    } catch (e) {
+        warn(`companion install failed (non-fatal): ${(e as Error).message ?? String(e)}`);
+    }
     reloadHint();
 }
 

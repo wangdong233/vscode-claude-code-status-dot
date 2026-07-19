@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
     "lib": ["ES2020"],
     "outDir": "dist",
     "rootDir": ".",
@@ -12,11 +12,11 @@
     "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
+    "resolveJsonModule": false,
     "declaration": false,
     "sourceMap": false,
     "removeComments": false
   },
-  "include": ["patch.ts"],
-  "exclude": ["node_modules", "dist", "hooks", "resources", "docs", "src", "companion"]
+  "include": ["extension.ts"],
+  "exclude": ["node_modules", "dist"]
 }

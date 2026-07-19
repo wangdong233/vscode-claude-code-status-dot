@@ -1,0 +1,38 @@
+{
+  "name": "cc-status-dot-companion",
+  "displayName": "cc-status-dot Companion",
+  "description": "Detects Claude Code extension auto-updates and silently re-applies the cc-status-dot patch. Ships inside the vscode-claude-code-status-dot npm package — install via: npx vscode-claude-code-status-dot",
+  "version": "0.2.0",
+  "publisher": "wangdong",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {},
+  "scripts": {
+    "build": "tsc -p ./tsconfig.json",
+    "package:vsix": "vsce package --no-dependencies -o cc-status-dot-companion-$npm_package_version.vsix"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^3.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wangdong233/vscode-claude-code-status-dot.git",
+    "directory": "companion"
+  },
+  "homepage": "https://github.com/wangdong233/vscode-claude-code-status-dot#readme",
+  "bugs": {
+    "url": "https://github.com/wangdong233/vscode-claude-code-status-dot/issues"
+  },
+  "author": "wangdong"
+}

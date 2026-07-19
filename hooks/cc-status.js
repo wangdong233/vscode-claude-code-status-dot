@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.1.14:d9957d1e*/
+/*cc-status-dot-hook:v0.1.14:e1e30da0*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -275,13 +275,28 @@ function deriveStatus(payload, cur) {
     // revisions had it after StopFailure (functional no-op since cases are
     // independent with no fall-through, but it defeated the documented sync
     // contract). The SET of cases is unchanged; only the position moved.
+    //
+    // preserveError mirror (data-logic round-2 audit fix): when the session
+    // is ALREADY interrupted (StopFailure previously wrote
+    // {state:'interrupted', error:'tool_blocked', ...}), a Notification
+    // arriving on the SAME session must NOT silently drop the error enum —
+    // this case preserves cur.state and cur.since verbatim, so it must also
+    // preserve cur.error for symmetric parity with SubagentStop's
+    // preserveError guard above. Without this, writeJsonAtomic would
+    // atomically overwrite the file with {state:'interrupted', since:T0,
+    // pending:true} (no error), and the reader's notify() (patch.ts:
+    // `err=j.error||""`) would surface generic "interrupted" wording instead
+    // of the specific failure reason. STATES.md §4b's "diagnostic value
+    // preserved" contract depends on this symmetry.
     case 'Notification': {
       const curState =
         cur && (cur.state === 'running' || cur.state === 'done' || cur.state === 'interrupted') ? cur.state : 'running';
       const curSince = cur && typeof cur.since === 'number' && cur.since > 0 ? cur.since : now;
+      const preserveError = curState === 'interrupted' && typeof cur.error === 'string' && cur.error;
       return {
         state: curState,
         since: curSince,
+        ...(preserveError ? { error: cur.error } : {}),
         activeSubagents: a,
         pending: true,
       };

@@ -87,6 +87,7 @@ npx vscode-claude-code-status-dot
 4. 注入定时器（设 tab 图标 + done/interrupted 通知）；
 5. 把 **9 个 hook 事件**写入 `~/.claude/settings.json`（带 `# cc-status-dot-managed` 标记，幂等）；
 6. 复制运行时副本（4 个 SVG = idle + running + done + error，加 hook 脚本）到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`）。
+7. **v0.2.0 新增**：检测 PATH 上的 `code` CLI（含 `code-insiders` / `cursor` / `codium`），把 **companion .vsix**（`cc-status-dot-companion`）`code --install-extension` 进每个检测到的 VS Code 系编辑器；同时把 `patch.js` 拷贝到 `INSTALL_DIR/patch.js`，让 companion 在 CC 自动更新覆盖 patch 后能自动重跑。
 
 > **或从源码（开发态）**：
 > ```bash
@@ -224,7 +225,7 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 ## ❓ FAQ
 
 **CC 更新后状态点不亮了？**
-CC 自动更新整体替换扩展目录，patched 文件被原版覆盖。重跑 `npx vscode-claude-code-status-dot`（SVG/hook 运行时副本在 `~/.claude/cc-status-dot/`，CC 更新不碰它；项目源删了也不影响）。
+CC 自动更新整体替换扩展目录，patched 文件被原版覆盖。**v0.2.0 起**：companion 扩展会在 VS Code 启动时检测 `cc-status-dot-injected` marker，若 CC 更新冲掉了 patch 自动重跑 `node ~/.claude/cc-status-dot/patch.js` 并提示一次 `Reload Window`——多数情况你什么都不用做。companion 没装上或想手动修：重跑 `npx vscode-claude-code-status-dot`（SVG/hook 运行时副本在 `~/.claude/cc-status-dot/`，CC 更新不碰它；项目源删了也不影响）。
 
 **刚装完图标没变？**
 先 `Developer: Reload Window`。还不行跑 `npx vscode-claude-code-status-dot --status`：`patched: no` 重跑；`baked RES ... (STALE)` 重跑原地改写；`hooks wired: no` 重跑；`missing SVGs` 重跑补齐。
@@ -247,7 +248,7 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 ## ⚠️ 已知限制
 
 - **手动 Esc 中断无 hook**：CC 不触发 Stop/StopFailure（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)），状态会停在 running，靠下次 prompt/Stop 自然更正。
-- **CC 自动更新覆盖**：patched `extension.js` 被原版覆盖 → 静默失效，重跑命令恢复。
+- **CC 自动更新覆盖**：patched `extension.js` 被原版覆盖 → **v0.2.0 起 companion 扩展自动重跑 patcher + 提示 reload**（见 FAQ）；companion 没装则手动重跑命令恢复。
 - **minified anchor 脆性**：patch 依赖 CC 代码里两段精确字符串，版本漂移时 patcher 报 "Anchor mismatch" 拒绝写入；写 extension.js 前还会对完整 2.6MB 文件跑 `node --check`（assertCompiles 守卫，坏 IIFE 拒绝写入），原子写（`.tmp` + rename），`INJECT_VERSION` 自动重注入——**绝不砖 CC**。
 - **VSCode 完全关闭时不通知**：IIFE 跑在扩展宿主进程，VSCode 关闭则不运行 → 不通知。
 - **系统通知点击不跳 tab**：osascript 无 click callback，通知仅提醒，回 VSCode 靠 tab 绿/红点定位。

@@ -1,0 +1,16 @@
+.vscode/**
+.vscode-test/**
+src/**
+node_modules/**
+.gitignore
+.eslintrc*
+.travis.yml
+.github/**
+**/*.map
+**/*.ts
+extension.ts
+tsconfig.json
+package-lock.json
+yarn.lock
+npm-shrinkwrap.json
+.npmrc

@@ -24,6 +24,16 @@ Thumbs.db
 dist/
 build/
 
+# Companion VS Code extension artifacts (built at release time via
+# `npm run companion:package`; the .vsix is shipped via npm `files` but is
+# NOT committed — regenerate from source).
+companion/dist/
+companion/node_modules/
+companion/*.vsix
+
 # DevTeam plugin artifacts (must never be committed)
 .devteam/
 *.db
+
+# npm pack artifacts
+*.tgz

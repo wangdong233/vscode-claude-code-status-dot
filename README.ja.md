@@ -88,6 +88,7 @@ npx vscode-claude-code-status-dot
 4. タイマーを注入（タブアイコン設定 + done/interrupted 通知）；
 5. **9 つの hook イベント**を `~/.claude/settings.json` に書き込み（`# cc-status-dot-managed` マーク付き、冪等）；
 6. ランタイムコピー（4 個の SVG = idle + running + done + error、+ hook スクリプト）を `~/.claude/cc-status-dot/`（`INSTALL_DIR`）にコピー。
+7. **v0.2.0 新機能**: PATH 上の VSCode 系 CLI（`code` / `code-insiders` / `cursor` / `codium`）を検出し、それぞれに **companion .vsix**（`cc-status-dot-companion`）を `code --install-extension` でインストール。同時に `patch.js` を `INSTALL_DIR/patch.js` にコピーし、companion が CC 自動更新後にサイレントに再パッチできるようにする。
 
 > **またはソースから（開発用）**:
 > ```bash
@@ -229,7 +230,7 @@ VSCode の `settings.json` に書く（設定しなければデフォルト値�
 ## ❓ FAQ
 
 **CC 更新後に状態ドットが点かない?**
-CC の自動更新が拡張ディレクトリを全体置換し、patched ファイルがオリジナルで上書きされる。`npx vscode-claude-code-status-dot` を再実行（SVG/hook のランタイムコピーは `~/.claude/cc-status-dot/` にあり、CC 更新は触れない；プロジェクトのソースを削除しても影響しない）。
+CC の自動更新が拡張ディレクトリを全体置換し、patched ファイルがオリジナルで上書きされる。**v0.2.0 以降**: companion 拡張が VSCode 起動時に `cc-status-dot-injected` マーカを検出し、CC がパッチを上書きした場合は自動で `node ~/.claude/cc-status-dot/patch.js` を再実行し、1 クリックの `Reload Window` を提案——多くの場合、ユーザーは何もしなくてよい。companion が未インストール（または手動修復したい）場合は `npx vscode-claude-code-status-dot` を再実行（SVG/hook のランタイムコピーは `~/.claude/cc-status-dot/` にあり、CC 更新は触れない；プロジェクトのソースを削除しても影響しない）。
 
 **インストール直後にアイコンが変わらない?**
 まず `Developer: Reload Window`。それでもダメなら `npx vscode-claude-code-status-dot --status` を実行: `patched: no` は再実行；`baked RES ... (STALE)` は再実行でその場で書き換え；`hooks wired: no` は再実行；`missing SVGs` は再実行で補完。
@@ -252,7 +253,7 @@ vscode-claude-code-status-dot        # インストール後そのままコマ�
 ## ⚠️ 既知の制限
 
 - **手動 Esc 中断には hook がない**: CC は Stop/StopFailure をトリガーしない（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)）、状態は running で止まり、次回 prompt/Stop で自然修正される。
-- **CC 自動更新で上書き**: patched `extension.js` がオリジナルで上書き → サイレント無効化、コマンド再実行で復元。
+- **CC 自動更新で上書き**: patched `extension.js` がオリジナルで上書き → **v0.2.0 以降、companion 拡張が自動で patcher を再実行 + reload を提案**（FAQ 参照）；companion がない場合は手動でコマンドを再実行して復元。
 - **minified anchor の脆さ**: patch は CC コードの2箇所の正確な文字列に依存。バージョンずれが生じると patcher は "Anchor mismatch" を報告して書き込みを拒否（拡張は破壊されない）。
 - **VSCode 完全終了時は通知しない**: IIFE は拡張ホストプロセスで動く、VSCode 終了時には動かない → 通知しない。
 - **システム通知のクリックでタブに飛ばない**: osascript に click callback がなく、通知はリマインドのみ。VSCode に戻ってから tab の緑 / 赤ドットで位置を特定。

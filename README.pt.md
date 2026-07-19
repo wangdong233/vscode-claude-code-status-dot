@@ -87,6 +87,7 @@ Esse comando faz automaticamente:
 4. Injeta um temporizador (define o ícone da tab + notificações done/interrupted);
 5. Escreve os **9 eventos de hook** em `~/.claude/settings.json` (marcados com `# cc-status-dot-managed`, idempotentes);
 6. Copia a cópia de runtime (4 SVGs = idle + running + done + error, mais o script de hook) para `~/.claude/cc-status-dot/` (`INSTALL_DIR`).
+7. **Novo na v0.2.0**: detecta cada CLI da família VSCode no PATH (`code`, `code-insiders`, `cursor`, `codium`) e instala o **.vsix companion** (`cc-status-dot-companion`) em cada um via `code --install-extension`; também copia `patch.js` para `INSTALL_DIR/patch.js` para que o companion possa repatchear silenciosamente após uma atualização automática do CC.
 
 > **Ou a partir do código-fonte (modo dev)**:
 > ```bash
@@ -215,7 +216,7 @@ Escreva no `settings.json` do VSCode (se não configurar, usa os valores padrão
 ## ❓ FAQ
 
 **Depois de atualizar o CC o ponto de estado não acende?**
-A atualização automática do CC substitui o diretório da extensão inteiro e o arquivo patcheado é sobrescrito pela versão original. Rode `npx vscode-claude-code-status-dot` de novo (a cópia de runtime dos SVGs/hooks em `~/.claude/cc-status-dot/` não é tocada pela atualização do CC; o código-fonte do projeto também pode ser apagado sem impacto).
+A atualização automática do CC substitui o diretório da extensão inteiro e o arquivo patcheado é sobrescrito pela versão original. **Desde v0.2.0**: a extensão companion checa o marcador `cc-status-dot-injected` na inicialização do VSCode e, se o CC sobrescreveu o patch, re-roda automaticamente `node ~/.claude/cc-status-dot/patch.js` e sugere um `Reload Window` num clique — na maioria das vezes você não precisa fazer nada. Se o companion não estiver instalado (ou você prefere reparar manualmente): rode `npx vscode-claude-code-status-dot` de novo (a cópia de runtime dos SVGs/hooks em `~/.claude/cc-status-dot/` não é tocada pela atualização do CC; o código-fonte do projeto também pode ser apagado sem impacto).
 
 **Acabou de instalar e o ícone não mudou?**
 Primeiro `Developer: Reload Window`. Se ainda não funcionar rode `npx vscode-claude-code-status-dot --status`: se `patched: no`, rode de novo; se `baked RES ... (STALE)`, rode de novo para reescrever no local; se `hooks wired: no`, rode de novo; se `missing SVGs`, rode de novo para completar.
@@ -238,7 +239,7 @@ vscode-claude-code-status-dot        # depois de instalar, rode o comando direto
 ## ⚠️ Limitações conhecidas
 
 - **Interrupção manual via Esc não tem hook**: o CC não dispara Stop/StopFailure ([#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)); o estado fica em running e se corrige no próximo prompt/Stop.
-- **Atualização automática do CC sobrescreve**: o `extension.js` patcheado é sobrescrito pela versão original → falha silenciosa; rode o comando de novo para restaurar.
+- **Atualização automática do CC sobrescreve**: o `extension.js` patcheado é sobrescrito pela versão original → **desde v0.2.0 a extensão companion re-roda o patcher automaticamente + sugere um reload** (ver FAQ); sem o companion, rode o comando manualmente para restaurar.
 - **Fragilidade da âncora minificada**: o patch depende de duas strings precisas no código do CC; em caso de divergência de versão o patcher devolve "Anchor mismatch" e se recusa a escrever (a extensão não é corrompida).
 - **Sem notificação quando o VSCode está totalmente fechado**: o IIFE roda no processo host da extensão; se o VSCode está fechado ele não executa → sem notificação.
 - **Clique na notificação do sistema não salta para a tab**: o osascript não tem callback de clique; a notificação é apenas um lembrete; para voltar ao VSCode use o ponto verde/vermelho da tab como referência.

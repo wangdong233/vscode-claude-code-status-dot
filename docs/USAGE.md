@@ -29,7 +29,7 @@ npx tsx patch.ts
 3. 校验 `extension.js` 中两段 anchor 字符串的命中数（Anchor A 必须唯一命中，Anchor B 命中 0 或 1 次）。命中失败则**不写任何文件**并报错。
 4. 备份 `extension.js` → `extension.js.bak`（仅首次）。
 5. 注入 IIFE（含 `setInterval` 500ms 重绘：running 静态黄 + done/interrupted 通知逻辑），把 `INSTALL_DIR/resources` 的绝对路径 bake 进注入块。
-6. 把 **8 个 hook 事件**写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记，命令指向 `INSTALL_DIR/hooks/cc-status.js`），首次备份为 `settings.json.cc-status-dot.bak`。
+6. 把 **9 个 hook 事件**写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记，命令指向 `INSTALL_DIR/hooks/cc-status.js`），首次备份为 `settings.json.cc-status-dot.bak`。
 7. 校验 `INSTALL_DIR/resources` 下 4 个 SVG 齐全（idle + running + done + error）。
 
 > **升级**：旧版（git clone 装的）用户直接重跑 `npx vscode-claude-code-status-dot` 即可——patcher 会检测到旧的 baked 路径过期并**原地改写** IIFE 的 `RES` 与 hook 命令，无需 `--revert` 后重装。

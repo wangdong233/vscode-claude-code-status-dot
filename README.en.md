@@ -19,13 +19,13 @@
 
 ## ✨ Features
 
-- 🔧 **One-line install** — `npx vscode-claude-code-status-dot` auto-patches the CC extension, wires 8 hooks, and copies runtime files; idempotent, re-runnable
+- 🔧 **One-line install** — `npx vscode-claude-code-status-dot` auto-patches the CC extension, wires 9 hooks, and copies runtime files; idempotent, re-runnable
 - 🛡️ **Persistent — survives source deletion** — runtime copies land in `~/.claude/cc-status-dot/`; deleting the project / purging the npx cache / a CC auto-update won't break the patched extension
 - 🎨 **All four states** — more complete than CC's native (only blue/orange dots): idle / running / done / interrupted fully visualized
 - 🔔 **Completion/interruption notifications** — on macOS a native system notification drops down from the top-right corner (with sound, buttonless, auto-dismisses); on Windows/Linux it falls back to a VSCode toast — fires whether VSCode is in the foreground or background by default, no need to keep watching
 - ⚙️ **Stays running while workflow runs** — no false-green when background subagents/crons are in flight; `Stop` is the authoritative arbiter
 - 📂 **Open Editors sync** — the CC tab in the top-left "Open Editors" view also carries the status dot
-- 📊 **Bottom SBI 4 colored blocks (digit inside block)** — the status bar's left side (`StatusBarAlignment.Left` + 4 blocks at priority `-9996..-9999`, near the visible center) renders 4 **colored blocks each with the count digit inside** side-by-side (v0.1.15 replaces v0.1.14's "emoji ball + digit separate" single-SBI format): 🟢done (green block) / 🟡running (yellow block) / 🔵pending (blue block) / 🔴interrupted (red block). Each block capped 0/1/2/3/N (>=4 shows N); count>0 → block lit (`statusBarItem.*Background` themed color + white digit inside), count=0 → block dim (transparent bg + gray "0", block still visible). 🔵 = awaiting user input (permission/question/elicit, fed by the Notification hook case). Done older than 5 min counts as idle (not green). v0.1.15 uses **4 independent runtime StatusBarItem instances + 4 built-in theme colors** (no CC package.json patch, the IIFE mutates each block's text/color/backgroundColor directly every 500ms) — colors follow the VSCode theme, stable cross-platform (no more emoji-font dependency).
+- 📊 **Bottom SBI 4 emoji balls (ball+digit, position-fixed)** — the status bar's left side (`StatusBarAlignment.Left` + 4 slots at priority `-9996..-9999`, near the visible center) renders 4 **emoji balls with a digit beside each** side-by-side (v0.1.16 restores the v0.1.14 emoji-ball style, keeping the v0.1.15 4-SBI independent structure for position stability): 🟢done / 🟡running / 🔵pending / 🔴interrupted. Each slot's text is `<ball><digit>` (the ball carries its own color — **the v0.1.15 themed background block + white text is REMOVED**); counts cap at 0/1/2/3/N (>=4 shows N); count>0 → ball lit (🟢/🟡/🔵/🔴 pre-colored + digit right beside it), count=0 → gray ball ⚪ + "0" (placeholder matches non-zero width, **position never shifts** — this is the core advantage of 4 SBI over v0.1.14 single SBI: v0.1.14's `🟢N 🟡N 🔵N 🔴N` join lurched the whole row left/right as digit widths changed; 4 SBI gives each light its own fixed `<ball><1-digit>` slot that never moves). 🔵 = awaiting user input (permission/question/elicit, fed by the Notification hook case). Done older than 5 min counts as idle (not green). v0.1.16 uses **4 independent runtime StatusBarItem instances + emoji balls** (no CC package.json patch, no ThemeColor block, the IIFE mutates each slot's text directly every 500ms) — the emoji ball carries its own color so the render path is simpler than v0.1.15 (no backgroundColor, no color cache, no lit/dim flip).
 - ↩️ **Zero side effects, one-click restore** — `--revert` fully restores extension.js from `.bak`, surgically removes hooks, keeps your user data
 
 > ⚠️ **Honest disclaimer**: this project is a **patch, not a standalone extension** — VSCode does not allow a third-party extension to modify another extension's webview tab icon, so the only viable path is patching CC's own `extension.js`. Trade-off: a CC auto-update overwrites it, so you must re-run the command.
@@ -85,7 +85,7 @@ This single line automatically:
 2. Auto-cleans leftover files from old versions (if any);
 3. **Backs up** `extension.js` → `extension.js.bak` (first run only);
 4. Injects a timer (sets tab icon + done/interrupted notifications);
-5. Writes **8 hook events** into `~/.claude/settings.json` (tagged `# cc-status-dot-managed`, idempotent);
+5. Writes **9 hook events** into `~/.claude/settings.json` (tagged `# cc-status-dot-managed`, idempotent);
 6. Copies runtime files (4 SVGs = idle + running + done + error, plus the hook script) to `~/.claude/cc-status-dot/` (`INSTALL_DIR`).
 
 > **Or from source (dev)**:
@@ -236,6 +236,8 @@ vscode-claude-code-status-dot        # run the command directly after install
 - **Minified anchor fragility**: the patch depends on two exact strings in CC's code; on version drift the patcher reports "Anchor mismatch" and refuses to write (the extension is not damaged).
 - **No notification when VSCode is fully closed**: the IIFE runs in the extension host process; if VSCode is closed it doesn't run → no notification.
 - **System notification click doesn't jump to tab**: osascript has no click callback; the notification only reminds — locate the session via the tab green/red dot back in VSCode.
+- **SBI priority namespace not owned** (v0.1.16): the bottom 4 dots occupy the `StatusBarAlignment.Left` priority range `-9996..-9999` (4 adjacent units). The VSCode StatusBarItem API has no extension-level namespace/ownership — another extension declaring the same priority range could insert a separator between the 4 slots, visually splitting done/running/pending/interrupted. (This is the core architectural tradeoff of 4-SBI vs single-SBI: it cures "row lurch on digit-width change" but introduces a new failure mode "row split by an outsider", and the collision window is 4× wider. Rare in practice; documented honestly in STATES.md §7.5.)
+- **Emoji font-stack dependency** (v0.1.16): the bottom SBI dots are emoji glyphs (🟢🟡🔵🔴⚪) that depend on the system emoji font stack — macOS (Apple Color Emoji) / Windows 10+ (Segoe UI Emoji) / mainstream Linux (Noto Color Emoji) render them in color; Win7 / some headless Linux / emoji-font-less remote SSH environments may render them as monochrome glyphs or tofu boxes. The v0.1.15 `ThemeColor` path was cross-platform-stable; v0.1.16's return to emoji balls is a deliberate tradeoff (user aesthetic preference > cross-platform uniformity).
 
 ---
 

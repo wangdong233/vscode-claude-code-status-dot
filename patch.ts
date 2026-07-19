@@ -114,60 +114,18 @@ const PROJECT_ROOT: string = (() => {
  *  see patchExtension. */
 const INJECT_MARKER = "cc-status-dot-injected";
 
-/** Version stamped into the injected IIFE banner comment. Bump this whenever the IIFE
- *  *logic* changes (NOT just the baked RES path). On install, if the marker is present
- *  but the stamped version differs, patchExtension restores extension.js from .bak and
- *  re-injects the current IIFE — otherwise structural IIFE changes (e.g. v0.1.4 reverting
- *  to static running, or v0.1.3 removing the aggregate bar) would be silently swallowed
- *  because the bare marker still matches.
+/** Version stamped into the injected IIFE banner comment. Bump whenever the
+ *  IIFE *logic* changes (NOT just the baked RES path). On install, if the
+ *  marker is present but the stamped version differs from this const,
+ *  patchExtension restores extension.js from .bak and re-injects the current
+ *  IIFE — otherwise structural changes would be silently swallowed because
+ *  the bare marker still matches. The content-hash suffix (STAMP_HASH_LEN)
+ *  additionally catches intra-version drift.
  *
- *  v0.1.15 SBI digit-in-block pivot: the v0.1.14 single SBI rendered
- *  "🟢N 🟡N 🔵N 🔴N" (emoji ball + digit as separate tokens inside one
- *  StatusBarItem.text). User feedback: the ball+digit-separate read was
- *  unsatisfying. v0.1.15 splits into FOUR runtime StatusBarItem instances
- *  (one per light) so each light's digit renders INSIDE its own colored
- *  block — count>0 → themed backgroundColor block + "#ffffff" white digit
- *  text; count=0 → "0" text in statusBarItem.deactivatedForeground gray +
- *  transparent background (block visible but dim). 4 SBI-specific built-in
- *  ThemeColors are reused so NO package.json patch is needed (preserving
- *  the v0.1.14 "CC upgrade doesn't break" design):
- *    🟢 done        → statusBarItem.remoteBackground    (green, priority -9996)
- *    🟡 running     → statusBarItem.warningBackground   (yellow, -9997)
- *    🔵 pending     → statusBarItem.prominentBackground (saturated blue, -9998)
- *    🔴 interrupted → statusBarItem.errorBackground     (red, -9999)
- *  VSCode's StatusBarItem.backgroundColor field accepts ThemeColor only
- *  (NOT hex strings) — verified against mainThreadStatusBar.ts source — so
- *  these 4 built-in SBI theme colors are the only route to 4 distinct
- *  colored backgrounds. Priorities -9996..-9999 keep the 4 blocks at the
- *  rightmost end of StatusBarAlignment.Left (closest to visible center),
- *  in fixed left→right order done/running/pending/interrupted (higher
- *  priority = more to the left per vscode.d.ts). The aggregation GC rules
- *  (done>5min, running>30min, interrupted>24h, pending-with-idle-GC) are
- *  UNCHANGED — only the rendering surface changed. Per-tab 4-state dots,
- *  __ccsdPending yield, notify, panel-counter lifecycle all preserved.
- *  The singleton timer now mutates all 4 SBIs each tick; onDidDispose
- *  disposes all 4 on last-panel-out. SBI_LIGHTS (emoji array) /
- *  SBI_DIM_EMOJI / SBI_LEFT_PRIORITY are REMOVED — replaced by the
- *  SBI_LIGHTS_CFG table (key/bg/pri per light). SBI_CLICK_CMD is unchanged.
- *
- *  Earlier history:
- *  v0.1.14 SBI pivot (commandCenter → bottom StatusBarItem 4-light): the
- *  v0.1.13 commandCenter 4-light redesign (20 commands + 20 commandCenter
- *  menu items + 20 palette hides + IIFE-driven setContext + VSCode title-bar
- *  commandCenter visibility) was empirically unreliable — after a Reload
- *  Window / full VSCode restart the commandCenter 4 lights often failed to
- *  render at all. v0.1.14 kept the v0.1.13 DESIGN improvements (4-light
- *  with NEW 🔵 pending, 3-way stale-session GC for done/running/interrupted,
- *  pending counted INDEPENDENTLY of state) but moved the SURFACE back to a
- *  single StatusBarItem at the BOTTOM. The text was "🟢N 🟡N 🔵N 🔴N".
- *  package.json was NO LONGER patched by install.
- *  v0.1.13 commandCenter 4-light (now abandoned — see v0.1.14 note above).
- *  v0.1.11 SBI aggregation refactor (per-panel-tick aggregation lifted into window-
- *  scoped singleton timer; §4 done>5min→idle + §7.2 stale-running(>30min)→idle applied
- *  so SBI matches per-tab counts; __ccsdPanelCount last-panel-out teardown).
- *  v0.1.12 round-3 review fixes (SBI singleton createStatusBarItem + setInterval each
- *  in their own try/catch; §7.5→§7.2 attribution fix). */
-const INJECT_VERSION = "v0.1.15";
+ *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
+ *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
+ *  rule so the two narratives don't drift apart. */
+const INJECT_VERSION = "v0.1.16";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -186,8 +144,7 @@ const HOOK_MARKER = "cc-status-dot-managed";
 /** Version banner stamped at the top of hooks/cc-status.js
  *  (`cc-status-dot-hook:vX.Y.Z`). Mirrors the IIFE's INJECT_VERSION+hash gate
  *  so installRuntimeFiles can detect a stale on-disk hook copy the same way
- *  patchExtension detects a stale IIFE. Architecture-review round-2 finding:
- *  writer/reader drift detection was asymmetric — the reader side was hash-
+ *  patchExtension detects a stale IIFE. *  writer/reader drift detection was asymmetric — the reader side was hash-
  *  stamped and auto-reinjected, the writer side was copied verbatim with NO
  *  version check, so a user running an old hook against a new IIFE (e.g. the
  *  install copied the IIFE but the hook copy failed silently, or the user
@@ -198,7 +155,7 @@ const HOOK_VERSION = "v0.1.14";
 const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
 
 /** CC extension version against which the anchor strings (ANCHOR_A / ANCHOR_B)
- *  were last verified byte-exact. Architecture-review round-3 finding: the
+ *  were last verified byte-exact. the
  *  'verified byte-exact against CC X.Y.Z' comment lived inline at the anchor
  *  declarations but was NOT surfaced anywhere user-visible. CC updates that
  *  drift either anchor's bytes are still caught by countOccurrences==1 (the
@@ -213,9 +170,7 @@ const LAST_VERIFIED_CC = "2.1.204";
  *  banner (`cc-status-dot-hook:vX.Y.Z:HASH`). Mirrors STAMP_HASH_LEN — same
  *  sha1-over-body scheme as the IIFE hash, so a dev iteration on
  *  hooks/cc-status.js that doesn't bump HOOK_VERSION is still detectable by
- *  installRuntimeFiles + --status. Architecture-review round-3 finding:
- *  round-2 added a writer version banner + version-string check, but the
- *  reader side had content-hash and the writer side did NOT — asymmetric
+ *  installRuntimeFiles + --status. *  a prior round added a writer version banner + version-string check, but the *  reader side had content-hash and the writer side did NOT — asymmetric
  *  drift detection. A dev who edited hooks/cc-status.js and forgot to bump
  *  the banner would have the patcher silently overwrite an installed hook
  *  whose body differed, no warn. The hash closes that gap: install compares
@@ -301,27 +256,8 @@ const HOOK_EVENTS = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// SBI 4-light definitions (v0.1.15: 4 StatusBarItem instances, digit-in-block)
+// SBI 4-light definitions (visual rationale: see docs/STATES.md §7 + CHANGELOG.md)
 // ---------------------------------------------------------------------------
-// The bottom status bar shows 4 lights in fixed left→right order: 🟢done
-// 🟡running 🔵pending 🔴interrupted. v0.1.15 renders each light as its OWN
-// runtime StatusBarItem so the count digit sits INSIDE a colored block (the
-// v0.1.14 single-SBI "emoji ball + digit separate" read was the user-rejected
-// prior art). VSCode's StatusBarItem.backgroundColor field accepts ThemeColor
-// ONLY (not hex strings — verified against mainThreadStatusBar.ts $setEntry:
-// `backgroundColor: ThemeColor | undefined`), so we reuse 4 built-in SBI
-// theme colors. No package.json contribution is needed — createStatusBarItem
-// + .backgroundColor = new ThemeColor(id) renders any registered SBI theme
-// color (statusbarItem.ts applyColor resolves whatever the active color theme
-// provides). Priorities -9996..-9999 put the 4 blocks at the rightmost end
-// of StatusBarAlignment.Left (closest to visible center); within that, higher
-// priority = more to the left (vscode.d.ts StatusBarItem.priority doc), so
-// done(-9996) is leftmost, interrupted(-9999) rightmost. count=0 → "0" text
-// in statusBarItem.deactivatedForeground gray + transparent background (dim
-// but visible); count>0 → digit-or-"N" white text + themed bg block (lit).
-// The single click-command `ccStatusDot.sbiClick` is set on all 4 SBIs and
-// registered via runtime `vs.commands.registerCommand` (no contribution
-// needed); handler reads globalThis.__ccsdSbis[0].tooltip.
 
 /** Marker stamped into CC's package.json by the abandoned v0.1.13 commandCenter
  *  patch. Kept only so install can DETECT stale v0.1.13 residue (and --revert
@@ -329,39 +265,35 @@ const HOOK_EVENTS = [
 const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
 
 /** The 4 lights, in fixed left→right display order. Each entry pins the
- *  light's background ThemeColor id (a VSCode built-in statusBarItem.*
- *  color, stable across themes) and its StatusBarItem.priority (higher =
- *  more to the left; -9996..-9999 keeps the 4 blocks bunched at the
- *  rightmost end of the Left alignment). This table is the SINGLE source
- *  of truth consumed by buildIIFE (baked into the IIFE's `var CFG=[...]`
- *  via JSON.stringify) and mirrored in test-iife.mjs. Renaming a bg id or
- *  reordering lights here changes both the IIFE bytes and the test
- *  assertions in lockstep.
+ *  light's "on" emoji ball and its StatusBarItem.priority. This table is the
+ *  SINGLE source of truth consumed by buildIIFE (baked into the IIFE's
+ *  `var CFG=[...]` via JSON.stringify) and mirrored in test-iife.mjs.
+ *  Renaming an emoji codepoint or reordering lights here changes both the
+ *  IIFE bytes and the test assertions in lockstep.
  *
- *  Why these 4 theme colors:
- *   - statusBarItem.remoteBackground — the SSH/WSL remote-indicator button
- *     color; green in every built-in theme. We borrow the COLOR not the
- *     semantic (users who re-theme the remote button get their "done"
- *     block re-themed too, which is a feature: theme consistency).
- *   - statusBarItem.warningBackground — yellow/orange; added in VSCode 1.66
- *     specifically for SBI warning-state backgrounds.
- *   - statusBarItem.prominentBackground — the saturated "prominent" SBI
- *     background; blue in most themes (purple in a few dark themes — still
- *     distinguishable from green/yellow/red). If a user reports the pending
- *     block reads purple in their theme, swap to editor.selectionBackground
- *     or activityBarBadge.background (both more stably blue).
- *   - statusBarItem.errorBackground — red; standard SBI error background.
+ *  Emoji escapes: patch.ts SOURCE stays ASCII-only (`\u{XXXX}`); the baked
+ *  IIFE bytes do NOT — JSON.stringify embeds literal emoji chars (astral
+ *  surrogate pairs + BMP ⚪). VSCode loads extension.js as UTF-8 and recovers
+ *  the emoji at parse time. Do NOT "fix" JSON.stringify to emit escapes:
+ *  changing the IIFE bytes would shift the content hash and force
+ *  unnecessary re-injects.
  *
- *  The public StatusBarItemKind enum (normal/warning/error/prominent) only
- *  has 4 values and gives only 3 non-default colors, so it cannot produce 4
- *  distinct backgrounds — that's why we use the lower-level backgroundColor
- *  = new ThemeColor(id) path instead of the `kind` API. */
-const SBI_LIGHTS_CFG: ReadonlyArray<{ key: string; bg: string; pri: number }> = [
-    { key: "done", bg: "statusBarItem.remoteBackground", pri: -9996 }, // 🟢 leftmost
-    { key: "running", bg: "statusBarItem.warningBackground", pri: -9997 }, // 🟡
-    { key: "pending", bg: "statusBarItem.prominentBackground", pri: -9998 }, // 🔵
-    { key: "interrupted", bg: "statusBarItem.errorBackground", pri: -9999 }, // 🔴 rightmost
+ *  Visual-design rationale (why emoji balls vs ThemeColor blocks, why these
+ *  4 codepoints, why these priorities): see docs/STATES.md §7. */
+const SBI_LIGHTS_CFG: ReadonlyArray<{ key: string; em: string; pri: number }> = [
+    { key: "done", em: "\u{1F7E2}", pri: -9996 }, // 🟢 leftmost
+    { key: "running", em: "\u{1F7E1}", pri: -9997 }, // 🟡
+    { key: "pending", em: "\u{1F535}", pri: -9998 }, // 🔵
+    { key: "interrupted", em: "\u{1F534}", pri: -9999 }, // 🔴 rightmost
 ];
+
+/** Dim/zero emoji — used in place of any light's colored ball when its count
+ *  is 0. Paired with digit "0" so the slot width at zero matches the non-zero
+ *  width exactly (ball + 1 digit) — the position-stability guarantee (the
+ *  4-SBI row never shifts when counts change). Baked into the IIFE as
+ *  `var DIM_EM=<JSON.stringify(SBI_DIM_EM)>`. Visual rationale + baking
+ *  discipline: see SBI_LIGHTS_CFG above + docs/STATES.md §7. */
+const SBI_DIM_EM = "\u{26AA}"; // ⚪
 
 /** The SBI click-command id. Registered at runtime via
  *  vs.commands.registerCommand (no package.json contribution needed for
@@ -482,6 +414,428 @@ function parseJsonc(text: string, sourceLabel: string): Record<string, unknown> 
                 `Fix it manually, then re-run. No files were changed.`,
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Surgical JSONC editor // ---------------------------------------------------------------------------
+// The pre-fix wireHooks/unwireHooks used a parse-mutate-stringify round-trip
+// that DROPPED user // and /* */ comments and reformatted the entire file.
+// Users who keep notes / section headers in settings.json lost them on every
+// install + every re-wire triggered by a hook-command change. These helpers
+// locate the byte range of ONE top-level key's value and let us splice just
+// that range, leaving the rest of the file byte-for-byte identical.
+//
+// Limitations (acceptable for our use case):
+//   - Only finds keys at the TOP LEVEL of the root object (settings.json's
+//     "hooks" key lives at top level, so this is fine).
+//   - The REPLACED value loses any comments that were INSIDE it (e.g. inside
+//     the hooks object). Comments ELSEWHERE in the file are preserved
+//     verbatim. The user almost never comments inside "hooks"; the common
+//     case (top-level // notes, section headers) is fully preserved.
+//   - Single-quoted strings (tolerated by stripJsonc) at top level are also
+//     tolerated by the scanner.
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan one JSON value starting at offset `start` in `raw`. Returns the offset
+ * JUST PAST the value's last character (so raw.slice(start, end) is the value
+ * including its delimiters). Handles objects, arrays, strings, numbers, true,
+ * false, null, and skips // and /* *​/ comments inside composite values.
+ */
+function scanJsonValueEnd(raw: string, start: number): number {
+    let i = start;
+    // Skip leading whitespace + comments.
+    while (i < raw.length) {
+        const c = raw[i];
+        const next = raw[i + 1];
+        if (/\s/.test(c)) {
+            i += 1;
+            continue;
+        }
+        if (c === "/" && next === "/") {
+            while (i < raw.length && raw[i] !== "\n") i += 1;
+            continue;
+        }
+        if (c === "/" && next === "*") {
+            i += 2;
+            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
+            i += 2;
+            continue;
+        }
+        break;
+    }
+    const valueStart = i;
+    if (valueStart >= raw.length) return valueStart;
+    const opener = raw[valueStart];
+    // Composite value: { ... } or [ ... ] — walk depth, skip strings + comments.
+    if (opener === "{" || opener === "[") {
+        let depth = 0;
+        let inString = false;
+        let quote = "";
+        while (i < raw.length) {
+            const c = raw[i];
+            const next = raw[i + 1];
+            if (inString) {
+                if (c === "\\") {
+                    i += 2;
+                    continue;
+                }
+                if (c === quote) inString = false;
+                i += 1;
+                continue;
+            }
+            if (c === "/" && next === "/") {
+                while (i < raw.length && raw[i] !== "\n") i += 1;
+                continue;
+            }
+            if (c === "/" && next === "*") {
+                i += 2;
+                while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
+                i += 2;
+                continue;
+            }
+            if (c === '"' || c === "'") {
+                inString = true;
+                quote = c;
+                i += 1;
+                continue;
+            }
+            if (c === "{" || c === "[") depth += 1;
+            else if (c === "}" || c === "]") {
+                depth -= 1;
+                if (depth === 0) {
+                    i += 1;
+                    break;
+                }
+            }
+            i += 1;
+        }
+        return i;
+    }
+    // String value.
+    if (opener === '"' || opener === "'") {
+        const quote = opener;
+        i += 1;
+        while (i < raw.length) {
+            if (raw[i] === "\\") {
+                i += 2;
+                continue;
+            }
+            if (raw[i] === quote) {
+                i += 1;
+                break;
+            }
+            i += 1;
+        }
+        return i;
+    }
+    // Primitive (number / true / false / null) — walk until a top-level
+    // separator or newline ends the token.
+    while (i < raw.length && !/[,\]\}]/.test(raw[i])) i += 1;
+    return i;
+}
+
+/**
+ * Find the byte range of a top-level key's value in a JSONC object literal.
+ * Returns `{ keyStart, keyEnd, colon, valueStart, valueEnd }` describing the
+ * key token, the colon after it, and the value byte range — or `null` if the
+ * key is absent or the root is not an object literal.
+ *
+ * `valueStart` is the offset of the first non-whitespace, non-comment char of
+ * the value; `valueEnd` is just past the value's last char (so
+ * `raw.slice(valueStart, valueEnd)` is the value text including delimiters).
+ */
+interface KeyRange {
+    keyStart: number;
+    keyEnd: number;
+    colon: number;
+    valueStart: number;
+    valueEnd: number;
+}
+function findTopLevelKey(raw: string, key: string): KeyRange | null {
+    let i = 0;
+    let inString = false;
+    let quote = "";
+    let depth = 0;
+    // Find the opening brace of the root object.
+    while (i < raw.length) {
+        const c = raw[i];
+        const next = raw[i + 1];
+        if (inString) {
+            if (c === "\\") {
+                i += 2;
+                continue;
+            }
+            if (c === quote) inString = false;
+            i += 1;
+            continue;
+        }
+        if (c === "/" && next === "/") {
+            while (i < raw.length && raw[i] !== "\n") i += 1;
+            continue;
+        }
+        if (c === "/" && next === "*") {
+            i += 2;
+            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
+            i += 2;
+            continue;
+        }
+        if (c === '"' || c === "'") {
+            inString = true;
+            quote = c;
+            i += 1;
+            continue;
+        }
+        if (c === "{") {
+            depth = 1;
+            i += 1;
+            break;
+        }
+        // Skip leading whitespace / BOM / etc before the root brace.
+        i += 1;
+    }
+    if (depth !== 1) return null; // no root object
+    // Walk the top-level object's members.
+    while (i < raw.length) {
+        const c = raw[i];
+        const next = raw[i + 1];
+        if (inString) {
+            if (c === "\\") {
+                i += 2;
+                continue;
+            }
+            if (c === quote) inString = false;
+            i += 1;
+            continue;
+        }
+        if (c === "/" && next === "/") {
+            while (i < raw.length && raw[i] !== "\n") i += 1;
+            continue;
+        }
+        if (c === "/" && next === "*") {
+            i += 2;
+            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
+            i += 2;
+            continue;
+        }
+        if (/\s/.test(c)) {
+            i += 1;
+            continue;
+        }
+        if (c === "}") {
+            // End of root object.
+            return null;
+        }
+        if (c === '"' || c === "'") {
+            // Member key.
+            const keyStart = i;
+            quote = c;
+            inString = true;
+            i += 1;
+            let keyValue = "";
+            while (i < raw.length) {
+                if (raw[i] === "\\") {
+                    keyValue += raw[i] + (raw[i + 1] ?? "");
+                    i += 2;
+                    continue;
+                }
+                if (raw[i] === quote) {
+                    inString = false;
+                    i += 1;
+                    break;
+                }
+                keyValue += raw[i];
+                i += 1;
+            }
+            const keyEnd = i;
+            // Find the colon.
+            while (i < raw.length && /\s/.test(raw[i])) i += 1;
+            // Allow comments between key and colon (uncommon but valid JSONC).
+            while (i < raw.length) {
+                if (raw[i] === "/" && raw[i + 1] === "/") {
+                    while (i < raw.length && raw[i] !== "\n") i += 1;
+                    continue;
+                }
+                if (raw[i] === "/" && raw[i + 1] === "*") {
+                    i += 2;
+                    while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
+                    i += 2;
+                    continue;
+                }
+                break;
+            }
+            // Also allow whitespace after comments.
+            while (i < raw.length && /\s/.test(raw[i])) i += 1;
+            if (raw[i] !== ":") {
+                // Malformed — bail.
+                return null;
+            }
+            const colon = i;
+            i += 1;
+            const valueEnd = scanJsonValueEnd(raw, i);
+            // scanJsonValueEnd returns offset past leading whitespace+comments
+            // too — recompute valueStart as the first non-ws/non-comment char.
+            // Simpler: walk forward from i skipping ws + comments.
+            let vStart = i;
+            while (vStart < raw.length) {
+                const vc = raw[vStart];
+                const vn = raw[vStart + 1];
+                if (/\s/.test(vc)) {
+                    vStart += 1;
+                    continue;
+                }
+                if (vc === "/" && vn === "/") {
+                    while (vStart < raw.length && raw[vStart] !== "\n") vStart += 1;
+                    continue;
+                }
+                if (vc === "/" && vn === "*") {
+                    vStart += 2;
+                    while (vStart < raw.length && !(raw[vStart] === "*" && raw[vStart + 1] === "/")) vStart += 1;
+                    vStart += 2;
+                    continue;
+                }
+                break;
+            }
+            if (keyValue === key) {
+                return { keyStart, keyEnd, colon, valueStart: vStart, valueEnd };
+            }
+            i = valueEnd;
+            // Skip the trailing comma if present (and any comments / ws around it).
+            while (i < raw.length) {
+                const cc = raw[i];
+                const cn = raw[i + 1];
+                if (/\s/.test(cc)) {
+                    i += 1;
+                    continue;
+                }
+                if (cc === "/" && cn === "/") {
+                    while (i < raw.length && raw[i] !== "\n") i += 1;
+                    continue;
+                }
+                if (cc === "/" && cn === "*") {
+                    i += 2;
+                    while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
+                    i += 2;
+                    continue;
+                }
+                if (cc === ",") i += 1;
+                break;
+            }
+            continue;
+        }
+        // Unexpected token at top level — bail.
+        i += 1;
+    }
+    return null;
+}
+
+/**
+ * Splice a top-level key's value in a JSONC object literal, preserving the
+ * rest of the file byte-for-byte. If the key is absent, inserts a new
+ * `"key": <valueJson>` member after the opening brace (with 2-space indent
+ * matching the conventional settings.json style). Returns the new raw text.
+ *
+ * For our use case (settings.json "hooks" key), the value is always a JSON
+ * object we computed ourselves, so it contains no comments to preserve. The
+ * surrounding file (other top-level keys + their comments) is untouched.
+ */
+function surgicalSetTopLevelKey(raw: string, key: string, valueJson: string): string {
+    const range = findTopLevelKey(raw, key);
+    if (range) {
+        // Replace just the value byte range.
+        return raw.slice(0, range.valueStart) + valueJson + raw.slice(range.valueEnd);
+    }
+    // Key absent — insert after the opening brace of the root object.
+    // Find the opening brace (skipping leading comments / whitespace / BOM).
+    let braceIdx = -1;
+    let i = 0;
+    let inString = false;
+    let quote = "";
+    while (i < raw.length) {
+        const c = raw[i];
+        const next = raw[i + 1];
+        if (inString) {
+            if (c === "\\") {
+                i += 2;
+                continue;
+            }
+            if (c === quote) inString = false;
+            i += 1;
+            continue;
+        }
+        if (c === "/" && next === "/") {
+            while (i < raw.length && raw[i] !== "\n") i += 1;
+            continue;
+        }
+        if (c === "/" && next === "*") {
+            i += 2;
+            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
+            i += 2;
+            continue;
+        }
+        if (c === "{") {
+            braceIdx = i;
+            break;
+        }
+        if (c === "[") {
+            // Root is an array, not an object — can't safely splice. Fall back
+            // to letting the caller handle (return raw unchanged).
+            return raw;
+        }
+        i += 1;
+    }
+    if (braceIdx < 0) return raw; // no root object — give up, caller will fall back
+    // Heuristic indentation: 2 spaces (matches the JSON.stringify(obj, null, 2)
+    // style the prior code wrote). If the existing file uses a different indent,
+    // the inserted block still parses correctly (JSON is whitespace-agnostic).
+    const member = `\n  ${JSON.stringify(key)}: ${valueJson},`;
+    // Insert immediately AFTER the opening brace. If there's already content on
+    // the same line, the leading \n moves our entry to its own line.
+    return raw.slice(0, braceIdx + 1) + member + raw.slice(braceIdx + 1);
+}
+
+/**
+ * Remove a top-level key (and its trailing comma) from a JSONC object literal,
+ * preserving the rest of the file byte-for-byte. Returns the new raw text, or
+ * the original text if the key is absent. Handles the trailing-comma-after-
+ * last-member edge case so the result is still valid JSONC.
+ */
+function surgicalRemoveTopLevelKey(raw: string, key: string): string {
+    const range = findTopLevelKey(raw, key);
+    if (!range) return raw;
+    // We need to remove the key token + colon + value + trailing comma (if any).
+    // Start from keyStart; end at valueEnd, then consume any trailing comma.
+    let end = range.valueEnd;
+    // Skip whitespace + comments after the value.
+    while (end < raw.length) {
+        const c = raw[end];
+        const next = raw[end + 1];
+        if (/\s/.test(c)) {
+            end += 1;
+            continue;
+        }
+        if (c === "/" && next === "/") {
+            while (end < raw.length && raw[end] !== "\n") end += 1;
+            continue;
+        }
+        if (c === "/" && next === "*") {
+            end += 2;
+            while (end < raw.length && !(raw[end] === "*" && raw[end + 1] === "/")) end += 1;
+            end += 2;
+            continue;
+        }
+        break;
+    }
+    if (raw[end] === ",") end += 1;
+    // Also trim trailing whitespace on the value's line so we don't leave a
+    // dangling blank line. Walk start backward to include the key's leading
+    // newline (if present) so we don't leave a blank line above either.
+    let start = range.keyStart;
+    // Walk backward over whitespace but stop at a newline boundary so we eat
+    // the indentation + the preceding newline (cleaner result).
+    while (start > 0 && /[ \t]/.test(raw[start - 1])) start -= 1;
+    if (start > 0 && raw[start - 1] === "\n") start -= 1;
+    return raw.slice(0, start) + raw.slice(end);
 }
 
 // ---------------------------------------------------------------------------
@@ -654,130 +1008,24 @@ function assertCompiles(code: string, label: string): void {
 // ---------------------------------------------------------------------------
 // Build the injected IIFE. Single line, version-robust, no minified refs.
 //   t = the `ts` panel instance (has panelTab, context.extensionPath).
-//   Reads ~/.claude/cc-tab-status/<sid>.json -> {state, since, error?}
-//   State machine + notification mirror docs/STATES.md §1/§4/§4b/§7 — keep in sync.
-//     running     -> steady claude-logo-running.svg (static yellow #CCA700).
-//                    v0.1.3 tried an 8-frame breathing animation, but iconPath
-//                    frame-switching is inherently discrete and read as flicker,
-//                    so v0.1.4 reverted to a single static dot (same shape as
-//                    idle/done/error). The 500 ms timer still ticks but running
-//                    reassigns the same path each tick (cheap no-op).
-//     interrupted -> flash claude-logo-error.svg <-> CC's claude-logo.svg (off-frame)
-//                    at ~500 ms on/off (flashSeq%2) — alerts stay intentionally fast.
-//     done        -> steady claude-logo-done.svg; if since older than 5 min -> idle
-//     idle        -> steady claude-logo-idle.svg
-//     missing/unknown -> return (don't fight CC's own pending/done icon)
-//     permission pending -> return (don't fight CC's native blue dot). The
-//                    rename_tab handler stashes `this.__ccsdPending` from
-//                    `e.request.hasPendingPermissions` (the same flag CC uses to
-//                    paint its blue dot) on every fire; the tick yields when it
-//                    is set, so CC's pending icon shows through. Fixes the bug
-//                    where a PreToolUse heartbeat leaves state=running on disk
-//                    during a permission prompt and the reader overrides CC's
-//                    blue dot with the yellow running dot.
-//   On a NEW terminal `since` (done/interrupted): notify once.
-//   Config: ccStatusDot.{notify,notifyWhenFocused,notifySound}.
-//   notifyWhenFocused defaults to true (foreground still notifies — "window
-//   focused" ≠ "watching the CC tab"). Dedup is keyed on the terminal `since`
-//   timestamp (refreshed by Stop/StopFailure; SubagentStop on an already-terminal
-//   state with next=0 preserves cur.since to avoid spurious re-notify — see
-//   cc-status.js SubagentStop), seeded on the first poll so a reload into a
-//   stale done does not fire. This catches fast turns that finish between two
-//   500 ms polls (the old prevSt transition check missed them).
-//   macOS notify path: osascript system notification, with a callback that
-//   falls back to vs.window.show{Information,Warning}Message if osascript
-//   itself fails (permission denied / binary missing / escape bug) — so the
-//   "completion/interruption notification" feature stays observable even on
-//   the failure path. Non-macOS always uses VSCode messages.
-//   Timer lifecycle: setInterval is captured into `timer` and cleared via
-//   t.panelTab.onDidDispose so closing the CC panel releases the 500 ms tick
-//   (otherwise the interval + its closed-over `t`/`panelTab` refs leak for
-//   the lifetime of the VSCode window).
+//   Reads ~/.claude/cc-tab-status/<sid>.json -> {state, since, error?, pending?}
+//   References ZERO minified identifiers — only `require("fs"|"path"|"vscode"|"os")`,
+//   `this`, and `Date`. The only version-sensitive surface is the two anchor
+//   strings (ANCHOR_A / ANCHOR_B).
 //
-//   SBI 4-light (v0.1.15; see docs/STATES.md §7):
-//     v0.1.14 rendered "🟢N 🟡N 🔵N 🔴N" inside a single StatusBarItem.text
-//     (emoji ball + digit as separate tokens). v0.1.15 splits into FOUR
-//     runtime StatusBarItem instances so each light's digit renders INSIDE
-//     its own colored block (white digit on themed background). The v0.1.13
-//     commandCenter surface and the v0.1.14 single-SBI emoji format are both
-//     gone; ALL design improvements are preserved (4 lights incl. NEW 🔵
-//     pending; 3-way stale-session GC for done/running/interrupted; pending
-//     counted INDEPENDENTLY of state).
-//   Surface — 4 StatusBarItem instances (v0.1.15):
-//     globalThis.__ccsdSbis is a window-scoped ARRAY of 4 createStatusBarItem
-//     instances (one per light), each with its own backgroundColor
-//     (ThemeColor), color (white/gray), and text (the digit). Priorities
-//     -9996..-9999 keep them bunched at the rightmost end of
-//     StatusBarAlignment.Left. All 4 are mutated in place every 500ms by the
-//     __ccsdSbiTimer singleton. NO package.json patch (the v0.1.13
-//     commandCenter contribs are GONE; v0.1.15 reuses built-in SBI theme
-//     colors so no contributes.colors either). Click feedback via a single
-//     runtime-registered command `ccStatusDot.sbiClick` wired to all 4 SBIs
-//     — shows an InformationMessage with the current breakdown.
-//   Per-block render (built each tick, v0.1.15):
-//     count 0 → text "0" + color statusBarItem.deactivatedForeground (gray)
-//               + backgroundColor undefined (transparent — dim but visible).
-//     count 1/2/3 → text digit + color "#ffffff" (white) + backgroundColor
-//                   CFG[k].bg (the light's themed block color: green/yellow/
-//                   blue/red).
-//     count >=4 → text "N" (cap() clamps 4+ to 4) + white + themed bg.
-//     Tooltip (same on all 4 SBIs) carries the uncapped breakdown
-//     ("X done, Y running, Z pending, W interrupted").
-//   Aggregation rules (SAME as v0.1.13/v0.1.14 — preserved across pivot):
-//     Window-scoped singleton timer globalThis.__ccsdSbiTimer (500ms) reads
-//     every <sid>.json, applies the SAME §4 reader rules as per-tab rendering
-//     (done>5min→idle so idle sessions are NOT counted as green; running stale
-//     >30min→idle to GC crashed sessions; interrupted >24h→idle to bound 🔴
-//     growth from abandoned crashes), counts running/done/interrupted (idle is
-//     NOT a light — it just means "not counted"), ALSO counts pending
-//     (j.pending===true, independent of state — the 🔵 light, NEW v0.1.13).
-//   🔵 pending (NEW v0.1.13, preserved):
-//     The CC Notification hook (permission/question/elicit prompt) makes the
-//     writer mark pending:true on the session file (every non-Notification
-//     event clears it). The reader counts pending INDEPENDENTLY of state — a
-//     session can be both running AND pending (typical: running turn paused on
-//     a permission prompt). Per-tab rendering is UNCHANGED (the __ccsdPending
-//     yield still lets CC's native blue dot show through).
-//   SBI singleton scope:
-//     globalThis.__ccsdSbis (4-element array) + __ccsdSbiTimer are window-
-//     scoped — first CC panel creates them, every later panel reuses them, so
-//     a P-panel window ticks aggregation ONCE per 500ms (not P times).
-//     Project-scoped __ccsd* prefix keeps CC's __cc* namespace clean (see the
-//     `cc-status-bar-injected` tombstone in restoreWebview()).
-//   SBI panel-counter lifecycle:
-//     Each IIFE entry bumps globalThis.__ccsdPanelCount; onDidDispose
-//     decrements and, when the count hits zero (last CC panel in the window
-//     closed), clears the singleton timer AND disposes ALL 4 SBIs so they go
-//     away — the bottom bar can't freeze on a stale count when no panel
-//     survives to refresh it. Opening a fresh CC panel re-creates both; the
-//     first tick re-pushes the real counts.
-//   SBI isolation:
-//     The SBI creation (4-item loop), the singleton timer creation, AND the
-//     aggregation body each live in their OWN try/catch (carried over from
-//     v0.1.12/v0.1.13/v0.1.14) — a readdir/stat/parse/text-mutate failure
-//     can never brick the per-panel tick (which has its own setInterval) nor
-//     vice-versa, and a creation or timer-creation throw cannot propagate up
-//     through the comma-operator chain into CC's update_session_state handler.
-//   Naming:
-//     ALL project-injected fields — BOTH globalThis singletons
-//     (__ccsdSbis / __ccsdSbiTimer / __ccsdPanelCount / __ccsdSbiCmdRegistered)
-//     AND per-panel-instance fields stashed on the same `this`/`t` object CC's
-//     minified code operates on (__ccsdDotStarted / __ccsdSid / __ccsdTitle /
-//     __ccsdPending) — use the project-scoped __ccsd* prefix (mirrors
-//     INJECT_MARKER / HOOK_MARKER), NOT the bare __cc* prefix. The rationale
-//     is the same for both surfaces and applies by *reason*, not by literal
-//     scope: `__cc*` is CC's own namespace (see the `cc-status-bar-injected`
-//     tombstone in restoreWebview()) and a future CC release could occupy the
-//     same key on EITHER globalThis OR the panel instance, silently disabling
-//     our guard / overwriting our stash. The earlier v0.1.x field names
-//     __ccDotStarted / __ccSid / __ccTitle / __ccPending were renamed to the
-//     __ccsd* form in the v0.1.14 pivot for this consistency.
-//     Config baking (v0.1.15): the SBI_LIGHTS_CFG table (key/bg/pri per light)
-//     is the SINGLE source of truth in patch.ts source, baked into the IIFE
-//     as a JSON-stringified array literal `var CFG=[...]` via JSON.stringify
-//     in buildIIFE — never as raw escapes in the IIFE source. The IIFE
-//     comments reference theme-color ids (e.g. "🔴 growth"), not executable
-//     color values.
+//   Architecture + design rationale:
+//     - Per-tab state machine (running/done/interrupted/idle SVG mapping,
+//       done>5min→idle fallback, __ccsdPending yield, notify dedup keyed on
+//       terminal `since`, macOS osascript + VSCode fallback): docs/STATES.md
+//       §1/§4/§4b + docs/DESIGN-injection.md §2/§4.2.
+//     - SBI 4-light aggregation (4 window-scoped StatusBarItem instances,
+//       emoji-ball render `<ball><digit>`, position-stable slots, §4 decay
+//       rules applied for counting, pending counted independently of state,
+//       singleton timer + panel-counter lifecycle, 3-layer try/catch
+//       isolation, __ccsd* prefix): docs/STATES.md §7 + docs/DESIGN-injection.md.
+//     - Version history (v0.1.11 aggregation refactor → v0.1.12 isolation →
+//       v0.1.13 commandCenter → v0.1.14 SBI pivot → v0.1.15 4-SBI split →
+//       v0.1.16 emoji-ball restoration): CHANGELOG.md.
 // ---------------------------------------------------------------------------
 
 function buildIIFE(resDir: string): string {
@@ -785,11 +1033,21 @@ function buildIIFE(resDir: string): string {
     // (also handles the non-ASCII chars in the project path correctly).
     const resLiteral = JSON.stringify(resDir);
     // SBI 4-light config table baked into the IIFE as a JSON-stringified array
-    // literal (so no raw escapes in the IIFE source). SBI_LIGHTS_CFG is the
-    // SINGLE source of truth (patch.ts); the IIFE's per-tick loop iterates
-    // CFG[k] for {key,bg,pri}. Order matches aggregation output:
+    // literal. Patch.ts SOURCE is ASCII-only (emoji as `\u{XXXX}` escapes);
+    // the baked IIFE bytes are NOT — JSON.stringify embeds literal emoji
+    // chars (astral surrogate pairs + BMP ⚪), not `\uXXXX` escapes, so the
+    // on-disk IIFE contains literal UTF-8 emoji bytes. VSCode loads as UTF-8
+    // and recovers the emoji at parse time. SBI_LIGHTS_CFG is the SINGLE
+    // source of truth (patch.ts); the IIFE's per-tick loop iterates
+    // CFG[k] for {key,em,pri}. Order matches aggregation output:
     // done/running/pending/interrupted (left→right on the status bar).
     const cfgLiteral = JSON.stringify(SBI_LIGHTS_CFG);
+    // v0.1.16 dim/zero emoji (⚪ U+26AA) baked as a JSON-stringified string
+    // literal — used by the per-tick loop for any light whose count is 0
+    // (gray outline ball + digit "0", keeping the slot width fixed). Same
+    // baking discipline as cfgLiteral: patch.ts SOURCE is ASCII-only, the
+    // baked IIFE contains literal UTF-8 emoji bytes (see cfgLiteral above).
+    const dimEmLiteral = JSON.stringify(SBI_DIM_EM);
     // State machine + notification + SBI aggregation mirror docs/STATES.md §1/§4/§4b/§7. Keep in sync.
     //
     // The banner carries INJECT_VERSION + a content hash of the body (everything
@@ -801,44 +1059,32 @@ function buildIIFE(resDir: string): string {
         `(function(t){`,
         `if(t.__ccsdDotStarted||!t.panelTab)return;`,
         `t.__ccsdDotStarted=true;`,
-        `/*SBI panel counter: bumped per IIFE entry so the onDidDispose teardown at the tail of this IIFE can detect the last panel out and dispose the 4 singleton SBIs + clear their timer (v0.1.15: 4-SBI dispose loop; was single __ccsdSbi.dispose in v0.1.14; was Cc timer + 4 setContext resets in v0.1.13; was SBI hide in v0.1.11).*/`,
+        `/*SBI panel counter: bumped per IIFE entry; the onDidDispose teardown decrements and disposes the 4 singleton SBIs on last-panel-out.*/`,
         `globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||0)+1;`,
         `var fs=require("fs"),pth=require("path"),vs=require("vscode"),os=require("os");`,
         `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");`,
         `var RES=${resLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         `var DONE_TO_IDLE_MS=5*60*1000;`,
-        `/*Stale-running heuristic (§7.2; was named SBI_RUNNING_STALE_MS in v0.1.11-v0.1.12 — kept verbatim for grep continuity): a legit running session gets PreToolUse/PostToolUse heartbeats every tool call, so a state=running file whose mtime exceeds this window is almost certainly a crashed/killed CC process whose SessionEnd never fired — count it as idle, not running (so the SBI yellow light doesn't false-stick at 1).*/`,
+        `/*§7.2 stale-running heuristic: running files get tool heartbeats, so mtime>SBI_RUNNING_STALE_MS→idle (crashed session whose SessionEnd never fired).*/`,
         `var SBI_RUNNING_STALE_MS=30*60*1000;`,
-        /*v0.1.13 interrupted retention (architecture review fix, preserved in v0.1.14):
-         a crashed/killed CC session whose writer wrote state=interrupted NEVER
-         gets a SessionEnd (CC didn't shut down cleanly), so without a retention
-         heuristic the 🔴 red light would monotonically grow as users accumulate
-         abandoned interrupted sessions. We decay interrupted files older than
-         24h to idle so they stop counting toward 🔴 (the file is NOT deleted —
-         diagnostic value preserved; user can still inspect / manually clean).
-         24h keeps "today's interrupts" highly visible (the original §7.5
-         rationale: "中断态需保持可见以提醒用户") while bounding the long-tail
-         growth. The threshold is intentionally much larger than
-         SBI_RUNNING_STALE_MS (30min) because interrupted is a terminal state
-         the user may want to inspect long after the fact, whereas running is a
-         live heartbeat state whose staleness is unambiguous. We reuse the same
-         mtime stat the running branch below already needs (best-effort: on
-         stat failure we keep the interrupted file counted, never silently
-         drop it).*/
+        /*§7.5 interrupted retention: crashed/killed CC sessions whose writer wrote
+         state=interrupted never send SessionEnd, so without a retention heuristic
+         the 🔴 light would grow monotonically. Decay interrupted files older
+         than 24h to idle for COUNTING but keep the file on disk (diagnostic
+         value preserved — see docs/STATES.md §7.5). 24h >> SBI_RUNNING_STALE_MS
+         (30min) because interrupted is a terminal state the user may want to
+         inspect long after the fact.*/
         `var INTERRUPTED_RETENTION_MS=24*60*60*1000;`,
-        /*v0.1.15 SBI 4-light config table — baked from SBI_LIGHTS_CFG (patch.ts
-         single source of truth) via JSON.stringify so the IIFE source contains
-         no raw escapes. Each entry pins the light's background ThemeColor id
-         (a VSCode built-in statusBarItem.* color) and StatusBarItem.priority
-         (-9996..-9999 → rightmost Left items, done leftmost / interrupted
-         rightmost). The creation loop + per-tick update loop both index CFG[k]
-         — k=0 done / k=1 running / k=2 pending / k=3 interrupted, matching the
-         counts[] array built inside the aggregation tick. VSCode's SBI
-         backgroundColor field accepts ThemeColor only (NOT hex), so these 4
-         built-in SBI theme colors are the only route to 4 distinct colored
-         blocks without re-introducing a package.json patch.*/
+        // SBI 4-light config table — baked from SBI_LIGHTS_CFG via JSON.stringify.
+        // Each entry pins the light's "on" emoji ball + StatusBarItem.priority.
+        // See SBI_LIGHTS_CFG JSDoc above + docs/STATES.md §7. Indexes match
+        // counts[] below: k=0 done / k=1 running / k=2 pending / k=3 interrupted.
         `var CFG=${cfgLiteral};`,
+        // Dim/zero emoji (shared across all 4 lights). Paired with digit "0"
+        // the slot width stays `<ball><1-digit>` regardless of count (position
+        // stability). See SBI_DIM_EM JSDoc + docs/STATES.md §7.
+        `var DIM_EM=${dimEmLiteral};`,
         `var flashSeq=0,lastTermSince=null,seeded=false;/*flashSeq: interrupted on/off frame index (flashSeq%2)*/`,
         `function notify(st,err){`,
         `var c=vs.workspace.getConfiguration("ccStatusDot");`,
@@ -849,151 +1095,79 @@ function buildIIFE(resDir: string): string {
         `if(st==="done"){sev="info";msg="Claude Code: turn complete"}`,
         `else{sev="warn";var m={rate_limit:"rate limit reached",overloaded:"server overloaded"}[err]||err||"interrupted";msg="Claude Code: "+m}`,
         `if(t.__ccsdTitle)msg+=" ["+t.__ccsdTitle+"]";`,
-        `/*macOS: osascript system notification; on async OR sync failure fall through to VSCode message so the notification feature stays observable when osascript is denied / missing / mis-escaped. R3 review fix: escMsg escapes the message body; the same escape is now applied to the notifySound config value too — a sound name containing " or \\ would otherwise either break the AppleScript (caught silently → no sound plays, indistinguishable from "sound not found") or inject arbitrary AppleScript from the user's own settings.json. The two interpolations are now symmetric (both halves of the same command string defended the same way).*/`,
+        `/*macOS: osascript system notification; fall through to VSCode message on async/sync failure. Both escMsg and escSnd escape " and \\ so a malicious settings.json cannot break or inject AppleScript.*/`,
         `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var escSnd=(""+snd).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var sndStr=escSnd?(' sound name "'+escSnd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var vsMsg=function(){if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);};try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr],function(err){if(err)vsMsg()})}catch(e){vsMsg()}}`,
         `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);}`,
         `}`,
-        /*v0.1.15 SBI click command (carried over from v0.1.14; handler now reads
-         globalThis.__ccsdSbis[0].tooltip since the single __ccsdSbi became a
-         4-element array). ONE command registered via runtime
-         vs.commands.registerCommand — no package.json contribution needed for
-         registerCommand (it adds the command to VSCode's command registry at
-         runtime; package.json contribution is only needed for palette/menu/
-         keybinding wiring, none of which we use here). Idempotent across panels
-         via globalThis.__ccsdSbiCmdRegistered — registerCommand throws on
-         re-registration of the same ID within one host, so the whole block is
-         wrapped in try/catch too. The handler reads the FIRST SBI's CURRENT
-         tooltip (all 4 SBIs carry the same full breakdown, kept fresh every
-         500ms by __ccsdSbiTimer) and shows it as an InformationMessage —
-         clicking ANY of the 4 blocks echoes the current breakdown without
-         modal / tab-switch disruption. Each SBI.command field is set to this
-         command's ID in the 4-SBI creation block just below, so VSCode
-         executes it on click of any block.*/
+        // SBI click command — ONE runtime-registered command wired to all 4 SBIs.
+        // Idempotent across panels via __ccsdSbiCmdRegistered; registerCommand
+        // throws on re-registration so the whole block is wrapped in try/catch.
+        // Handler reads __ccsdSbis[0].tooltip (all 4 carry the same breakdown).
         `try{if(!globalThis.__ccsdSbiCmdRegistered){globalThis.__ccsdSbiCmdRegistered=true;try{vs.commands.registerCommand(${JSON.stringify(SBI_CLICK_CMD)},function(){try{if(globalThis.__ccsdSbis&&globalThis.__ccsdSbis[0])vs.window.showInformationMessage(globalThis.__ccsdSbis[0].tooltip||"cc-status-dot")}catch(e){}})}catch(e){}}}catch(e){}`,
-        /* v0.1.15 SBI 4-light digit-in-block creation (replaces v0.1.14's single
-         * SBI). FOUR window-scoped createStatusBarItem instances — one per
-         * light — each rendered as a colored block with the count digit
-         * INSIDE it (white text on themed background). count=0 → "0" text in
-         * statusBarItem.deactivatedForeground gray + transparent background
-         * (block visible but dim); count>0 → digit-or-"N" white + themed bg
-         * block (lit). The singleton is globalThis.__ccsdSbis (ARRAY of 4
-         * StatusBarItem instances); guard `!globalThis.__ccsdSbis` ensures
-         * only the first CC panel creates them. Project-scoped __ccsd* prefix
-         * keeps CC's __cc* namespace clean (see the `cc-status-bar-injected`
-         * tombstone in restoreWebview()).
-         *
-         * The aggregation applies §4 reader rules (done>5min→idle so IDLE
-         * sessions are NOT counted toward the green light — only ACTIVE done
-         * counts; running stale>30min→idle to GC crashed sessions; interrupted
-         * >24h→idle to bound 🔴 growth) so the SBI blocks agree with the
-         * per-tab dots on what "done"/"running"/"interrupted" mean. Pending is
-         * counted INDEPENDENTLY of state (a session can be both running AND
-         * pending — the typical case: a running turn paused on a permission
-         * prompt).
-         *
-         * THREE independent try/catch wrappers (carried over from v0.1.12/
-         * v0.1.13/v0.1.14 round-3 fix):
-         *   (1) SBI CREATION (the 4-item createStatusBarItem loop +
-         *       registerCommand wiring) is wrapped individually — a throw
-         *       here is swallowed and the IIFE continues to the per-tab tick.
-         *       Round-4 hardening (v0.1.15): the loop body is now per-iteration
-         *       try/catch + commit-atomic. The guard is a LENGTH check
-         *       (`!__ccsdSbis || __ccsdSbis.length !== CFG.length`) — a prior
-         *       partial-failure run that left a length<4 truthy array is
-         *       detected, the residual items are disposed, and the array is
-         *       rebuilt from scratch. The 4 createStatusBarItem results are
-         *       accumulated in a LOCAL `arr`; only when `arr.length===CFG.length`
-         *       (all 4 succeeded) is the array committed to globalThis — a
-         *       partial run leaves globalThis unset so the next panel retries.
-         *       This closes the "permanently stuck at N<4 lights" silent
-         *       degradation that v0.1.14's single-SBI path could not have.
-         *       Round-5 leak fix (v0.1.15): the prior round-4 comment claimed
-         *       "a partial run leaves globalThis unset so the next panel
-         *       retries" — but said nothing about the N<4 SBIs that were
-         *       already `.show()`n inside the loop before the iteration that
-         *       threw. Those SBIs are visible on the status bar yet unreachable
-         *       (never assigned to globalThis), so neither the per-tick update
-         *       loop nor the last-panel-out teardown can dispose them — every
-         *       retry would stack another partial set of orphan blocks. The
-         *       commit-atomic `if` now has an `else` that walks `arr` and
-         *       disposes each already-shown SBI before discarding it, so a
-         *       partial failure leaves ZERO visible residue (the next panel
-         *       retries from a clean slate).
-         *   (2) The singleton TIMER SETUP is wrapped individually — a throw
-         *       inside setInterval registration (disposed host, transient
-         *       VSCode API failure) is swallowed and the IIFE continues to the
-         *       per-tab tick + onDidDispose registration. Without this, a
-         *       throw would propagate up through the comma-operator chain into
-         *       CC's `update_session_state` handler (bricking session-state
-         *       tracking), skip the per-tab setInterval, AND skip onDidDispose
-         *       registration (so the panel counter bumped at IIFE entry would
-         *       never decrement — a permanent leak).
-         *   (3) The aggregation BODY inside the setInterval callback has its
-         *       own try/catch so a readdir/stat/parse/text-mutate failure can
-         *       never brick the per-panel tick (which has its own setInterval).
-         */
-        `try{if(!globalThis.__ccsdSbis||globalThis.__ccsdSbis.length!==CFG.length){if(globalThis.__ccsdSbis){for(var j=0;j<globalThis.__ccsdSbis.length;j++){try{globalThis.__ccsdSbis[j].dispose()}catch(e){}};globalThis.__ccsdSbis=null;}var arr=[];var litBgs=[];var dimClr=new vs.ThemeColor("statusBarItem.deactivatedForeground");for(var k=0;k<CFG.length;k++){try{var sbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,CFG[k].pri);sbi.name="CC "+CFG[k].key;sbi.text="0";sbi.tooltip="Claude Code: 0 done, 0 running, 0 pending, 0 interrupted";try{sbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};sbi.color=dimClr;sbi.show();litBgs.push(new vs.ThemeColor(CFG[k].bg));arr.push(sbi)}catch(e){}};if(arr.length===CFG.length){globalThis.__ccsdSbis=arr;globalThis.__ccsdSbiLitBgs=litBgs;globalThis.__ccsdSbiDimClr=dimClr;globalThis.__ccsdSbiLastKey=null;}else{for(var f=0;f<arr.length;f++){try{arr[f].dispose()}catch(e){}};}}}catch(e){}`,
+        // SBI 4-light creation (length-guarded, commit-atomic, per-iteration
+        // try/catch). The guard detects a partial-failure prior run
+        // (length<4 truthy array) and rebuilds from scratch; the local `arr`
+        // is committed to globalThis only when all 4 createStatusBarItem
+        // calls succeed, else the shown-but-uncommitted SBIs are disposed.
+        // Wrapped in try/catch (isolation layer 1 of 3 — see docs/STATES.md §7.5).
+        `try{if(!globalThis.__ccsdSbis||globalThis.__ccsdSbis.length!==CFG.length){if(globalThis.__ccsdSbis){for(var j=0;j<globalThis.__ccsdSbis.length;j++){try{globalThis.__ccsdSbis[j].dispose()}catch(e){}};globalThis.__ccsdSbis=null;}var arr=[];for(var k=0;k<CFG.length;k++){try{var sbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,CFG[k].pri);sbi.name="CC "+CFG[k].key;sbi.text=DIM_EM+"0";sbi.tooltip="Claude Code: 0 done, 0 running, 0 pending, 0 interrupted";try{sbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};sbi.show();arr.push(sbi)}catch(e){}};if(arr.length===CFG.length){globalThis.__ccsdSbis=arr;globalThis.__ccsdSbiLastKey=null;}else{for(var f=0;f<arr.length;f++){try{arr[f].dispose()}catch(e){}};}}}catch(e){}`,
         `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
         `try{`,
         `var ag={running:0,done:0,interrupted:0,idle:0,pending:0};`,
         `try{`,
         `var files=fs.readdirSync(DIR);`,
+        // mtime+size cache short-circuit: the writer uses atomic tmp+rename, so
+        // (mtimeMs,size) is a reliable content-change signal. Stat first, only
+        // readFileSync+JSON.parse if mtime/size differ from the cached entry.
+        // Bounds per-tick sync I/O when STATE_DIR has many files; same-process
+        // multi-window shares globalThis so the scan is computed ONCE. Cache
+        // entries for deleted files are pruned below (bounded by unique names
+        // ever seen). Self-heals within TICK_MS if a cross-process write lands
+        // between our statSync and readFileSync.
+        `var __cc=globalThis.__ccsdAgCache;if(!__cc){__cc=globalThis.__ccsdAgCache=Object.create(null);}var __stale=Object.create(null);`,
         `for(var i=0;i<files.length;i++){`,
         `if(!files[i].endsWith(".json"))continue;`,
         `try{`,
-        `var fp=pth.join(DIR,files[i]);`,
-        `var j=JSON.parse(fs.readFileSync(fp,"utf8"));`,
+        `var fp=pth.join(DIR,files[i]);__stale[files[i]]=true;`,
+        `var __mt=0,__sz=0;try{var __s=fs.statSync(fp);__mt=__s.mtimeMs;__sz=__s.size;}catch(e3){}`,
+        `var __e=__cc[files[i]];`,
+        `var j=(__e&&__e.mt===__mt&&__e.sz===__sz)?__e.j:JSON.parse(fs.readFileSync(fp,"utf8"));`,
+        `if(!__e||__e.mt!==__mt||__e.sz!==__sz){__cc[files[i]]={j:j,mt:__mt,sz:__sz};}`,
         `var st=j.state;var since=j.since;`,
-        `/*§4 reader rule: done>5min→idle — IDLE sessions don't count toward the green light (only active done does)*/`,
+        `/*§4 reader rule: done>5min→idle — IDLE sessions don't count toward the green light.*/`,
         `if(st==="done"&&since&&(Date.now()-since)>DONE_TO_IDLE_MS){st="idle";}`,
-        `/*§7.2 stale-running heuristic: mtime>SBI_RUNNING_STALE_MS→idle (running files get tool heartbeats, so old mtime=crashed session)*/`,
+        `/*§7.2 stale-running: mtime>SBI_RUNNING_STALE_MS→idle (running files get tool heartbeats; old mtime=crashed session).*/`,
         `else if(st==="running"){var mt=0;try{mt=fs.statSync(fp).mtimeMs}catch(e2){}if(mt&&(Date.now()-mt)>SBI_RUNNING_STALE_MS){st="idle";}}`,
-        `/*v0.1.13/v0.1.14 interrupted retention: mtime>INTERRUPTED_RETENTION_MS(24h)→idle — bounds 🔴 growth from accumulated abandoned interrupted sessions (crashed/killed CC never sends SessionEnd). File is NOT deleted (diagnostic value preserved).*/`,
+        `/*§7.5 interrupted retention: mtime>INTERRUPTED_RETENTION_MS(24h)→idle — bounds 🔴 growth from abandoned crashes. File is NOT deleted (diagnostic value preserved).*/`,
         `else if(st==="interrupted"){var mt=0;try{mt=fs.statSync(fp).mtimeMs}catch(e2){}if(mt&&(Date.now()-mt)>INTERRUPTED_RETENTION_MS){st="idle";}}`,
         `if(st==="running")ag.running++;`,
         `else if(st==="done")ag.done++;`,
         `else if(st==="interrupted")ag.interrupted++;`,
-        `/*R3 review fix (M8/M9): catch-all idle bucket. The prior 'else if(st==="idle")ag.idle++;' chain silently dropped any file whose state field was neither of the four known values — a hand-edited / corrupt / forward-incompatible file with state="foo" or state=undefined matched NONE of the branches, so its counts vanished from ALL state totals while its pending===true STILL counted toward 🔵 (because undefined!=="idle" is true). That incoherence ("too corrupt to bucket by state yet trusted for pending") is now closed two ways: (1) any unknown state is treated as idle (matches the aggregation's unknown→idle posture already used on stat failure) AND its st is REASSIGNED to "idle" so the pending check below sees the normalized value; (2) the pending check below then sees st==="idle" and skips pending too — consistent treatment of the same corrupt file across both axes. Round-4 (v0.1.15) closes the half-fix where the prior else arm only ran ag.idle++ without reassigning st — that left st at the original unknown value (e.g. 'foo'/undefined), so the pending check still evaluated unknown!=="idle" as true and over-counted 🔵. The writer never produces such files (every deriveStatus return has a known state), so this is pure defensive hardening.*/`,
+        `/*catch-all idle bucket: any unknown/corrupt state is normalized to idle so the pending check below treats it consistently (a corrupt file cannot be "not yellow" yet "still blue").*/`,
         `else{st="idle";ag.idle++;}`,
-        `/*v0.1.13/v0.1.14: pending counted INDEPENDENTLY of state — a session can be both running AND pending (running turn paused on a permission prompt). The writer marks pending:true on Notification and clears it on user/turn-driven events (UserPromptSubmit / Pre/PostToolUse / Stop / StopFailure); SubagentStart / SubagentStop PRESERVE cur.pending (background events carry no signal about the parent's open prompt). GC: skip pending for sessions downgraded to "idle" above (crashed running with pending:true, stale done with pending:true, or interrupted>24h with pending:true) — otherwise a session killed mid-permission-prompt would false-stick the 🔵 light forever (SessionEnd never fires on crash). This mirrors the §7.2 / interrupted-retention treatment: the SAME 'st' value computed above (with all three decay rules applied) gates both the state buckets AND the pending bucket, so a single stale session cannot be "not yellow" yet "still blue".*/`,
+        `/*pending is counted INDEPENDENTLY of state (a session can be running AND pending). Skip when st was downgraded to idle above so a stale crashed-mid-prompt session does not false-stick 🔵 forever.*/`,
         `if(j.pending===true&&st!=="idle")ag.pending++;`,
         `}catch(e){}`,
         `}`,
+        // Prune orphaned cache entries (files unlinked by writer GC since the
+        // last tick). O(N) JS-object iteration; bounded by unique names seen.
+        `try{var __ks=Object.keys(__cc);for(var k=0;k<__ks.length;k++){if(!__stale[__ks[k]]){delete __cc[__ks[k]];}}}catch(e){}`,
         `}catch(e){}`,
-        `/*cap each light's count at 4 so the "N" variant displays for >=4. Clamps via inline ternary — no helper fn to keep IIFE flat.*/`,
+        `/*cap each light's count at 4 so the "N" variant displays for >=4.*/`,
         `var cap=function(n){return n>=4?4:n;};`,
         `var cd=cap(ag.done),cr=cap(ag.running),cp=cap(ag.pending),ci=cap(ag.interrupted);`,
-        /*v0.1.15 digit-in-block render: each of the 4 SBIs shows just the
-         count digit INSIDE its own colored block. counts[] indexes match
-         CFG[] (done/running/pending/interrupted). Per-SBI update rules:
-           n===0 → text "0" + deactivatedForeground gray + transparent bg
-                   (block visible but dim; user always sees the 4 categories)
-           n>0   → text (n>=4?"N":""+n) + "#ffffff" white + themed bg block
-                   (lit colored block with white digit inside)
-         The dim/lit flip is the v0.1.15 equivalent of v0.1.14's disp()/DIM
-         emoji swap — same semantic (0=dim, non-0=lit), new visual primitive
-         (transparent+gray vs themed-block+white). No disp()/EM/DIM needed
-         anymore. cap() still clamps 4+ to 4 so the "N" variant kicks in.*/
+        // counts[] indexes match CFG[]: done/running/pending/interrupted.
+        // Per-SBI render: (n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n). NO
+        // backgroundColor / color field — the emoji ball carries its own color.
+        // See docs/STATES.md §7 for the full render rule.
         `var counts=[cd,cr,cp,ci];`,
-        `/*tooltip carries the UNcapped breakdown so the user can see actual counts even when the lights cap at N. All 4 SBIs carry the same tooltip (hovering any block shows the full breakdown).*/`,
+        `/*tooltip carries the UNcapped breakdown so the user sees actual counts even when lights cap at N.*/`,
         `var tip="Claude Code: "+ag.done+" done, "+ag.running+" running, "+ag.pending+" pending, "+ag.interrupted+" interrupted";`,
-        /*v0.1.15 round-4 hardening: per-tick SBI update loop now (a) wraps each
-         SBI mutate in its OWN try/catch (was a single outer try/catch over the
-         whole for-loop — one disposed SBI throwing froze ALL later blocks for
-         that tick AND every subsequent tick); (b) reuses cached ThemeColor
-         instances built once at creation time (globalThis.__ccsdSbiLitBgs +
-         __ccsdSbiDimClr) instead of allocating `new vs.ThemeColor(...)` per
-         block per tick — ThemeColor is an immutable id wrapper so cross-tick
-         reuse is safe, and this cuts ~8 allocations/tick to 0 in steady state;
-         (c) short-circuits via a lastKey memo (globalThis.__ccsdSbiLastKey)
-         keyed on the UNcapped aggregation tuple — long-running sessions where
-         the capped counts don't change for hours skip the mutate loop entirely
-         (~40 IPC writes/s → 0 in steady state). The key uses uncapped values
-         so an ag.done 4→5 (both cap to "N") still refreshes the tooltip's "4 done"
-         → "5 done" breakdown. Per-iteration try/catch aligns with the dispose
-         loop's existing isolation pattern (round-3 already had try/catch IN
-         the dispose loop — only create/update were the asymmetric outliers).*/
-        `try{if(globalThis.__ccsdSbis&&globalThis.__ccsdSbiLitBgs){var key=ag.done+","+ag.running+","+ag.pending+","+ag.interrupted;if(key!==globalThis.__ccsdSbiLastKey){globalThis.__ccsdSbiLastKey=key;for(var k=0;k<globalThis.__ccsdSbis.length;k++){try{var sbi=globalThis.__ccsdSbis[k];var n=counts[k];sbi.text=n===0?"0":(n>=4?"N":""+n);sbi.tooltip=tip;if(n>0){sbi.backgroundColor=globalThis.__ccsdSbiLitBgs[k];sbi.color="#ffffff"}else{sbi.backgroundColor=undefined;sbi.color=globalThis.__ccsdSbiDimClr};sbi.show()}catch(e){}}}}}catch(e){}`,
+        // Per-tick SBI update loop: per-iteration try/catch (one disposed SBI
+        // throwing must not freeze later slots), lastKey memo short-circuit on
+        // the uncapped tuple (steady-state skips the mutate loop entirely). The
+        // key uses uncapped values so ag.done 4→5 still refreshes the tooltip.
+        `try{if(globalThis.__ccsdSbis){var key=ag.done+","+ag.running+","+ag.pending+","+ag.interrupted;if(key!==globalThis.__ccsdSbiLastKey){globalThis.__ccsdSbiLastKey=key;for(var k=0;k<globalThis.__ccsdSbis.length;k++){try{var sbi=globalThis.__ccsdSbis[k];var n=counts[k];sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n);sbi.tooltip=tip;sbi.show()}catch(e){}}}}}catch(e){}`,
         `}catch(e){}`,
         `},${TICK_MS});}}catch(e){}`,
         `var timer=setInterval(function(){`,
@@ -1014,8 +1188,8 @@ function buildIIFE(resDir: string): string {
         `flashSeq++;`,
         `try{p.iconPath=vs.Uri.file(svg)}catch(e){}`,
         `},${TICK_MS});`,
-        `/*release this panel's 500ms tick + closed-over refs when the panel closes; also decrement the SBI panel counter, and on the LAST panel out (count→0) clear the singleton SBI timer AND dispose ALL 4 SBIs so they go away — the bottom bar can't freeze on a stale count with no surviving panel to refresh it (v0.1.15: 4-SBI dispose loop; was single __ccsdSbi.dispose in v0.1.14; was Cc timer + 4 setContext resets in v0.1.13; was SBI hide in v0.1.11).*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbis){for(var k=0;k<globalThis.__ccsdSbis.length;k++){try{globalThis.__ccsdSbis[k].dispose()}catch(e){}};globalThis.__ccsdSbis=null;globalThis.__ccsdSbiLitBgs=null;globalThis.__ccsdSbiDimClr=null;globalThis.__ccsdSbiLastKey=null;}}})}catch(e){}`,
+        `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose all 4 SBIs so the bottom bar can't freeze on a stale count.*/`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbis){for(var k=0;k<globalThis.__ccsdSbis.length;k++){try{globalThis.__ccsdSbis[k].dispose()}catch(e){}};globalThis.__ccsdSbis=null;globalThis.__ccsdSbiLastKey=null;}}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -1066,27 +1240,26 @@ function currentIifeHash(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Writer-hook content hash (architecture-review round-3 fix; mirrors the IIFE
-// hash scheme above). The writer hook (hooks/cc-status.js) carries a banner
+// Writer-hook content hash . The writer hook (hooks/cc-status.js) carries a banner
 // `/*cc-status-dot-hook:vX.Y.Z:HASH*/` on its first line; the hash is sha1 of
 // everything AFTER that banner line. installRuntimeFiles + reportStatus use
 // these helpers to detect BOTH inter-version drift (banner version differs
 // from HOOK_VERSION) AND intra-version drift (banner hash differs from the
 // current body hash — a dev edited the hook but forgot to bump the banner).
 // Symmetric to the IIFE gate so writer/reader drift detection is no longer
-// the half-rounded thing round-2 left.
+// the half-rounded thing an earlier round left.
 // ---------------------------------------------------------------------------
 
 /** Parse `vX.Y.Z` out of a `cc-status-dot-hook:vX.Y.Z[:HASH]` banner line.
  *  Returns null if the line has no recognizable banner (e.g. hand-edited or
- *  pre-v0.1.14 hook). Tolerates a missing hash segment (pre-round-3 banner). */
+ *  pre-v0.1.14 hook). Tolerates a missing hash segment (pre-hash-scheme banner). */
 function parseHookBannerVersion(bannerLine: string): string | null {
     const m = bannerLine.match(/cc-status-dot-hook:v(\d+\.\d+\.\d+)/);
     return m ? "v" + m[1] : null;
 }
 
 /** Parse the `:HASH` suffix out of a `cc-status-dot-hook:vX.Y.Z:HASH` banner.
- *  Returns null when the banner pre-dates the hash scheme (round-3) — callers
+ *  Returns null when the banner pre-dates the hash scheme — callers
  *  treat null as "stale, re-stamp" so legacy same-version hooks pick up the
  *  new scheme on the next install. */
 function parseHookBannerHash(bannerLine: string): string | null {
@@ -1501,30 +1674,172 @@ function hookCommand(hookAbs: string): string {
     // stdin, so no positional arg is needed. `# ${HOOK_MARKER}` is a shell
     // comment — harmless at runtime, greppable for idempotent removal.
     //
-    // Bake the ABSOLUTE node binary (process.execPath) rather than bare `node`:
-    // when VS Code is launched from Finder/Spotlight (macOS) it inherits a
-    // reduced PATH where nvm/asdf-managed node bins are often absent, which
-    // would make a bare-`node` hook silently no-op (state file never written →
-    // icon never updates, with no error). An absolute execPath resolves
-    // independently of PATH. Falls back to `node` only if execPath is unset.
+    // rather than baking the absolute node binary
+    // (process.execPath) into settings.json — which breaks on `nvm uninstall` /
+    // `asdf uninstall nodejs` / `volta uninstall node` because the path
+    // disappears before our silent-exit(0) fallback can fire — we install a
+    // tiny wrapper script at INSTALL_DIR/bin/cc-status-hook (POSIX shell) or
+    // .cmd (Windows) and bake the WRAPPER PATH into settings.json instead.
+    // The wrapper internally tries the install-time node path first, then
+    // falls back to PATH lookup, then common system locations, then version-
+    // manager installs — so node version switches / uninstalls no longer
+    // freeze every status dot on its last frame. settings.json also no longer
+    // contains the user's private node install path (info disclosure side fix).
+    // See installNodeWrapper() for the wrapper body + fallback order.
+    //
+    // The baked node path is captured at install time (warnIfVolatileNodePath
+    // still fires for nvm/asdf/volta paths so the user knows); the wrapper
+    // makes the volatility SURVIVABLE instead of fatal.
     const nodeBin = process.execPath && fs.existsSync(process.execPath) ? process.execPath : "node";
-    return `${nodeBin} "${hookAbs}"  # ${HOOK_MARKER}`;
+    const wrapperAbs = wrapperPathFor(hookAbs);
+    // Best-effort: write the wrapper now so a same-process `--status` run
+    // immediately after install can stat it. installRuntimeFiles also writes
+    // it on every install so the wrapper stays in sync with hookAbs.
+    try {
+        installNodeWrapper(hookAbs, nodeBin);
+    } catch {
+        // Non-fatal — wireHooks proceeds; the wrapper will be (re)written on
+        // the next install runtime-files pass.
+    }
+    // Invoke via `sh <wrapper>` on POSIX so we don't depend on the +x bit
+    // surviving across sync tools / cloud-home setups. The wrapper shebang is
+    // also `#!/bin/sh`, so direct execution works too. Windows uses .cmd
+    // directly (cmd.exe is always present).
+    const invoke = process.platform === "win32" ? `"${wrapperAbs}"` : `sh "${wrapperAbs}"`;
+    return `${invoke}  # ${HOOK_MARKER}`;
+}
+
+/**
+ * Path of the node-locating wrapper script that lives next to the hook.
+ * Unix: INSTALL_DIR/bin/cc-status-hook (POSIX shell script).
+ * Windows: INSTALL_DIR/bin/cc-status-hook.cmd (batch).
+ */
+function wrapperPathFor(hookAbs: string): string {
+    const binDir = path.join(path.dirname(hookAbs), "..", "bin");
+    const name = process.platform === "win32" ? "cc-status-hook.cmd" : "cc-status-hook";
+    return path.join(binDir, name);
+}
+
+/**
+ * Write the node-locating wrapper script. Idempotent — every call rewrites.
+ *
+ * Wrapper behavior:
+ *   1. Try the install-time baked node binary first (preserves the no-PATH-
+ *      required property that matters for macOS Finder-launched VS Code).
+ *   2. Fall back to `command -v node` (PATH lookup) — works after `nvm use`
+ *      switches the active version, even if the baked path is gone.
+ *   3. Fall back to common system locations (/usr/local/bin, /opt/homebrew/bin,
+ *      /usr/bin) — covers brew installs that aren't on the reduced PATH CC
+ *      inherits from Finder launches.
+ *   4. Fall back to a glob over version-manager installs (nvm/asdf/volta) —
+ *      picks the highest-version node available when the baked one is gone.
+ *   5. If everything fails, exit 0 silently — matches cc-status.js's silent-
+ *      exit contract so a missing node never breaks the user's CC turn.
+ *
+ * The wrapper is intentionally tiny and POSIX-sh-only (no bashisms) so it
+ * runs on /bin/dash, /bin/sh, busybox sh, etc.
+ */
+function installNodeWrapper(hookAbs: string, bakedNodeBin: string): void {
+    const wrapperAbs = wrapperPathFor(hookAbs);
+    const binDir = path.dirname(wrapperAbs);
+    fs.mkdirSync(binDir, { recursive: true });
+    if (process.platform === "win32") {
+        // .cmd batch wrapper. Quote paths for spaces (common in
+        // C:\Program Files\nodejs or %LOCALAPPDATA%\Volta\...).
+        const hookWin = hookAbs.replace(/\\/g, "\\\\");
+        const bakedWin = bakedNodeBin.replace(/\\/g, "\\\\");
+        const body = [
+            "@echo off",
+            "REM cc-status-dot node-locating wrapper (adapts to node path changes after install).",
+            "REM Adapts to node path changes after install; silent-exit on total failure.",
+            "setlocal",
+            `set "HOOK_ABS=${hookWin}"`,
+            `set "BAKED=${bakedWin}"`,
+            'if exist "%BAKED%" (',
+            '  "%BAKED%" "%HOOK_ABS%"',
+            "  exit /b %errorlevel%",
+            ")",
+            "where node >nul 2>&1",
+            "if %errorlevel%==0 (",
+            '  node "%HOOK_ABS%"',
+            "  exit /b %errorlevel%",
+            ")",
+            "REM All paths failed — silent-exit (do not break the user's CC turn).",
+            "exit /b 0",
+            "",
+        ].join("\r\n");
+        fs.writeFileSync(wrapperAbs, body, "utf8");
+    } else {
+        // POSIX shell wrapper. The shebang is `#!/bin/sh` (not /bin/bash) for
+        // portability; we avoid bash-only constructs. Glob expansion in the
+        // version-manager fallback relies on POSIX-shell wildcard expansion.
+        const body = `#!/bin/sh
+# cc-status-dot node-locating wrapper (adapts to node path changes after install).
+# Adapts to node path changes (nvm/asdf/volta uninstall or version switch)
+# after install. The baked node binary path was captured at install time and
+# may disappear; this wrapper tries the baked path, then PATH lookup, then
+# common system locations, then version-manager installs. Silent-exit on
+# total failure so the user's CC turn is never broken by a missing node.
+
+HOOK_ABS=${JSON.stringify(hookAbs)}
+BAKED=${JSON.stringify(bakedNodeBin)}
+
+# 1. Install-time baked path (preferred — preserves no-PATH-required property).
+if [ -x "$BAKED" ]; then exec "$BAKED" "$HOOK_ABS"; fi
+
+# 2. PATH lookup (works after nvm use / asdf local switches the active version).
+if command -v node >/dev/null 2>&1; then exec node "$HOOK_ABS"; fi
+
+# 3. Common system locations (covers Homebrew / system installs not on the
+#    reduced PATH that VS Code inherits when launched from Finder/Spotlight).
+for N in /usr/local/bin/node /opt/homebrew/bin/node /usr/bin/node; do
+    if [ -x "$N" ]; then exec "$N" "$HOOK_ABS"; fi
+done
+
+# 4. Version-manager installs (nvm/asdf/volta) — pick whichever exists.
+#    POSIX shell expands the globs; nullglob is not POSIX so we rely on the
+#    default behavior (literal pattern if no match) and the -x test filters
+#    non-existent paths. We try multiple version-manager roots in case the
+#    user has more than one installed.
+for N in \\
+    "$HOME/.nvm/versions/node"/*/bin/node \\
+    "$HOME/.asdf/installs/nodejs"/*/bin/node \\
+    "$HOME/.asdf/installs/node"/*/bin/node \\
+    "$HOME/.volta/tools/image/node"/*/bin/node \\
+    "$HOME/.volta/bin/node" \\
+    "$HOME/.local/bin/node" \\
+; do
+    if [ -x "$N" ]; then exec "$N" "$HOOK_ABS"; fi
+done
+
+# 5. All paths failed. Silent-exit (do not break the user's CC turn — mirrors
+#    cc-status.js's own silent-exit(0) contract on the writer side).
+exit 0
+`;
+        fs.writeFileSync(wrapperAbs, body, "utf8");
+        // chmod +x so direct execution works (we still invoke via `sh <wrapper>`
+        // from hookCommand to be safe across +x-bit-stripping sync tools, but
+        // the +x bit means `./<wrapper>` also works for direct CLI testing).
+        try {
+            fs.chmodSync(wrapperAbs, 0o755);
+        } catch {
+            // Non-fatal — `sh <wrapper>` invocation in hookCommand still works.
+        }
+    }
 }
 
 /**
  * Warn when the baked node binary path lives under a version-managed install
  * (nvm / asdf / volta). Those directories disappear on `nvm uninstall`,
- * `asdf uninstall nodejs`, `volta uninstall node`, etc. — and the baked hook
- * command then ENOENTs at spawn time, BEFORE our silent-exit(0) fallback can
- * fire, so the writer→reader chain silently breaks (every status dot freezes
- * on its last frame). This is the architecture's core install/runtime
- * coupling: the writer is the root of the data pipeline.
+ * `asdf uninstall nodejs`, `volta uninstall node`, etc.
  *
- * Not a hard error — the path may survive the user's workflow (e.g. they keep
- * that nvm version around). We surface the risk so the user knows to re-run
- * install after a node version change if dots stop updating. A wrapper-script
- * fix would be more robust but is a larger architectural change (see CHANGELOG
- * note in architecture-review).
+ * this is now INFORMATIONAL, not fatal. The wrapper script
+ * at INSTALL_DIR/bin/cc-status-hook[.cmd] tries the baked path first, then
+ * falls back to PATH lookup, common system locations, and version-manager
+ * installs — so even when the baked node disappears, the wrapper self-heals
+ * at the next hook spawn. The warn remains so users who see dots stop
+ * updating know to check `--status` (which reports wrapper presence/absence)
+ * and re-run install if needed (refreshes the baked path to the current node).
  */
 function warnIfVolatileNodePath(): void {
     const p = process.execPath || "";
@@ -1538,9 +1853,11 @@ function warnIfVolatileNodePath(): void {
         /[\\/]\.asdf[\\/]installs[\\/]node(?:js)?[\\/]/.test(p) ||
         /[\\/]\.volta[\\/]tools[\\/]image[\\/]node[\\/]/.test(p);
     if (!volatile) return;
-    warn(`hook commands will bake a version-managed node binary path: ${p}`);
-    warn(`  this path disappears on \`nvm uninstall\` / \`asdf uninstall nodejs\` / \`volta uninstall node\`.`);
-    warn(`  if status dots stop updating after a node version switch, re-run install (it re-bakes the current path).`);
+    log(`hook wrapper will bake a version-managed node path: ${p}`);
+    log(`  this path may disappear on \`nvm uninstall\` / \`asdf uninstall nodejs\` / \`volta uninstall node\`.`);
+    log(`  the wrapper falls back to PATH + system + version-manager`);
+    log(`  locations if the baked path disappears, so status dots stay responsive.`);
+    log(`  re-run install after a node version switch to refresh the baked path (optional).`);
 }
 
 /** Build our owned hooks entries (one group per event in HOOK_EVENTS). */
@@ -1560,12 +1877,70 @@ function groupIsOurs(g: unknown): boolean {
     return hooks.some((h) => typeof h?.command === "string" && h.command.includes(HOOK_MARKER));
 }
 
+/** Owns the surgical-splice-or-round-trip-fallback dance shared by wireHooks
+ *  (writing the hooks value) and unwireHooks (removing it when empty, else
+ *  replacing). Validates raw parses as JSONC before attempting a surgical
+ *  splice, sanity-parses the spliced result, and falls back to a whole-file
+ *  JSON.stringify round-trip on any failure path (malformed raw, surgical
+ *  editor declined to splice, spliced output failed JSON.parse). Returns the
+ *  next raw text + a short note explaining which path was taken.
+ *
+ *  `removeIfEmpty`: when true and obj.hooks is empty/absent, REMOVE the key
+ *  entirely (preserving comments around it). When false, always REPLACE the
+ *  hooks value. wireHooks passes false; unwireHooks passes true. */
+function commitSettingsSurgically(
+    raw: string,
+    parsedOk: boolean,
+    obj: Record<string, unknown>,
+    removeIfEmpty: boolean,
+): { nextRaw: string; note: string } {
+    if (!parsedOk) {
+        return {
+            nextRaw: JSON.stringify(obj, null, 2) + "\n",
+            note: " (round-trip fallback — raw was malformed JSONC)",
+        };
+    }
+    const hooksNowEmpty =
+        !obj.hooks || typeof obj.hooks !== "object" || Object.keys(obj.hooks as HooksMap).length === 0;
+    let candidate: string;
+    if (removeIfEmpty && hooksNowEmpty) {
+        candidate = surgicalRemoveTopLevelKey(raw, "hooks");
+    } else {
+        candidate = surgicalSetTopLevelKey(raw, "hooks", JSON.stringify(obj.hooks, null, 2));
+    }
+    if (candidate === raw) {
+        return {
+            nextRaw: JSON.stringify(obj, null, 2) + "\n",
+            note: " (round-trip fallback — surgical editor declined to splice)",
+        };
+    }
+    // Sanity check: the spliced result must still parse.
+    try {
+        JSON.parse(stripJsonc(candidate));
+    } catch {
+        return {
+            nextRaw: JSON.stringify(obj, null, 2) + "\n",
+            note: " (round-trip fallback — surgical result failed JSON.parse)",
+        };
+    }
+    return { nextRaw: candidate, note: " (surgical edit preserved user comments)" };
+}
+
 function wireHooks(): void {
     const settings = settingsPath();
     const hookAbs = path.join(INSTALL_DIR, "hooks", "cc-status.js");
 
     let raw = "{}";
     if (fs.existsSync(settings)) raw = fs.readFileSync(settings, "utf8");
+    // Validate the raw text parses as JSONC BEFORE we attempt a surgical splice.
+    // If it doesn't parse, fall back to the legacy round-trip (which will fail
+    // loudly via parseJsonc) — we never splice into malformed JSON.
+    let parsedOk = true;
+    try {
+        JSON.parse(stripJsonc(raw));
+    } catch {
+        parsedOk = false;
+    }
     const obj = parseJsonc(raw, settings) as Record<string, unknown>;
 
     const ourHooks = buildOurHooks(hookAbs);
@@ -1581,18 +1956,26 @@ function wireHooks(): void {
             const oursIdx = arr.findIndex(groupIsOurs);
             if (oursIdx >= 0) {
                 // Our group already exists for this event. But its command may
-                // point at a STALE path (v0.1 baked PROJECT_ROOT/hooks/cc-status.js;
-                // phase1 wires INSTALL_DIR/hooks/cc-status.js). If so, rewrite the
-                // command in place rather than skipping — otherwise the hook keeps
-                // firing a script under a dir the user is expected to delete, and
-                // the state machine silently stops writing. Only touch commands
-                // carrying our HOOK_MARKER so user-owned hooks are never mutated.
+                // point at a STALE form. Three stale shapes are migrated:
+                //   (a) v0.1 baked PROJECT_ROOT/hooks/cc-status.js — phase1 moved
+                //       to INSTALL_DIR/hooks/cc-status.js.
+                //   (b) Pre-wrapper baked `<nodeBin> "<hookAbs>"` form —
+                //       the wrapper migration moved to the multi-path wrapper at
+                //       INSTALL_DIR/bin/cc-status-hook[.cmd]. The wrapper path
+                //       is stable across node version switches.
+                //   (c) Wrapper path itself changed (rare — only if INSTALL_DIR
+                //       moves, which only happens if the user's HOME changes).
+                // Only touch commands carrying our HOOK_MARKER so user-owned
+                // hooks are never mutated. We detect staleness by checking that
+                // the current wrapper path is NOT present in the existing
+                // command — covers all three stale shapes above.
+                const wrapperAbs = wrapperPathFor(hookAbs);
                 const g = arr[oursIdx] as HookGroup;
                 for (const h of g.hooks) {
                     if (
                         typeof h?.command === "string" &&
                         h.command.includes(HOOK_MARKER) &&
-                        !h.command.includes(hookAbs)
+                        !h.command.includes(wrapperAbs)
                     ) {
                         h.command = hookCommand(hookAbs);
                         changed = true;
@@ -1611,8 +1994,9 @@ function wireHooks(): void {
     }
 
     backupOnce(settings, settings + ".cc-status-dot.bak");
-    writeAtomicSync(settings, JSON.stringify(obj, null, 2) + "\n");
-    log(`wrote ${HOOK_EVENTS.length} hook event(s) into ${settings}`);
+    const { nextRaw, note: surgicalNote } = commitSettingsSurgically(raw, parsedOk, obj, false);
+    writeAtomicSync(settings, nextRaw);
+    log(`wrote ${HOOK_EVENTS.length} hook event(s) into ${settings}${surgicalNote}`);
     if (!fs.existsSync(hookAbs)) {
         warn(`hook target does not exist yet: ${hookAbs}`);
         warn("create it (it receives JSON on stdin, writes ~/.claude/cc-tab-status/<sid>.json).");
@@ -1626,6 +2010,12 @@ function unwireHooks(): void {
         return;
     }
     const raw = fs.readFileSync(settings, "utf8");
+    let parsedOk = true;
+    try {
+        JSON.parse(stripJsonc(raw));
+    } catch {
+        parsedOk = false;
+    }
     let obj: Record<string, unknown>;
     try {
         obj = JSON.parse(stripJsonc(raw));
@@ -1651,8 +2041,9 @@ function unwireHooks(): void {
     if (Object.keys(hooks).length === 0) delete obj.hooks;
 
     if (changed) {
-        writeAtomicSync(settings, JSON.stringify(obj, null, 2) + "\n");
-        log("removed cc-status-dot hook entries from settings.json");
+        const { nextRaw, note: surgicalNote } = commitSettingsSurgically(raw, parsedOk, obj, true);
+        writeAtomicSync(settings, nextRaw);
+        log(`removed cc-status-dot hook entries from ${settings}${surgicalNote}`);
     } else {
         log("no cc-status-dot hook entries found in settings.json");
     }
@@ -1721,15 +2112,14 @@ function installRuntimeFiles(): void {
         const srcHook = path.join(PROJECT_ROOT, "hooks", "cc-status.js");
         try {
             if (fs.existsSync(srcHook)) {
-                // Drift detection (architecture-review round-2 + round-3 hash gate):
+                // Drift detection (version + hash gate):
                 // assert the source hook carries the HOOK_VERSION banner we expect AND
                 // that the banner's hash matches the source body hash. A version
                 // mismatch is a dev error (forgot to bump the banner in cc-status.js
                 // when bumping HOOK_VERSION); a hash mismatch is the intra-version
                 // equivalent (edited the hook body but forgot to re-stamp the banner
                 // hash). Both are surfaced loudly so the build ships self-consistent.
-                // Mirrors the IIFE's INJECT_VERSION+hash gate (round-3 closes the
-                // prior asymmetry where only the reader side had a hash check).
+                // Mirrors the IIFE's INJECT_VERSION+hash gate (closes the // prior asymmetry where only the reader side had a hash check).
                 const srcContent = fs.readFileSync(srcHook, "utf8");
                 const { banner: srcBanner } = splitHookBanner(srcContent);
                 const srcVer = parseHookBannerVersion(srcBanner);
@@ -1745,7 +2135,7 @@ function installRuntimeFiles(): void {
                     );
                 } else if (srcBannerHash === null) {
                     warn(
-                        `source hooks/cc-status.js banner ${srcVer} has no :HASH suffix — re-stamp with ${srcBodyHash} (round-3 hash scheme)`,
+                        `source hooks/cc-status.js banner ${srcVer} has no :HASH suffix — re-stamp with ${srcBodyHash} (hash scheme)`,
                     );
                 } else if (srcBannerHash !== srcBodyHash) {
                     warn(
@@ -1759,7 +2149,23 @@ function installRuntimeFiles(): void {
         } catch {
             warn("failed to copy hooks/cc-status.js (non-fatal)");
         }
-        log(`installed runtime files → ${INSTALL_DIR} (${copied}/${OUR_SVGS.length} SVGs + hook)`);
+        // also install the node-locating wrapper at
+        // INSTALL_DIR/bin/cc-status-hook (POSIX) or .cmd (Windows). The hook
+        // command in settings.json invokes this wrapper instead of baking the
+        // absolute node path, so node version switches / uninstalls no longer
+        // freeze every status dot. Idempotent: re-writing on every install
+        // keeps the wrapper's baked-node-path field current (warnIfVolatile-
+        // NodePath still fires so the user knows, but the wrapper makes the
+        // volatility survivable instead of fatal).
+        try {
+            const installedHookAbs = path.join(destHooks, "cc-status.js");
+            const nodeBin = process.execPath && fs.existsSync(process.execPath) ? process.execPath : "node";
+            installNodeWrapper(installedHookAbs, nodeBin);
+        } catch (e) {
+            warn(`failed to write node-locating wrapper (non-fatal): ${(e as Error).message}`);
+            warn(`  hooks will use the legacy baked-node-binary fallback until next successful install.`);
+        }
+        log(`installed runtime files → ${INSTALL_DIR} (${copied}/${OUR_SVGS.length} SVGs + hook + wrapper)`);
     } catch (e) {
         warn(`runtime install dir setup failed: ${(e as Error).message}`);
         warn(`the IIFE/hook will reference ${INSTALL_DIR} — ensure files exist there or re-run.`);
@@ -1827,19 +2233,23 @@ function isHooksWired(): boolean {
 }
 
 /**
- * Detect hook commands whose baked absolute node binary no longer exists on
- * disk (typical trigger: the node used at install time was later removed by an
- * nvm/asdf version switch, a Node.app uninstall, or an npx cache purge). When
- * that binary disappears, CC's hook spawn fails with ENOENT BEFORE our script
- * gets a chance to run its own silent-exit(0) fallback, so the writer→reader
- * chain silently stops and every status dot freezes on its last frame.
+ * Detect hook commands whose wrapper script is missing, or whose wrapper's
+ * baked node binary (stored inside the wrapper) no longer exists on disk.
  *
- * The `nodeBin === "node"` fallback path (used only when execPath is missing
- * at install time) is taken to be present-by-definition and skipped. Otherwise
- * we stat the baked path; on miss we tell the user to re-run install (which
- * re-bakes the current process.execPath). Wrapper-script / multi-path search
- * would be more robust but is a larger architectural change; this diagnostic
- * at least makes the failure mode visible in `--status` instead of silent.
+ * changed the baked-node-binary architecture to a wrapper
+ * script (INSTALL_DIR/bin/cc-status-hook[.cmd]). The wrapper internally tries
+ * the install-time node path, then PATH lookup, then common system locations,
+ * then version-manager installs — so even when the baked node path disappears
+ * (nvm/asdf/volta uninstall), the wrapper self-heals at the next hook spawn.
+ * This diagnostic therefore checks TWO things:
+ *   (1) Does the wrapper script itself exist? If not, install is broken.
+ *   (2) Does the wrapper's baked node path still exist? If not, we surface a
+ *       INFO (not a warn) that the wrapper will fall back to PATH/system
+ *       locations at spawn time — non-fatal thanks to the multi-path search.
+ *
+ * Pre-wrapper installs (pre-wrapper) baked `${nodeBin} "<hookAbs>"` directly
+ * in settings.json; we still detect that shape and warn on missing binaries,
+ * so users upgrading from an older install are also covered.
  */
 function reportBakedNodeHealth(): void {
     const settings = settingsPath();
@@ -1852,6 +2262,11 @@ function reportBakedNodeHealth(): void {
     }
     const hooks = obj.hooks as HooksMap | undefined;
     if (!hooks || typeof hooks !== "object") return;
+    // Track wrapper script paths seen in hook commands (new architecture).
+    const wrapperSeen = new Set<string>();
+    let wrapperMissing = false;
+    // Track pre-wrapper baked node binaries still present in settings.json
+    // (older installs not yet re-run after the wrapper migration).
     const seen = new Set<string>();
     let warnedAny = false;
     for (const ev of Object.keys(hooks)) {
@@ -1861,7 +2276,21 @@ function reportBakedNodeHealth(): void {
             if (!groupIsOurs(g)) continue;
             for (const h of (g as HookGroup).hooks) {
                 const cmd = typeof h?.command === "string" ? h.command : "";
-                // cmd shape: `<nodeBin> "<hookAbs>"  # cc-status-dot-managed`
+                // New wrapper shape: `sh "<wrapperAbs>"  # cc-status-dot-managed`
+                // (POSIX) or `"<wrapperAbs>.cmd"  # cc-status-dot-managed` (Win).
+                const w = cmd.match(/(?:^|\s)("?)([^\s"]*cc-status-hook(?:\.cmd)?)\1\s+#\s*cc-status-dot-managed/);
+                if (w) {
+                    const wrapperAbs = w[2];
+                    if (wrapperSeen.has(wrapperAbs)) continue;
+                    wrapperSeen.add(wrapperAbs);
+                    if (!fs.existsSync(wrapperAbs)) {
+                        warn(`hook command references a wrapper script that no longer exists: ${wrapperAbs}`);
+                        warn(`  hooks will fail to spawn — re-run install to re-create the wrapper.`);
+                        wrapperMissing = true;
+                    }
+                    continue;
+                }
+                // Legacy pre-wrapper shape: `<nodeBin> "<hookAbs>"  # cc-status-dot-managed`
                 const m = cmd.match(/^(\S+)\s+"[^"]*cc-status\.js"\s+#\s*cc-status-dot-managed/);
                 if (!m) continue;
                 const nodeBin = m[1];
@@ -1869,16 +2298,136 @@ function reportBakedNodeHealth(): void {
                 seen.add(nodeBin);
                 if (nodeBin === "node") continue; // already a bare PATH fallback
                 if (!fs.existsSync(nodeBin)) {
-                    warn(`hook command bakes a node binary that no longer exists: ${nodeBin}`);
-                    warn(`  hooks will fail to spawn (ENOENT) — re-run install to re-bake the current node path.`);
+                    warn(
+                        `hook command bakes a node binary that no longer exists (legacy pre-wrapper install): ${nodeBin}`,
+                    );
+                    warn(`  hooks will fail to spawn (ENOENT) — re-run install to migrate to the multi-path wrapper.`);
                     warnedAny = true;
                 }
             }
         }
     }
-    if (!warnedAny && seen.size > 0) {
-        log(`hook baked node binary: present (${[...seen].join(", ")})`);
+    if (wrapperSeen.size > 0 && !wrapperMissing) {
+        log(`hook wrapper script: present (${[...wrapperSeen].join(", ")})`);
     }
+    if (!warnedAny && !wrapperMissing && seen.size > 0) {
+        log(`hook baked node binary (legacy): present (${[...seen].join(", ")})`);
+    }
+}
+
+/** Report extension.js patch health: patched flag, anchor count (A-only vs
+ *  A+B), injected IIFE version + content-hash drift, and baked RES path
+ *  staleness. Each line surfaces a separate detection result so a user
+ *  inspecting --status knows exactly which axis is fresh vs. stale. */
+function reportExtensionPatchHealth(extDir: string, extSrc: string): void {
+    const patched = isExtensionPatched(extSrc);
+    log(`extension.js patched: ${patched ? "YES" : "no"}`);
+    if (!patched) return;
+    // Anchor injection health: INJECT_MARKER appears once per injection site
+    // (Anchor A always, Anchor B when present). 1 = A only (the blue-dot fix
+    // is INACTIVE); 2 = A+B (fix active). A CC update that drifted Anchor B's
+    // exact bytes leaves the user on the A-only path silently; this line
+    // makes that downgrade visible so the user re-runs install.
+    const markerN = countOccurrences(extSrc, INJECT_MARKER);
+    if (markerN >= 2) {
+        log(`  anchors injected: A+B (blue-dot fix ACTIVE)`);
+    } else if (markerN === 1) {
+        log(
+            `  anchors injected: A only (blue-dot fix INACTIVE — Anchor B not found at inject time; CC update likely drifted Anchor B's exact bytes. Re-run install.)`,
+        );
+    } else {
+        log(`  anchors injected: unexpected marker count ${markerN}`);
+    }
+    // Injected IIFE version + content-hash drift. The hash catches intra-
+    // version drift (same INJECT_VERSION, body differs from buildIIFE()).
+    const ver = injectedVersion(extSrc);
+    const diskHash = injectedIifeHash(extSrc);
+    const wantHash = currentIifeHash();
+    const hashStale = diskHash !== wantHash;
+    if (ver === null) {
+        log(`  injected IIFE: pre-v0.1.3 (STALE — re-run to re-inject)`);
+    } else if (ver !== INJECT_VERSION) {
+        log(`  injected IIFE: ${ver} (STALE — expected ${INJECT_VERSION}; re-run to re-inject)`);
+    } else if (hashStale) {
+        log(
+            `  injected IIFE: ${ver} hash ${diskHash ?? "(pre-hash-scheme)"} (STALE — expected ${wantHash}; re-run to re-inject)`,
+        );
+    } else {
+        log(`  injected IIFE: ${ver} hash ${diskHash} (up to date)`);
+    }
+    // Stale baked RES path (e.g. a v0.1 install pointing at PROJECT_ROOT).
+    const baked = bakedResPath(extSrc);
+    if (baked === null) {
+        log(`  baked RES: (not detectable)`);
+    } else if (baked === RUNTIME_RES_DIR) {
+        log(`  baked RES: ${baked} (matches INSTALL_DIR)`);
+    } else {
+        log(`  baked RES: ${baked} (STALE — expected ${RUNTIME_RES_DIR}; re-run to update)`);
+    }
+}
+
+/** Report legacy-residue layers: the v0.1.2 webview aggregate bar and the
+ *  v0.1.13 commandCenter package.json patch. Both are detected and surfaced
+ *  so the user re-runs install to clean them. */
+function reportLegacyResidue(extDir: string): void {
+    const legacyBar = hasLegacyWebviewPatch(extDir);
+    log(`legacy webview bar (v0.1.2): ${legacyBar ? "detected — re-run install to clean" : "clean"}`);
+    const pkgPath = path.join(extDir, "package.json");
+    const pkgSrc = fs.existsSync(pkgPath) ? fs.readFileSync(pkgPath, "utf8") : "";
+    const pkgStale = isPackageJsonPatched(pkgSrc);
+    log(`package.json (v0.1.13 commandCenter residue): ${pkgStale ? "STALE — re-run install to clean" : "clean"}`);
+}
+
+/** Report on-disk hook script health: parses the
+ *  `cc-status-dot-hook:vX.Y.Z:HASH` banner at the top of
+ *  INSTALL_DIR/hooks/cc-status.js and surfaces EITHER a version mismatch
+ *  (older writer contract) OR a hash mismatch (same version but drifted
+ *  body). Mirrors the IIFE's stale-version + stale-hash surfacing so a
+ *  stale hook against a fresh IIFE is no longer silent feature loss. */
+function reportHookScriptHealth(): void {
+    const installedHook = path.join(INSTALL_DIR, "hooks", "cc-status.js");
+    if (!fs.existsSync(installedHook)) {
+        log(`  hook script: (not installed — re-run install)`);
+        return;
+    }
+    try {
+        const hdr = fs.readFileSync(installedHook, "utf8");
+        const { banner: insBanner } = splitHookBanner(hdr);
+        const insVer = parseHookBannerVersion(insBanner);
+        const insHash = parseHookBannerHash(insBanner);
+        const insBodyHash = hookBodyHashOf(hdr);
+        const wantHash = currentHookBodyHash();
+        if (insVer === null) {
+            log(`  hook script: (no version banner — pre-v0.1.14 or hand-edited; re-run install)`);
+        } else if (insVer !== HOOK_VERSION) {
+            log(`  hook script: ${insVer} (STALE — expected ${HOOK_BANNER_PREFIX}${HOOK_VERSION}; re-run to refresh)`);
+        } else if (insHash === null) {
+            log(`  hook script: ${insVer} hash (pre-hash-scheme — STALE; re-run install to stamp ${insBodyHash})`);
+        } else if (wantHash !== null && insBodyHash !== wantHash) {
+            log(
+                `  hook script: ${insVer} hash ${insHash} (STALE — body ${insBodyHash} != source ${wantHash}; re-run to refresh)`,
+            );
+        } else {
+            log(`  hook script: ${insVer} hash ${insHash} (up to date)`);
+        }
+    } catch {
+        log(`  hook script: (unreadable — ${INSTALL_DIR}/hooks/cc-status.js)`);
+    }
+}
+
+/** Report runtime files: hooks-wired flag, on-disk hook script health,
+ *  SVG presence in RUNTIME_RES_DIR (NOT PROJECT_ROOT — the IIFE references
+ *  the INSTALL_DIR path, so a fallback to the source copy would hide a real
+ *  "icons will go blank" risk), install dir + state dir presence. */
+function reportRuntimeFiles(): void {
+    log(`hooks wired: ${isHooksWired() ? "YES" : "no"}`);
+    reportHookScriptHealth();
+    checkSvgs(RUNTIME_RES_DIR);
+    log(
+        `runtime install dir: ${INSTALL_DIR} ${fs.existsSync(INSTALL_DIR) ? "(exists)" : "(will be created on install)"}`,
+    );
+    log(`state dir: ${STATE_DIR} ${fs.existsSync(STATE_DIR) ? "(exists)" : "(will be created on first hook fire)"}`);
+    reportBakedNodeHealth();
 }
 
 function reportStatus(): void {
@@ -1886,13 +2435,11 @@ function reportStatus(): void {
     log(`CC extension: v${version}`);
     log(`  ${dir}`);
     // Surface the CC version against which the anchor strings were last
-    // verified byte-exact (architecture-review round-3 finding). install does
-    // NOT hard-gate against older/newer CC — the countOccurrences==1 anchor
-    // check is the actual safety net — but a user inspecting --status after a
-    // CC upgrade can see whether their running CC matches the verified baseline
-    // or is in untested-but-anchor-stable territory. Mirrors the inline comment
-    // at ANCHOR_A / ANCHOR_B ('verified byte-exact against CC X.Y.Z') by
-    // lifting that constant to a user-visible line.
+    // verified byte-exact. install does NOT hard-gate against older/newer CC —
+    // the countOccurrences==1 anchor check is the actual safety net — but a
+    // user inspecting --status after a CC upgrade can see whether their
+    // running CC matches the verified baseline or is in untested-but-anchor-
+    // stable territory.
     if (version !== LAST_VERIFIED_CC) {
         log(
             `  last verified: ${LAST_VERIFIED_CC} (CC ${version} is untested — anchors may still match, install proceeds if countOccurrences==1)`,
@@ -1902,119 +2449,9 @@ function reportStatus(): void {
     }
     const extJs = path.join(dir, "extension.js");
     const extSrc = fs.existsSync(extJs) ? fs.readFileSync(extJs, "utf8") : "";
-    const patched = isExtensionPatched(extSrc);
-    log(`extension.js patched: ${patched ? "YES" : "no"}`);
-    if (patched) {
-        // Surface anchor injection health: INJECT_MARKER appears once per
-        // injection site (Anchor A always, Anchor B when present). 1 = A only
-        // (the v0.1.8 permission-pending blue-dot fix is INACTIVE — a yellow
-        // running dot may cover CC's native blue pending dot during a
-        // permission prompt); 2 = A+B (fix active). A CC update that drifted
-        // Anchor B's exact bytes leaves the user on the A-only path silently;
-        // this line makes that downgrade visible in --status so the user knows
-        // to re-run install after a CC update instead of discovering it via a
-        // miscolored tab during a permission prompt.
-        const markerN = countOccurrences(extSrc, INJECT_MARKER);
-        if (markerN >= 2) {
-            log(`  anchors injected: A+B (blue-dot fix ACTIVE)`);
-        } else if (markerN === 1) {
-            log(
-                `  anchors injected: A only (blue-dot fix INACTIVE — Anchor B not found at inject time; CC update likely drifted Anchor B's exact bytes. Re-run install.)`,
-            );
-        } else {
-            log(`  anchors injected: unexpected marker count ${markerN}`);
-        }
-        // Surface a stale injected IIFE: a pre-v0.1.3 (or older) IIFE has the
-        // marker but old logic (breathing frames etc.) — re-run re-injects.
-        // Since the content-hash scheme landed, an intra-version drift (same
-        // INJECT_VERSION but a body that differs from current buildIIFE()) is
-        // ALSO surfaced here, so dev iterations on a same-version install no
-        // longer falsely report "up to date".
-        const ver = injectedVersion(extSrc);
-        const diskHash = injectedIifeHash(extSrc);
-        const wantHash = currentIifeHash();
-        const hashStale = diskHash !== wantHash;
-        if (ver === null) {
-            log(`  injected IIFE: pre-v0.1.3 (STALE — re-run to re-inject)`);
-        } else if (ver !== INJECT_VERSION) {
-            log(`  injected IIFE: ${ver} (STALE — expected ${INJECT_VERSION}; re-run to re-inject)`);
-        } else if (hashStale) {
-            log(
-                `  injected IIFE: ${ver} hash ${diskHash ?? "(pre-hash-scheme)"} (STALE — expected ${wantHash}; re-run to re-inject)`,
-            );
-        } else {
-            log(`  injected IIFE: ${ver} hash ${diskHash} (up to date)`);
-        }
-        // Surface a stale baked RES (e.g. v0.1 install pointing at PROJECT_ROOT)
-        // so upgrading users can see they need a re-run, not just a reload.
-        const baked = bakedResPath(extSrc);
-        if (baked === null) {
-            log(`  baked RES: (not detectable)`);
-        } else if (baked === RUNTIME_RES_DIR) {
-            log(`  baked RES: ${baked} (matches INSTALL_DIR)`);
-        } else {
-            log(`  baked RES: ${baked} (STALE — expected ${RUNTIME_RES_DIR}; re-run to update)`);
-        }
-    }
-    const legacyBar = hasLegacyWebviewPatch(dir);
-    log(`legacy webview bar (v0.1.2): ${legacyBar ? "detected — re-run install to clean" : "clean"}`);
-    // Stale v0.1.13 commandCenter residue on CC's package.json (v0.1.14+ no
-    // longer patches package.json). Detected → re-run install to clean.
-    const pkgPath = path.join(dir, "package.json");
-    const pkgSrc = fs.existsSync(pkgPath) ? fs.readFileSync(pkgPath, "utf8") : "";
-    const pkgStale = isPackageJsonPatched(pkgSrc);
-    log(`package.json (v0.1.13 commandCenter residue): ${pkgStale ? "STALE — re-run install to clean" : "clean"}`);
-    log(`hooks wired: ${isHooksWired() ? "YES" : "no"}`);
-    // On-disk hook version + content hash (architecture-review round-2 + round-3
-    // hash gate): parse the banner at the top of INSTALL_DIR/hooks/cc-status.js
-    // and warn when EITHER the version differs from HOOK_VERSION OR the body
-    // hash differs from the current source body hash — mirrors the IIFE's
-    // stale-version + stale-hash surfacing above. A stale hook (older writer
-    // contract, or same version but drifted body) against a fresh IIFE is
-    // otherwise silent feature loss; these lines surface it so the user knows
-    // to re-run install. Round-3 closes the round-2 asymmetry: reader had a
-    // hash check, writer did not.
-    const installedHook = path.join(INSTALL_DIR, "hooks", "cc-status.js");
-    if (fs.existsSync(installedHook)) {
-        try {
-            const hdr = fs.readFileSync(installedHook, "utf8");
-            const { banner: insBanner } = splitHookBanner(hdr);
-            const insVer = parseHookBannerVersion(insBanner);
-            const insHash = parseHookBannerHash(insBanner);
-            const insBodyHash = hookBodyHashOf(hdr);
-            const wantHash = currentHookBodyHash();
-            if (insVer === null) {
-                log(`  hook script: (no version banner — pre-v0.1.14 or hand-edited; re-run install)`);
-            } else if (insVer !== HOOK_VERSION) {
-                log(
-                    `  hook script: ${insVer} (STALE — expected ${HOOK_BANNER_PREFIX}${HOOK_VERSION}; re-run to refresh)`,
-                );
-            } else if (insHash === null) {
-                log(`  hook script: ${insVer} hash (pre-hash-scheme — STALE; re-run install to stamp ${insBodyHash})`);
-            } else if (wantHash !== null && insBodyHash !== wantHash) {
-                log(
-                    `  hook script: ${insVer} hash ${insHash} (STALE — body ${insBodyHash} != source ${wantHash}; re-run to refresh)`,
-                );
-            } else {
-                log(`  hook script: ${insVer} hash ${insHash} (up to date)`);
-            }
-        } catch {
-            log(`  hook script: (unreadable — ${INSTALL_DIR}/hooks/cc-status.js)`);
-        }
-    } else {
-        log(`  hook script: (not installed — re-run install)`);
-    }
-    // The injected IIFE references RUNTIME_RES_DIR (INSTALL_DIR/resources).
-    // Check THERE honestly — do NOT silently fall back to the project source
-    // copy, which would hide a real "icons will go blank" risk (a fallback to
-    // PROJECT_ROOT would report "all present" while the baked path points at an
-    // empty/missing INSTALL_DIR). Before install this will (correctly) warn.
-    checkSvgs(RUNTIME_RES_DIR);
-    log(
-        `runtime install dir: ${INSTALL_DIR} ${fs.existsSync(INSTALL_DIR) ? "(exists)" : "(will be created on install)"}`,
-    );
-    log(`state dir: ${STATE_DIR} ${fs.existsSync(STATE_DIR) ? "(exists)" : "(will be created on first hook fire)"}`);
-    reportBakedNodeHealth();
+    reportExtensionPatchHealth(dir, extSrc);
+    reportLegacyResidue(dir);
+    reportRuntimeFiles();
 }
 
 function printHelp(): void {

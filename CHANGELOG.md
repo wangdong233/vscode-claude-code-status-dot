@@ -2,6 +2,42 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.1.16] - 2026-07-19
+
+**底部 SBI 4 灯：恢复圆点 emoji 样式，保留 v0.1.15 的 4 SBI 固定位置结构**。根因：v0.1.15 把 4 个独立 SBI 渲染成"数字内置彩色块"（白字数字 + `statusBarItem.*Background` 主题色块），用户反馈"色块效果不如圆点好看"，要求恢复 v0.1.14 的圆点 emoji 样式。v0.1.14 的单 SBI 拼接 `🟢N 🟡N 🔵N 🔴N` 有位移问题（任何数字宽度变化都会让整行左右挪），v0.1.16 不能简单回退——而是**合流**：视觉切回球（v0.1.14 验证好看）+ 架构保留 4 SBI 独立 slot（v0.1.15 验证位置稳定）。每灯 text 改为 `<球><数字>`（如 `🟢3`、`⚪0`），球自带色——🟢🟡🔵🔴 是预填充彩色的 Unicode 字符，**移除了 v0.1.15 的 `backgroundColor` 色块 + `color` 白字赋值**。
+
+### 变更（Changed）
+
+- **视觉原语：彩色块 → emoji 球**：v0.1.15 每灯 text 是数字本身（`0`/`1`/`2`/`3`/`N`）+ 主题色块背景 + 白字前景；v0.1.16 每灯 text 是 `<球><数字>`——非0 用该灯的彩球（CFG[k].em，🟢/🟡/🔵/🔴 之一）+ 数字，0 用共享灰球 ⚪（DIM_EM）+ "0"。球 emoji 自带颜色（绿/黄/蓝/红/灰），无需主题色块、无需白字。
+- **位置固定（v0.1.16 核心优势，沿用 v0.1.15 4 SBI 架构）**：每 slot 长度恒为 `<球><1数字>`（数字都是 1 字符：0-3 或 N），无论计数怎么变化，4 个 slot 的位置永远不动。v0.1.14 的单 SBI `🟢N 🟡N 🔵N 🔴N` 拼接会让整行因数字宽度变化而左右位移（如某灯 9→N，整行短 1 字符，后续灯全往左挪）；4 SBI 把每灯放进独立 slot，slot 之间是状态栏标准间隔，是"4 个独立徽章"观感而非黏在一起的色带。
+- **`SBI_LIGHTS_CFG` 表 `bg` → `em`**：`{key,bg,pri}` 改为 `{key,em,pri}`，每灯的 `bg`（ThemeColor id 如 `statusBarItem.remoteBackground`）被 `em`（emoji codepoint 如 `\u{1F7E2}` 🟢）取代。新增 `SBI_DIM_EM` 常量（共享"灭"球 ⚪ `\u{26AA}`）。两个表都通过 `JSON.stringify` 烘焙进 IIFE 的 `var CFG=[...]` + `var DIM_EM=...`，emoji codepoint 以 `\uXXXX` 代理对形式出现在 IIFE 源码（ASCII-only）。
+- **创建循环简化**：每个 `createStatusBarItem` 不再设 `.color` / `.backgroundColor` / `new vs.ThemeColor(...)`，只设 `.text`（初始 `DIM_EM+"0"` = `"⚪0"`，固定 slot 宽度避免 500ms 不可见窗口）+ `.tooltip` + `.command` + `.show()`。删 `litBgs` 数组（4 个 ThemeColor 缓存）+ `dimClr`（deactivatedForeground ThemeColor）。
+- **per-tick 更新简化**：每个 SBI 的 mutate 不再触碰 `.color` / `.backgroundColor`，只 mutate `.text`（`(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)` → `🟢3` / `⚪0` / `🟡N`）+ `.tooltip` + `.show()`。保留 v0.1.15 round-4 的 per-iteration try/catch + lastKey short-circuit memo（位置稳定性 + 性能优化不变）。删 `__ccsdSbiLitBgs` / `__ccsdSbiDimClr` 全局缓存（无 ThemeColor 要缓存）。
+- **`onDidDispose` 简化**：最后 panel 退出时仍 dispose 全部 4 SBI + 清 timer，但不再 null-reset `__ccsdSbiLitBgs` / `__ccsdSbiDimClr`（这两个全局已不存在）。保留 `__ccsdSbis=null` + `__ccsdSbiLastKey=null` 的清理。
+- **IIFE 版本戳 `v0.1.15` → `v0.1.16`**：已 patch 的 v0.1.15 装在下次 install 时被检测为 STALE（version 不符 + hash 不符双重保护）→ 自动从 `extension.js.bak` 还原并重注入新 emoji-ball IIFE。
+
+### 保留（Preserved，v0.1.14/v0.1.15 设计改进完整沿用到 v0.1.16）
+
+- **🔵 pending 第 4 灯**（writer 的 `Notification` hook case + reader 独立计数 + 与 state 正交）。
+- **done/running/interrupted 三路陈旧会话 GC**：done >5min→idle（§4）；running mtime >30min→idle（§7.2，变量名 `SBI_RUNNING_STALE_MS` 保留）；interrupted mtime >24h→idle（`INTERRUPTED_RETENTION_MS`）。per-tab 渲染**不应用**后两条，聚合层应用。
+- **pending 与 idle GC 联动**：`j.pending===true && st!=="idle"`——防止被强杀的权限弹窗会话在 🟡 不计的同时 🔵 仍假粘。
+- **聚合单例 + panel 计数 lifecycle**：`__ccsdSbis`（4 元素数组） + `__ccsdSbiTimer` 窗口级单例；`__ccsdPanelCount` 入口 +1 / `onDidDispose` -1，归零时清理（v0.1.16：遍历 4 slot dispose）。
+- **三层独立 try/catch 隔离**：(1) 4-SBI 创建（循环）；(2) 单例 timer 注册；(3) aggregation body。
+- **per-tab 4 态色点、`__ccsdPending` yield、notify、`__ccsdTitle` 刷新**：完全不变。
+- **cap() 截顶规则不变**：`cap(n){return n>=4?4:n}`，0-3 passthrough、4+ 截到 4 触发 "N" 变体。
+- **tooltip 文案不变**：`Claude Code: X done, Y running, Z pending, W interrupted`（未截顶的真实计数）。
+- **click command 不变**：`ccStatusDot.sbiClick` runtime 注册，handler 读 `__ccsdSbis[0].tooltip` 弹 InformationMessage。
+
+### 改进（Improved）
+
+- **渲染路径更简单**：v0.1.15 每 tick 要分配/缓存 4 个 ThemeColor 实例 + 切换 lit/dim 翻转（白字+色块 vs 灰字+透明）；v0.1.16 直接读 CFG[k].em / DIM_EM（字符串字面量），无 ThemeColor、无缓存、无翻转。代码量减少，可读性提升。
+- **视觉回到用户喜欢的球**：v0.1.14 的 emoji 球反馈正面（用户要的样式），v0.1.16 在保留位置稳定性的同时恢复此样式。
+
+### 已知限制（回归 v0.1.14 同款）
+
+- **重新依赖 emoji 字体栈**：v0.1.15 改用 ThemeColor 块**完全跟随 VSCode 主题色**，跨平台稳定；v0.1.16 切回 emoji 球，重新引入 v0.1.14 同款的 emoji 字体依赖——Win7/无 emoji 字体的 Linux/headless 环境可能黑白或豆腐块。macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ 主流 Linux（Noto Color Emoji）正常显示彩色。这是用户审美的有意取舍：球好看 > 跨平台一致。
+- **形状是 emoji 字形正圆**：相比 v0.1.15 的 SBI 圆角矩形块，v0.1.16 的球是 emoji 字体提供的正圆 glyph（在支持的字体下）。不再是 SBI 容器的 CSS 圆角——视觉更"球"。
+
 ## [0.1.15] - 2026-07-18
 
 **底部 SBI 4 灯：把数字内置到彩色块里**。根因：v0.1.14 用单个 SBI 渲染 `🟢N 🟡N 🔵N 🔴N`（emoji 球 + 数字作为分开的 token 挤在一个 `StatusBarItem.text` 里），用户反馈"球+数字分开"不满意，要"数字直接内置在彩色块里"。VSCode `StatusBarItem.backgroundColor` 字段类型是 `ThemeColor | undefined`（**不接 hex 字符串**——已核对 `mainThreadStatusBar.ts` `$setEntry` 签名），所以"4 块用任意 hex"不可能；但前景 `color` 接 `string | ThemeColor`，故**白字数字 + ThemeColor 彩色背景**可行。v0.1.15 **拆成 4 个独立 SBI**（每灯一个 `createStatusBarItem`），每块 text 就是数字本身，count>0 时块亮（`backgroundColor=ThemeColor` + `color="#ffffff"` 白字），count=0 时块暗（透明底 + `statusBarItem.deactivatedForeground` 灰字 `"0"`，块仍可见）。

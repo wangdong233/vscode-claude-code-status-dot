@@ -19,13 +19,13 @@
 
 ## ✨ 特徴
 
-- 🔧 **1行でインストール**——`npx vscode-claude-code-status-dot` が CC 拡張へのパッチ適用、8 つの hooks 接続、ランタイムファイルのコピーを自動化。冪等で再実行可能
+- 🔧 **1行でインストール**——`npx vscode-claude-code-status-dot` が CC 拡張へのパッチ適用、9 つの hooks 接続、ランタイムファイルのコピーを自動化。冪等で再実行可能
 - 🛡️ **ソースを消しても持続**——ランタイムコピーは `~/.claude/cc-status-dot/` に配置。プロジェクト削除 / npx キャッシュクリア / CC 自動更新のいずれでも patched 済み拡張には影響しない
 - 🎨 **4状態を完全カバー**——CC ネイティブ（青/オレンジの2点のみ）より完全：idle / running / done / interrupted をすべて可視化
 - 🔔 **完了 / 中断通知**——セッションの完了 / 中断時に macOS システム通知（画面右上からドロップ、サウンド付き、ボタンなし、数秒で自動消滅）をポップアップ。フォアグラウンドでもバックグラウンドでも（`notifyWhenFocused` デフォルト true）。見守り続ける必要なし
 - ⚙️ **workflow 実行中は running を維持**——バックグラウンド subagent / cron が動いているとき誤って緑にせず、`Stop` が権威判定
 - 📂 **Open Editors と同期**——左上の「開いているエディター」ビューの CC タブにも状態ドットが付く
-- 📊 **下部 SBI 4 色ブロック（数字をブロック内に内蔵）**——ステータスバー左側（`StatusBarAlignment.Left` + 4 ブロック priority `-9996..-9999`、可視中心の近く）に**数字を内蔵した色付きブロック**を4つ並べて表示（v0.1.15 は v0.1.14 の「emoji 球 + 数字 分離」形式を置換）：🟢完了（緑ブロック）/ 🟡実行中（黄ブロック）/ 🔵入力待ち（青ブロック）/ 🔴中断（赤ブロック）。各ブロックは 0/1/2/3/N で頭打ち（>=4 は N 表示）；count>0 → ブロック点灯（`statusBarItem.*Background` テーマ色 + 白字数字をブロック内に内蔵）、count=0 → ブロック暗（透明背景 + グレー字「0」、ブロックは見えるまま）。🔵 = ユーザー入力待ち（permission/question/elicit、Notification hook case 経由）。完了 >5 分は idle 扱い（緑に含まない）。v0.1.15 は **4 つの独立したランタイム StatusBarItem インスタンス + 4 つの組み込みテーマ色**を使用（CC の package.json をパッチせず、IIFE が 500ms ごとに各ブロックの text/color/backgroundColor を直接 mutate）——色は VSCode テーマに追従し、クロスプラットフォームで安定（emoji フォント依存を解消）。
+- 📊 **下部 SBI 4 emoji ボール（ボール+数字、位置固定）**——ステータスバー左側（`StatusBarAlignment.Left` + 4 スロット priority `-9996..-9999`、可視中心の近く）に**数字を伴う emoji ボール**を4つ並べて表示（v0.1.16 は v0.1.14 の emoji ボール样式を復元、位置固定のため v0.1.15 の 4-SBI 構造は保持）：🟢完了 / 🟡実行中 / 🔵入力待ち / 🔴中断。各スロットの text は `<ボール><数字>`（ボールは自前の色を持つ——**v0.1.15 のテーマ色ブロック + 白字数字は削除**）；カウントは 0/1/2/3/N で頭打ち（>=4 は N 表示）；count>0 → ボール点灯（🟢/🟡/🔵/🔴 プリカラー + 数字が右隣）、count=0 → グレーボール ⚪ +「0」（プレースホルダーは非ゼロ幅と一致、**位置は決してズレない**——これが v0.1.14 単一 SBI に対する 4-SBI の核心利点：v0.1.14 の `🟢N 🟡N 🔵N 🔴N` 結合は数字幅が変わると行全体が左右にズレたが、4-SBI は各ライトに固有の固定 `<ボール><1数字>` スロットを与え、決して動かない）。🔵 = ユーザー入力待ち（permission/question/elicit、Notification hook case 経由）。完了 >5 分は idle 扱い（緑に含まない）。v0.1.16 は **4 つの独立したランタイム StatusBarItem インスタンス + emoji ボール**を使用（CC の package.json をパッチせず、ThemeColor ブロックなし、IIFE が 500ms ごとに各スロットの text を直接 mutate）——emoji ボールは自前の色を持つため、レンダーパスは v0.1.15 より単純（backgroundColor なし、color キャッシュなし、lit/dim 切替なし）。
 - ↩️ **副作用ゼロの1行復元**——`--revert` が `.bak` から extension.js を完全復元、hooks を外科的に除去、ユーザーデータは保持
 
 > ⚠️ **正直な声明**: 本プロジェクトは **patch（パッチ）であり、独立した拡張ではありません**——VSCode はサードパーティ拡張が別の拡張の webview タブアイコンを変更することを許可しない。唯一現実的な経路は CC 自身の `extension.js` にパッチを当てること。代償：CC の自動更新で上書きされるため、コマンドの再実行が必要。
@@ -85,7 +85,7 @@ npx vscode-claude-code-status-dot
 2. 旧版の残留を自動クリーンアップ（あれば）；
 3. anchor を検証したあと `extension.js` を **バックアップ** → `extension.js.bak`（初回のみ）；
 4. タイマーを注入（タブアイコン設定 + done/interrupted 通知）；
-5. **8 つの hook イベント**を `~/.claude/settings.json` に書き込み（`# cc-status-dot-managed` マーク付き、冪等）；
+5. **9 つの hook イベント**を `~/.claude/settings.json` に書き込み（`# cc-status-dot-managed` マーク付き、冪等）；
 6. ランタイムコピー（4 個の SVG = idle + running + done + error、+ hook スクリプト）を `~/.claude/cc-status-dot/`（`INSTALL_DIR`）にコピー。
 
 > **またはソースから（開発用）**:

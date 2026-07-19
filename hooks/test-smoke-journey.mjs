@@ -65,10 +65,16 @@ const DONE_TO_IDLE_MS = 5 * 60 * 1000; // 5 min — §4 done→idle
 const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC
 const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
 
-// v0.1.15: each SBI is its own StatusBarItem with the digit INSIDE a colored
-// block. There is no single joined SBI.text — sbiTexts() below returns the
-// array of 4 per-SBI texts. (v0.1.14 kept SBI_LIGHT_EMOJI + SBI_DIM_EMOJI
-// here to build the joined "🟢3 🟡1 🔵2 ⚪" string; both are gone in v0.1.15.)
+// v0.1.16: each SBI is its own StatusBarItem with text `<ball><digit>`
+// (e.g. "🟢3", "⚪0"). The v0.1.15 colored-block treatment was reverted to
+// emoji balls per user feedback, but the 4-SBI structure is KEPT. There is
+// no single joined SBI.text — sbiTexts() below returns the array of 4
+// per-SBI texts (digit-only — the emoji-ball prepend is exercised in
+// test-iife.mjs IIFE.38). (v0.1.14 kept SBI_LIGHT_EMOJI + SBI_DIM_EMOJI
+// here to build the joined "🟢3 🟡1 🔵2 ⚪" string; both were gone in v0.1.15;
+// v0.1.16 brings emoji balls back via CFG[k].em + DIM_EM in the IIFE but
+// this replica stays digit-only since capping is what these journey
+// assertions lock.)
 // The LIGHT_NAMES array below stays — it's used for cosmetic journey-log lines.
 const LIGHT_NAMES = ['done', 'running', 'pending', 'interrupted'];
 
@@ -159,10 +165,18 @@ function cap(n) {
   return n >= 4 ? 4 : n;
 }
 
-// sbiBlockText(n) — exact replica of the v0.1.15 IIFE's per-SBI text rule:
-//   `sbi.text=n===0?"0":(n>=4?"N":""+n)`
-// n===0 → "0" (dim block); n=1/2/3 → digit (lit block); n>=4 (capped) → "N".
-// (v0.1.14 used disp(em,n) that joined emoji+digit; v0.1.15 splits into 4 SBIs.)
+// sbiBlockText(n) — digit-only replica of the v0.1.16 IIFE's per-SBI text
+// rule's DIGIT component. The full v0.1.16 rule is
+//   `sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)`
+// — this function returns just the digit/"N" part (and "0" for the zero
+// case so callers can compare a 4-array of digit-strings cleanly).
+// n===0 → "0" (paired with ⚪ in the IIFE); n=1/2/3 → digit (paired with
+// the light's colored ball in the IIFE); n>=4 (capped to 4) → "N".
+// (v0.1.14 used disp(em,n) that joined emoji+digit; v0.1.15 splits into 4
+// SBIs with digit-in-colored-block; v0.1.16 splits into 4 SBIs with emoji-
+// ball+digit. This replica tracks only the digit-capping behavior shared
+// across v0.1.15 and v0.1.16 — the emoji prepend is exercised in
+// test-iife.mjs IIFE.38.)
 function sbiBlockText(n) {
   return n === 0 ? '0' : n >= 4 ? 'N' : String(n);
 }

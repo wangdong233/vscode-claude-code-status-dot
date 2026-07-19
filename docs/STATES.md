@@ -23,7 +23,7 @@
 >
 > 背景：PreToolUse 心跳会在 permission 弹窗前把 `state=running` 落盘，CC 又无 permission-pending hook 事件可纠正该文件；v0.1.7 只在"读不到文件"时 return，故 pending 期间 reader 持续用黄 `running.svg` 盖 CC 蓝点（本 bug）。v0.1.8 让 reader 直接读 CC 自己的 pending flag，不再依赖状态文件是否巧合缺失。避免重复造一套 waiting 态。
 >
-> **v0.1.13/v0.1.14 双重性（dual-nature）**：pending 在 per-tab（本节）由 CC 原生蓝点表达（reader `__ccsdPending` yield）；但在 **底部 SBI 聚合**（§7）里以独立 🔵 蓝灯呈现，由 writer 新增的 `Notification` hook case 写 `pending:true`（§2），reader 聚合独立计数。**per-tab 不读 `pending` 字段**（避免重复造一套 waiting 态），**聚合不读 `__ccsdPending`**（那是 per-panel-live，无窗口级通道）——同一语义，两个通道，各管各的 UI 表面。（v0.1.13 用 commandCenter 作聚合载体但 reload 后不稳；v0.1.14 回退到单 SBI（emoji+数字分开）；v0.1.15 拆成 4 个彩色块 SBI（数字内置块里），pending 通道不变。）
+> **v0.1.13/v0.1.14 双重性（dual-nature）**：pending 在 per-tab（本节）由 CC 原生蓝点表达（reader `__ccsdPending` yield）；但在 **底部 SBI 聚合**（§7）里以独立 🔵 蓝灯呈现，由 writer 新增的 `Notification` hook case 写 `pending:true`（§2），reader 聚合独立计数。**per-tab 不读 `pending` 字段**（避免重复造一套 waiting 态），**聚合不读 `__ccsdPending`**（那是 per-panel-live，无窗口级通道）——同一语义，两个通道，各管各的 UI 表面。（v0.1.13 用 commandCenter 作聚合载体但 reload 后不稳；v0.1.14 回退到单 SBI（emoji+数字分开）；v0.1.15 拆成 4 个彩色块 SBI（数字内置块里）；v0.1.16 恢复 emoji 球样式保留 4 SBI 固定位置结构，pending 通道不变。）
 >
 > **点几何（所有 SVG 统一）**：`viewBox 0 0 24 24`，状态点 `cx=18 cy=6 r=6`，mask 挖空 `r=7.5`（margin 1.5）。16px tab 渲染下点直径 8px，视觉占比 20%（竞品角标黄金比区间：macOS dock badge ~20-25%）。
 
@@ -156,38 +156,39 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 
 ---
 
-## 7. 底部 SBI 4 灯（v0.1.15 拆 4 块、数字内置彩色块；v0.1.13→v0.1.14→v0.1.15 沿用设计改进）
+## 7. 底部 SBI 4 灯（v0.1.16 恢复圆点 emoji + 4 SBI 固定位置结构；v0.1.13→v0.1.14→v0.1.15→v0.1.16 沿用设计改进）
 
-> **本节是 v0.1.15 的底部 StatusBarItem（SBI）4 灯**。v0.1.14 用单个 SBI 渲染 `🟢N 🟡N 🔵N 🔴N`（emoji 球 + 数字分开）；v0.1.15 **拆成 4 个独立 SBI**，每灯是一个**带数字的彩色块**（白字数字内置在彩色背景块里），用户反馈"球+数字分开"不满意，这是最接近的方案。VSCode `StatusBarItem.backgroundColor` 字段只接 `ThemeColor`（不接 hex 字符串——见 `mainThreadStatusBar.ts` `$setEntry` 签名），故复用 4 个内置 `statusBarItem.*Background` 主题色，**无需 patch package.json**（沿用 v0.1.14 的"CC 升级不破坏"设计）。
+> **本节是 v0.1.16 的底部 StatusBarItem（SBI）4 灯**。v0.1.15 用 4 个独立 SBI 渲染"数字内置彩色块"（白字数字内置在主题色块里）；v0.1.16 **恢复圆点 emoji 样式**（用户反馈"色块效果不如圆点好看"），但**保留 v0.1.15 的 4 SBI 独立结构**让圆点位置固定——这是 4 SBI 相对 v0.1.14 单 SBI 的核心优势：v0.1.14 的单 SBI 把 `🟢N 🟡N 🔵N 🔴N` 拼成一个 text，任何计数变化导致数字宽度变化（如 🟡9→🟡N）都会让整行左右位移；4 SBI 把每灯放进独立的固定宽度 slot（`<球><1数字>`），无论数字怎么变，4 个 slot 的位置永远不动。
 >
-> **v0.1.15 关键变化**：
-> - **单 SBI → 4 SBI**：v0.1.14 是 1 个 `createStatusBarItem`，text 是 `🟢N 🟡N 🔵N 🔴N`；v0.1.15 改为 `globalThis.__ccsdSbis`（4 元素数组），每灯独立 `createStatusBarItem(StatusBarAlignment.Left, pri)`，priority `-9996..-9999` 让 4 块并排在 Left 项最右端（done 最左 / interrupted 最右）。
-> - **数字内置彩色块**：每块 text 就是数字本身（`0`/`1`/`2`/`3`/`N`）；count>0 → `backgroundColor=ThemeColor(bg)` 彩色块 + `color="#ffffff"` 白字；count=0 → 透明底 + `statusBarItem.deactivatedForeground` 灰字 `"0"`（块仍可见但暗）。无 emoji、无 disp()、无 DIM。
-> - **4 个内置主题色**：🟢done=`statusBarItem.remoteBackground`（绿，SSH/WSL 远程指示器色）/ 🟡running=`statusBarItem.warningBackground`（黄）/ 🔵pending=`statusBarItem.prominentBackground`（饱和蓝）/ 🔴interrupted=`statusBarItem.errorBackground`（红）。借色不借义——用户重主题时 4 块跟着重主题（一致性 feature）。
-> - **设计改进沿用 v0.1.14**：🔵 pending 第 4 灯、done>5min/running>30min/interrupted>24h 三路 GC、pending 与 state 独立计数、`__ccsdPanelCount` lifecycle、三层 try/catch 隔离——**完全保留**，仅切换渲染载体。
+> **v0.1.16 关键变化**：
+> - **恢复圆点 emoji**：每灯 text 是 `<球><数字>`（如 `🟢3`、`⚪0`），球自带色——🟢🟡🔵🔴 是预填充彩色的 Unicode 字符（U+1F7E2 / U+1F7E1 / U+1F535 / U+1F534），**无需 ThemeColor 块、无需白字**。0 灭用 ⚪（U+26AA，灰白轮廓球）替代该灯的彩球，配数字 "0"——占位同非0（`<球><1数字>`），位置不位移。
+> - **移除 v0.1.15 色块**：删 `sbi.backgroundColor` 赋值（4 个 `statusBarItem.*Background` ThemeColor 全不用）、删 `sbi.color` 赋值（白字/灰字翻转不用）、删 `__ccsdSbiLitBgs` / `__ccsdSbiDimClr` 缓存（无 ThemeColor 要缓存）。`SBI_LIGHTS_CFG` 表 `bg` 字段被 `em` 字段取代（每灯的"亮"球 emoji codepoint）；新增 `SBI_DIM_EM` 常量（共享"灭"球 ⚪）。
+> - **保留 4 SBI 结构**：`globalThis.__ccsdSbis`（4 元素数组）、每灯独立 `createStatusBarItem(StatusBarAlignment.Left, pri)`、priority `-9996..-9999` 让 4 slot 并排在 Left 项最右端（done 最左 / interrupted 最右）——**完全沿用 v0.1.15 的固定位置架构**。
+> - **设计改进沿用 v0.1.14/v0.1.15**：🔵 pending 第 4 灯、done>5min/running>30min/interrupted>24h 三路 GC、pending 与 state 独立计数、`__ccsdPanelCount` lifecycle、三层 try/catch 隔离——**完全保留**，仅切换渲染载体（色块→球）。
 >
-> **历史**：v0.1.14 用单 SBI 渲染 `🟢N 🟡N 🔵N 🔴N`（emoji + 数字分开）；v0.1.13 用 commandCenter 顶部居中（reload 后不稳，已弃）；v0.1.10-v0.1.12 用 SBI 动态 text。v0.1.15 回到 SBI 载体但拆成 4 块以支持"数字内置彩色块"。
+> **历史**：v0.1.15 拆 4 SBI 用色块（白字数字内置彩色背景块，用户反馈不满意）；v0.1.14 用单 SBI 渲染 `🟢N 🟡N 🔵N 🔴N`（emoji + 数字分开，挤一个 text）；v0.1.13 用 commandCenter 顶部居中（reload 后不稳，已弃）；v0.1.10-v0.1.12 用 SBI 动态 text。v0.1.16 是"圆点回归 + 4 SBI 固定位置"的合流：球好看（v0.1.14 验证）+ 位置稳定（v0.1.15 验证）。
 >
-> **与 §6 废弃条无关**：§6 是 v0.1.2 在 CC webview 上的色块条（v0.1.3 已删）；本节是 v0.1.15 在运行时创建的底部 4 个 SBI。v0.1.13 在 CC extension `package.json` 上的 commandCenter 4 灯在 v0.1.14 已删（install 自动清理残留）。
+> **与 §6 废弃条无关**：§6 是 v0.1.2 在 CC webview 上的色块条（v0.1.3 已删）；本节是 v0.1.16 在运行时创建的底部 4 个 SBI。v0.1.13 在 CC extension `package.json` 上的 commandCenter 4 灯在 v0.1.14 已删（install 自动清理残留）。
 
 ### 7.1 位置与显示
 
-- **位置**：VSCode **状态栏左侧**（`StatusBarAlignment.Left`，4 个 SBI 各自 priority `-9996`/`-9997`/`-9998`/`-9999` → 在所有 Left 项中排序最靠右，故最接近可见中心）。4 块并排，固定左→右顺序：**🟢done(-9996) 🟡running(-9997) 🔵pending(-9998) 🔴interrupted(-9999)**（priority 越高越靠左——见 `vscode.d.ts` StatusBarItem.priority 注释）。
-- **每块渲染**（计数封顶 0/1/2/3/N，N=4+）：
-  - **计数 0（暗块）**：text `"0"` + color `statusBarItem.deactivatedForeground`（灰）+ backgroundColor `undefined`（透明底，继承状态栏底色）。块仍可见但暗——用户随时看到 4 个分类存在。
-  - **计数 1/2/3（亮块 + 白字数字）**：text `"1"`/`"2"`/`"3"` + color `"#ffffff"`（白）+ backgroundColor 对应 ThemeColor 彩色块（绿/黄/蓝/红）。数字直接内置在彩色块里。
-  - **计数 >=4（亮块 + 白字 "N"）**：text `"N"` + color `"#ffffff"`（白）+ backgroundColor 彩色块。`cap(n){return n>=4?4:n}` 把 4+ 截到 4，text 规则 `n===0?"0":(n>=4?"N":""+n)` 把 4 渲染为 `N`。
-- **无拼接 text**：v0.1.14 的 `disp(EM[0],cd)+" "+...` 拼接已删——4 块各自独立 SBI，每块只显示自己的数字。视觉上 4 块之间有状态栏标准间隔（~4-6px），是"4 个独立徽章"观感而非黏在一起的色带。
-- **tooltip**：4 块共享同一 tooltip——`Claude Code: X done, Y running, Z pending, W interrupted`（未截顶的真实计数）。悬停任一块即见全部分类明细。
-- **click**：4 块的 `.command` 字段都设为 `ccStatusDot.sbiClick`（运行时 `vs.commands.registerCommand` 注册，**无需** package.json contribution）。点击任一块弹 `InformationMessage`（读 `__ccsdSbis[0].tooltip`）。不打断、不开 modal、不切 tab。
+- **位置**：VSCode **状态栏左侧**（`StatusBarAlignment.Left`，4 个 SBI 各自 priority `-9996`/`-9997`/`-9998`/`-9999` → 在所有 Left 项中排序最靠右，故最接近可见中心）。4 slot 并排，固定左→右顺序：**🟢done(-9996) 🟡running(-9997) 🔵pending(-9998) 🔴interrupted(-9999)**（priority 越高越靠左——见 `vscode.d.ts` StatusBarItem.priority 注释）。
+- **每 slot 渲染**（计数封顶 0/1/2/3/N，N=4+）：
+  - **计数 0（灰球 + 0）**：text `"⚪0"`（DIM_EM + "0"）——⚪ U+26AA 灰白轮廓球 + 数字 "0"。**占位同非0**（球+1数字宽度），位置不位移。
+  - **计数 1/2/3（彩球 + 数字）**：text `"🟢1"`/`"🟡2"`/`"🔵3"`/`"🔴1"` 等（CFG[k].em + 数字）。球自带色（绿/黄/蓝/红），数字紧跟球右侧。
+  - **计数 >=4（彩球 + "N"）**：text `"🟢N"` 等（CFG[k].em + "N"）。`cap(n){return n>=4?4:n}` 把 4+ 截到 4，text 规则 `(n>=4?"N":""+n)` 把 4 渲染为 `N`。`n===0?DIM_EM:CFG[k].em` 选球（0 用灰球 ⚪，非0 用该灯的彩球）。
+- **位置固定（v0.1.16 核心优势）**：每 slot 长度恒为 `<球><1数字>`（数字都是 1 字符：0-3 或 N）→ 4 slot 的位置永远不动，无论计数怎么变化。这是 4 SBI 相对 v0.1.14 单 SBI 的核心改进：v0.1.14 的 `🟢N 🟡N 🔵N 🔴N` 拼接 text 会让整行因数字宽度变化而左右位移（如某灯 9→N，整行短 1 字符，后续灯全往左挪）；4 SBI 把每灯放进独立 slot，slot 之间是状态栏标准间隔（~4-6px），是"4 个独立徽章"观感而非黏在一起的色带。
+- **tooltip**：4 slot 共享同一 tooltip——`Claude Code: X done, Y running, Z pending, W interrupted`（未截顶的真实计数）。悬停任一 slot 即见全部分类明细。
+- **click**：4 slot 的 `.command` 字段都设为 `ccStatusDot.sbiClick`（运行时 `vs.commands.registerCommand` 注册，**无需** package.json contribution）。点击任一 slot 弹 `InformationMessage`（读 `__ccsdSbis[0].tooltip`）。不打断、不开 modal、不切 tab。
 - **配色映射**（`SBI_LIGHTS_CFG` patch.ts 单一真相源，`JSON.stringify` 烘焙进 IIFE 的 `var CFG=[...]`）：
-  - 🟢 done → `statusBarItem.remoteBackground`（绿；SSH/WSL 远程指示器色，所有内置主题里都是绿）
-  - 🟡 running → `statusBarItem.warningBackground`（黄/橙；VSCode 1.66 加入的 SBI 警告色）
-  - 🔵 pending → `statusBarItem.prominentBackground`（饱和蓝/突出色；少数深色主题偏紫，仍可与绿/黄/红区分）
-  - 🔴 interrupted → `statusBarItem.errorBackground`（红；标准 SBI 错误色）
-- **为何不用 `StatusBarItemKind` 枚举**：公开的 `kind` 只有 4 个值（normal/warning/error/prominent），给不了 4 种颜色（只有 3 种非默认）。必须用底层 `backgroundColor = new ThemeColor(id)` 才能精确控色。
-- **配色保真**：4 块由 VSCode 状态栏渲染（跟随当前主题的 `statusBarItem.*Background` 色值，跨平台稳定——不再依赖 emoji 字体栈，这是 v0.1.15 相对 v0.1.14 的改进：v0.1.14 的 🟢🟡🔵🔴 emoji 在 Win7/无 emoji 字体的 Linux 可能黑白或豆腐块，v0.1.15 的 ThemeColor 块始终是主题定义的彩色）。
-- **形状限制**：每个 SBI 是带轻微 `border-radius`（SBI 容器自带 CSS）的**小圆角矩形**，不是正圆。VSCode SBI 无 `border-radius` API、无 overlay API——"球状块"在 SBI 限制下接受最接近方案（圆角方块）。每块约 25-30px 宽（单字符 + SBI 默认 padding），4 块约 110-130px 总宽。
+  - 🟢 done → `\u{1F7E2}`（绿色大圆，U+1F7E2）
+  - 🟡 running → `\u{1F7E1}`（黄色大圆，U+1F7E1）
+  - 🔵 pending → `\u{1F535}`（蓝色大圆，U+1F535）
+  - 🔴 interrupted → `\u{1F534}`（红色大圆，U+1F534）
+  - ⚪ dim/zero → `\u{26AA}`（白色中等圆，U+26AA，渲染为灰白轮廓）
+- **为何恢复 emoji 球（用户反馈驱动）**：v0.1.15 的色块（白字数字内置主题色块）虽然配色跟随 VSCode 主题、跨平台稳定，但用户反馈"色块效果不如圆点好看"。v0.1.16 把视觉原语切回 emoji 球——球是预填充彩色的 Unicode 字符，自带颜色，渲染路径比 v0.1.15 更简单（无 backgroundColor、无 color 缓存、无 lit/dim 翻转）。代价是回到了 v0.1.14 的 emoji 字体依赖（Win7/无 emoji 字体的 Linux/headless 可能黑白或豆腐块——见 §7.5 已知限制）。
+- **为何保留 4 SBI 结构（v0.1.15 改进沿用）**：v0.1.16 不回退到 v0.1.14 的单 SBI，因为单 SBI 的 `🟢N 🟡N 🔵N 🔴N` 拼接会让整行因数字宽度变化而位移。4 SBI 给每灯独立固定宽度 slot，位置永远不动——这是 v0.1.15 的位置稳定性胜利，v0.1.16 在视觉切回球的同时完整保留此架构。
+- **配色保真**：emoji 球在 macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ Linux（Noto Color Emoji）走系统彩色 emoji 字体栈。Win7 或无 emoji 字体的 headless 环境可能黑白或豆腐块（v0.1.14 同款限制，回到 emoji 即回到此依赖）。
 
 ### 7.2 数据源与刷新
 
@@ -198,13 +199,13 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
   3. `state === "interrupted"` 且 `mtime > INTERRUPTED_RETENTION_MS`（24 小时，v0.1.13 review fix，见 §7.5）→ **不计入 🔴 interrupted**（🔴 灯不再随累积的 abandoned 中断会话单调增长；文件不删，保留诊断价值）。
   4. 其余按字面 `state` 分桶（`running`/`done`/`interrupted`；`idle` 不参与任何灯——既不算绿也不算黄）。
   5. **`pending` 独立计数 + 同款 GC**（v0.1.13 review fix）：`j.pending === true && st !== "idle"` → `ag.pending++`。`st` 是上面 3 条 decay 规则**已修正过**的值——崩溃/killed 会话（无论原 state 是 running/done/interrupted，只要 mtime 触发 decay 即降级为 idle）的 pending 自动被跳过。这关掉了"🔵 永久粘在 1"的假阳性（一个在权限弹窗时被强杀的会话 state=running/pending=true，running 桶被规则 2 治理但 pending 仍被计入——review 发现并修复）。**与 state 正交**：一个活会话（st 非 idle）可同时计入 🟡 running AND 🔵 pending（典型：running turn 卡在权限弹窗）。
-- 4 个计数各自 `cap(n)` 截顶到 4，组 `counts=[cd,cr,cp,ci]`，IIFE 遍历 `globalThis.__ccsdSbis`（4 元素数组）逐块 mutate `.text`（数字/"N"/"0"）+ `.color`（白/灰）+ `.backgroundColor`（ThemeColor 彩色块/undefined 透明）+ `.tooltip`（共享）+ `.show()`。**直接赋值**——无 setContext 中介，无 when-clause 切换，无 reload 韧性问题（reload 后第一个 CC panel 打开即重建 4 个 SBI + timer，首 tick 即推真实计数）。
+- 4 个计数各自 `cap(n)` 截顶到 4，组 `counts=[cd,cr,cp,ci]`，IIFE 遍历 `globalThis.__ccsdSbis`（4 元素数组）逐 slot mutate `.text`（`(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)` → `🟢3` / `⚪0` / `🟡N` 等）+ `.tooltip`（共享）+ `.show()`。**仅 mutate text**——v0.1.16 不再触碰 `.color` / `.backgroundColor`（球 emoji 自带色，无需主题块/白字）。**直接赋值**——无 setContext 中介，无 when-clause 切换，无 reload 韧性问题（reload 后第一个 CC panel 打开即重建 4 个 SBI + timer，首 tick 即推真实计数）。
 - 失败文件 try/catch 跳过（与 reader 一贯风格，不崩扩展）。
 
 ### 7.3 全局单例 + click command 注册
 
-- **4 SBI + timer 单例**：`globalThis.__ccsdSbis`（4 元素数组）+ `globalThis.__ccsdSbiTimer` 守卫——IIFE 入口检测，第一个 CC panel 创建 4 个 SBI（遍历 `CFG` 的 for 循环）+ `setInterval`，后续 panel 复用。`__ccsdPanelCount` 计数器：IIFE 入口 `+1`，`onDidDispose` 内 `-1`；归零（窗口里**最后一个** CC panel 关闭）时立即 `clearInterval(__ccsdSbiTimer)` + **遍历 `__ccsdSbis` 逐个 `dispose()` 并置数组为 null**——4 块整个消失，不会冻结在陈旧计数上（典型场景：CC 崩溃、被强杀）。新 panel 打开时 4 SBI + timer 重建，首 tick 自然推真实计数。
-- **click command 单例**：`globalThis.__ccsdSbiCmdRegistered` 守卫——首个 CC panel 的 IIFE 调 `vs.commands.registerCommand("ccStatusDot.sbiClick", handler)` 一次。`registerCommand` 无需 package.json contribution（palette/menu/keybinding 才需要）；同 host 重复注册同 ID 会抛错，故必须 guard。handler 读 `__ccsdSbis[0].tooltip`（4 块共享同一 tooltip，每 500ms 刷新）作 `InformationMessage` 弹出——点击任一块即见当前 4 灯计数。4 块的 `.command` 字段都设为该 ID，VSCode 点击时自动 execute。
+- **4 SBI + timer 单例**：`globalThis.__ccsdSbis`（4 元素数组）+ `globalThis.__ccsdSbiTimer` 守卫——IIFE 入口检测，第一个 CC panel 创建 4 个 SBI（遍历 `CFG` 的 for 循环）+ `setInterval`，后续 panel 复用。`__ccsdPanelCount` 计数器：IIFE 入口 `+1`，`onDidDispose` 内 `-1`；归零（窗口里**最后一个** CC panel 关闭）时立即 `clearInterval(__ccsdSbiTimer)` + **遍历 `__ccsdSbis` 逐个 `dispose()` 并置数组为 null**——4 slot 整个消失，不会冻结在陈旧计数上（典型场景：CC 崩溃、被强杀）。新 panel 打开时 4 SBI + timer 重建，首 tick 自然推真实计数。
+- **click command 单例**：`globalThis.__ccsdSbiCmdRegistered` 守卫——首个 CC panel 的 IIFE 调 `vs.commands.registerCommand("ccStatusDot.sbiClick", handler)` 一次。`registerCommand` 无需 package.json contribution（palette/menu/keybinding 才需要）；同 host 重复注册同 ID 会抛错，故必须 guard。handler 读 `__ccsdSbis[0].tooltip`（4 slot 共享同一 tooltip，每 500ms 刷新）作 `InformationMessage` 弹出——点击任一 slot 即见当前 4 灯计数。4 slot 的 `.command` 字段都设为该 ID，VSCode 点击时自动 execute。
 - **命名空间**：`__ccsd*` 项目级前缀（沿用 v0.1.11 决策）——避免占用 CC 自己的 `__cc*` 全局命名空间（见 patch.ts `restoreWebview()` 内 `cc-status-bar-injected` 墓碑注释的警示）。
 
 ### 7.4 与 per-tab 四态点的关系（共存，不替代）
@@ -214,36 +215,35 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 | 位置 | 每个 CC tab 图标 + Open Editors 视图 | 状态栏左侧（near-center），全局唯一 |
 | 灯数 | 4（idle/running/done/interrupted，permission 走 CC 原生蓝） | 4（🟢done 🟡running 🔵pending 🔴interrupted），固定显示 |
 | 粒度 | 单 session | 全部 session 汇总计数（0-3+N 封顶） |
-| 渲染 | `panelTab.iconPath`（SVG） | 4 个 SBI 各自 `text`（数字内置彩色块，直接 mutate `.text`/`.color`/`.backgroundColor`） |
-| 中断闪烁 | 红色快闪（`flashSeq%2`） | 仅静态数字（不闪） |
-| 颜色保真 | SVG 嵌入 hex，跨平台稳定 | ThemeColor 跟随主题，跨平台稳定（v0.1.15 改进——v0.1.14 emoji 字体依赖已消除） |
+| 渲染 | `panelTab.iconPath`（SVG） | 4 个 SBI 各自 `text`（`<球><数字>`，直接 mutate `.text`——无 `.color`/`.backgroundColor`） |
+| 中断闪烁 | 红色快闪（`flashSeq%2`） | 仅静态彩球+数字（不闪） |
+| 颜色保真 | SVG 嵌入 hex，跨平台稳定 | emoji 球自带色，依赖 OS emoji 字体栈（v0.1.16 回到 v0.1.14 同款依赖——v0.1.15 的 ThemeColor 跨平台稳定优势暂舍） |
 | permission 处理 | `__ccsdPending` yield→CC 原生蓝点（per-panel-live） | 🔵 pending 灯（writer 写 `pending:true`，reader 聚合独立计数） |
 | 陈旧 running 治理（>30min mtime） | **不应用**——tab 保持 🟡 黄提醒"此会话可能已死" | **应用 §7.2 启发式**——不计 🟡，避免单个崩溃会话永久占黄 1（两者计数因此可能差 1） |
 | 陈旧 interrupted 治理（>24h mtime） | **不应用**——tab 保持 🔴 红快闪提醒"此会话被中断过" | **应用 §7.2 规则 3**——不计 🔴，避免累积的 abandoned 中断会话让 🔴 单调增长（两者计数因此可能差 N） |
 | done>5min 归 idle | 应用（§4） | 应用（§7.2，不计 🟢） |
 | 刷新来源 | 每 panel 一个 per-tab `setInterval`（500ms） | 窗口级单例 `setInterval`（500ms） |
 | 失败隔离 | per-tab setInterval 的 `p.iconPath=` 单行 try/catch；onDidDispose 注册也在 try/catch 内 | SBI 创建 + SBI timer 创建 + aggregation body + onDidDispose 各自独立 try/catch（§7.5） |
-| reload 韧性 | 高（per-tab 渲染不依赖 window-scoped state） | **高（v0.1.14 改进）**——SBI 直接 mutate text，无 setContext key 在 reload 后丢失的问题 |
+| reload 韧性 | 高（per-tab 渲染不依赖 window-scoped state） | **高（v0.1.14 改进，v0.1.16 沿用）**——SBI 直接 mutate text，无 setContext key 在 reload 后丢失的问题 |
 
 **互补**：tab 点告诉你"是哪个会话在跑/停了"；SBI 4 灯告诉你"全局总共有几个在跑/停/等输入/中断了"，不用数 tab。
 
-### 7.5 异常安全 + 已知限制（v0.1.11；v0.1.12 加固；v0.1.13 沿用；v0.1.14 重组；v0.1.15 4-SBI 适配）
+### 7.5 异常安全 + 已知限制（v0.1.11；v0.1.12 加固；v0.1.13 沿用；v0.1.14 重组；v0.1.15 4-SBI 适配；v0.1.16 emoji-ball 切换）
 
-**异常安全（v0.1.15 当前层次）**：v0.1.12 给 SBI 创建 + SBI 单例 timer 创建各加一层独立 try/catch（v0.1.13 重组为 Cc 单例 timer，v0.1.14 重组回 SBI 创建 + SBI 单例 timer，v0.1.15 把单 SBI 创建改为 4-SBI 创建循环——timer 创建 + aggregation body + onDidDispose 注册的 try/catch 模式完整沿用）。当前结构（自内向外）：
-1. **4-SBI 创建 try/catch**（v0.1.12 沿用，v0.1.15 适配为循环）：吞遍历 `CFG` 的 4 次 `createStatusBarItem` / `.command=` / `.color=` / `.show()` 的抛出（disposed host、API 暂态失败），让 IIFE 继续走到 per-tab tick + onDidDispose 注册。
+**异常安全（v0.1.16 当前层次）**：v0.1.12 给 SBI 创建 + SBI 单例 timer 创建各加一层独立 try/catch（v0.1.13 重组为 Cc 单例 timer，v0.1.14 重组回 SBI 创建 + SBI 单例 timer，v0.1.15 把单 SBI 创建改为 4-SBI 创建循环，v0.1.16 在此基础上移除了 `.color`/`.backgroundColor` 的赋值——timer 创建 + aggregation body + onDidDispose 注册的 try/catch 模式完整沿用）。当前结构（自内向外）：
+1. **4-SBI 创建 try/catch**（v0.1.12 沿用，v0.1.15 适配为循环，v0.1.16 简化为只设 text/tooltip/command/show）：吞遍历 `CFG` 的 4 次 `createStatusBarItem` / `.command=` / `.show()` 的抛出（disposed host、API 暂态失败），让 IIFE 继续走到 per-tab tick + onDidDispose 注册。
 2. **SBI 单例 timer 创建 try/catch**（v0.1.12 沿用）：吞掉 `setInterval` 注册的抛出，让 IIFE 继续走到 per-tab tick + onDidDispose 注册。
-3. **Aggregation body try/catch**（v0.1.11）：包住 readdirSync/statSync/JSON.parse/per-SBI text+color+bg mutate 等所有 filesystem + JSON + SBI-mutate 操作。
-4. **SBI click command 注册 try/catch**（v0.1.13 新增，v0.1.14 沿用）：包住单次 `vs.commands.registerCommand` 调用——注册抛错（重复、API 暂态）只跳过，不传播到 SBI 创建或 SBI timer 创建。
+3. **Aggregation body try/catch**（v0.1.11）：包住 readdirSync/statSync/JSON.parse/per-SBI text mutate 等所有 filesystem + JSON + SBI-mutate 操作（v0.1.16 text mutate 不再触碰 color/backgroundColor）。
+4. **SBI click command 注册 try/catch**（v0.1.13 新增，v0.1.14/v0.1.15/v0.1.16 沿用）：包住单次 `vs.commands.registerCommand` 调用——注册抛错（重复、API 暂态）只跳过，不传播到 SBI 创建或 SBI timer 创建。
 5. **per-tab setInterval** + **onDidDispose 注册** 各自的 try/catch（v0.1.9 起）。
 
 这 5 层互相独立：聚合链路上的任何失败都不会拖垮 per-tab 主链路，反之亦然；SBI 创建 / timer 创建失败也不会传播到 CC 的 `update_session_state` handler（否则会经逗号操作符链向上抛出，砖化会话状态追踪 + 跳过 per-tab setInterval + 跳过 onDidDispose 注册导致 panel 计数永久泄漏）。
 
 **已知限制（诚实声明）**：
 
-- **v0.1.15 已消除 emoji 字体依赖**：v0.1.14 及更早的 SBI 用 emoji（🟢🟡🔵🔴⚪）渲染，Win7/无 emoji 字体的 Linux/headless 环境可能黑白或豆腐块。v0.1.15 改用 4 个内置 `statusBarItem.*Background` ThemeColor + 白字数字，**完全跟随 VSCode 主题色**，跨平台稳定（不再依赖 OS emoji 字体栈）。形状仍是 SBI 圆角矩形（非正圆）——这是 StatusBarItem API 限制，无 `border-radius` API。
-- **SBI 位置受状态栏拥挤度影响**：极负 priority（-9996..-9999）让 4 块在 Left 项里最靠右、最接近可见中心，但 VSCode StatusBarItem API 无真正的"居中"槽位——若用户装了大量其它 Left 项 SBI，或其它扩展声明了落在 `-9996..-9999` 区间的 priority（无所有权/命名空间机制），4 块可能被高优 Left 项**挤到角落**或被**插入分隔**（其它扩展的 SBI 出现在我们的 done 与 interrupted 之间，把 4 块视觉上劈开）。VSCode StatusBarItem.priority 无所有权/命名空间，碰撞完全静默，`--status` 也不检测——若见到这种被分隔的情况，请在 issue 里上报。这是 API 限制，无法绕开。
-- **`prominentBackground` 在少数深色主题偏紫**：🔵 pending 块用 `statusBarItem.prominentBackground`，在大多数主题里是饱和蓝，但在某些深色主题里可能是紫色。仍可与绿/黄/红区分；若用户报告不爽，可在 `SBI_LIGHTS_CFG` 一处改为 `editor.selectionBackground` 或 `activityBarBadge.background`（都更稳定地蓝）。
-- **click command 需 IIFE 注册**：reload 后若用户未打开 CC panel，`ccStatusDot.sbiClick` 未注册，此时点任一 SBI 块不响应（VSCode 静默 no-op）。但 4 块本身也未创建（IIFE 仅由 panel 打开触发），所以一致性 OK。
+- **v0.1.16 重新依赖 emoji 字体栈**：v0.1.15 改用 4 个内置 `statusBarItem.*Background` ThemeColor + 白字数字，**完全跟随 VSCode 主题色**，跨平台稳定；v0.1.16 因用户反馈"色块效果不如圆点好看"切回 emoji 球，重新引入 v0.1.14 同款的 emoji 字体依赖——Win7/无 emoji 字体的 Linux/headless 环境可能黑白或豆腐块。macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ 主流 Linux（Noto Color Emoji）正常显示彩色。这是用户审美的有意取舍：球好看 > 跨平台一致。形状是 emoji 字形自带的正圆（不再是 v0.1.15 的 SBI 圆角矩形）。
+- **SBI 位置受状态栏拥挤度影响**：极负 priority（-9996..-9999）让 4 slot 在 Left 项里最靠右、最接近可见中心，但 VSCode StatusBarItem API 无真正的"居中"槽位——若用户装了大量其它 Left 项 SBI，或其它扩展声明了落在 `-9996..-9999` 区间的 priority（无所有权/命名空间机制），4 slot 可能被高优 Left 项**挤到角落**或被**插入分隔**（其它扩展的 SBI 出现在我们的 done 与 interrupted 之间，把 4 slot 视觉上劈开）。VSCode StatusBarItem.priority 无所有权/命名空间，碰撞完全静默，`--status` 也不检测——若见到这种被分隔的情况，请在 issue 里上报。这是 API 限制，无法绕开。
+- **click command 需 IIFE 注册**：reload 后若用户未打开 CC panel，`ccStatusDot.sbiClick` 未注册，此时点任一 SBI slot 不响应（VSCode 静默 no-op）。但 4 slot 本身也未创建（IIFE 仅由 panel 打开触发），所以一致性 OK。
 - **30-min 陈旧 running 启发式对单工具 >30min 假阳性（v0.1.14 R3 文档加固）**：`PreToolUse`/`PostToolUse` 只在工具调用前后各触发一次——单个工具执行期间 writer 没有 heartbeat，状态文件 mtime 停在 PreToolUse 时刻。任何执行超过 30 分钟的单一工具（长 Bash 命令、慢 MCP 工具、长视频渲染、大测试套件、用户故意写的 `sleep 1800`）期间，聚合层会把该会话从 🟡 running 误判为 idle 并降级，黄色灯熄灭，即便 CC 仍在真实工作。这是 **聚合层** 的偏差——per-tab 仍保持 🟡 黄（§7.4 表"陈旧 running 治理"行的有意分歧恰好兜底：用户看到 tab 黄就知道该会话还活着，只是 SBI 不计它）。缓解措施：(a) 30min 阈值覆盖了绝大多数真实工具调用；(b) 下一次 PreToolUse/PostToolUse（多步工具链的下一步）会刷新 mtime 并让聚合重新计入；(c) 阈值若上调（如 60min）可在 `SBI_RUNNING_STALE_MS` 一处改 + 同步本文档 §7.2 即可。未来若引入工具执行中 heartbeat 可根治。这是 v0.1.10 引入该启发式时遗漏的已知反例，并非新缺陷。
 - **崩溃/被杀 CC 会话的残留状态文件治理（v0.1.13 review 加固，v0.1.14 沿用）**：`SessionEnd` 删除文件是 writer 契约（§2），但 CC 崩溃 / 被强杀 / hook pipe 断裂不发 `SessionEnd` 的 session，其 `<sid>.json` 会残留。v0.1.13 review 前只治理 🟡 running（§7.2 的 30-min mtime 启发式）和 🟢 done（§4 的 5-min 规则），🔵 pending 与 🔴 interrupted 都有缺口；review 后补齐为完整四态 GC（聚合层，不动 per-tab 渲染）：
   - 🟡 running：30-min mtime 启发式（§7.2 规则 2）→ idle，不计黄。**仅聚合**——per-tab 保持 🟡 黄提醒"此会话可能已死"（见 §7.4 表"陈旧 running 治理"行的有意分歧）。

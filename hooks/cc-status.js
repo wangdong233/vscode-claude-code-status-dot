@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.1.14:58d356e5*/
+/*cc-status-dot-hook:v0.1.14:d9957d1e*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -8,15 +8,12 @@
  * Version + content-hash stamp above (cc-status-dot-hook:vX.Y.Z:HASH) mirrors
  * the IIFE's INJECT_VERSION+hash banner so installRuntimeFiles can detect a
  * stale on-disk hook copy the same way patchExtension detects a stale IIFE
- * (architecture-review round-2 added the version banner; round-3 added the
- * content-hash suffix to close the asymmetry the round-2 review left —
- * previously a dev could edit the hook body and forget to bump HOOK_VERSION,
- * and the patcher would silently overwrite an installed hook whose body
- * differed, no warn. The hash detects intra-version drift). Bump HOOK_VERSION
- * in lockstep with INJECT_VERSION in patch.ts when the writer CONTRACT
- * changes; re-stamp the hash whenever the BODY changes. The hash is sha1 of
- * the file body with the banner line replaced by an empty line, truncated to
- * 8 hex chars (HOOK_HASH_LEN in patch.ts).
+ * (the version banner catches inter-version drift; the content-hash suffix
+ * catches intra-version drift — a dev who edited the hook body but forgot to
+ * bump HOOK_VERSION). Bump HOOK_VERSION when the writer CONTRACT changes;
+ * re-stamp the hash whenever the BODY changes. The hash is sha1 of the file
+ * body with the banner line replaced by an empty line, truncated to 8 hex
+ * chars (HOOK_HASH_LEN in patch.ts).
  *
  * Reads a CC hook event from stdin (JSON) and writes a status file to
  *   ~/.claude/cc-tab-status/<session_id>.json
@@ -238,11 +235,22 @@ function deriveStatus(payload, cur) {
         cur &&
         typeof cur.since === 'number' &&
         cur.since > 0;
+      // Preserve cur.error too when we are keeping an interrupted state: an
+      // orphan SubagentStop arriving AFTER StopFailure already wrote
+      // {state:'interrupted', error:'tool_blocked'} would otherwise rewrite
+      // the file as {state:'interrupted'} and silently drop the error enum
+      // (STATES.md §4b surfaces that enum in the user-visible notification).
+      // Only carried over when we are preserving the FULL interrupted state
+      // (preserveSince=true); any path that flips state or refreshes since
+      // also drops error (matches StopFailure's role as the SOLE writer of
+      // the error field).
+      const preserveError = preserveSince && curState === 'interrupted' && typeof cur.error === 'string' && cur.error;
       // Always persist the decremented count. Returning null would leave a stale
       // activeSubagents on disk and mislead the following Stop into running.
       return {
         state: next > 0 ? 'running' : curState,
         since: preserveSince ? cur.since : now,
+        ...(preserveError ? { error: cur.error } : {}),
         activeSubagents: next,
         pending: cur.pending === true,
       };
@@ -385,77 +393,163 @@ async function main() {
   // ~/.claude/cc-tab-status/). Reject path separators and the `.`/`..`
   // sentinels; allow everything else (CC's session_id is uuid-ish).
   const sid = payload && payload.session_id;
-  if (typeof sid !== 'string' || /[\\/]/.test(sid) || sid === '.' || sid === '..') process.exit(0);
+  // Also reject the empty string. Without `!sid` an empty
+  // payload.session_id slips through all four clauses and `path.join(STATE_DIR,
+  // '.json')` resolves to a hidden file at the dir root (verified). CC never
+  // sends this, but the §B path-traversal suite exists for exactly the "hook
+  // is a passive receiver of arbitrary stdin" defensive posture — the empty
+  // string is the same class of edge as `.` / `..`.
+  if (typeof sid !== 'string' || !sid || /[\\/]/.test(sid) || sid === '.' || sid === '..') process.exit(0);
 
   const filePath = path.join(STATE_DIR, sid + '.json');
 
-  // --- Bounded GC (architecture-review round-2 finding: STATE_DIR had no GC) ---
+  // --- Bounded GC (UserPromptSubmit prune of files > 24h) ---
   // On UserPromptSubmit (a cheap, once-per-turn event) prune status files whose
   // mtime exceeds INTERRUPTED_RETENTION_MS (24h). Crashed/killed CC processes
   // never send SessionEnd, so without this prune ~/.claude/cc-tab-status/ would
   // grow unbounded over months of daily use — every 500ms aggregation tick does
   // fs.readdirSync + per-file readFileSync + JSON.parse over the WHOLE dir, so
   // an unbounded long tail makes the SBI tick perceptibly heavier for zero
-  // diagnostic value (the user cannot map an old UUID to a session after the
-  // fact). The aggregation layer ALREADY discounts these files for COUNTING
-  // (interrupted>24h→idle, running>30min→idle, done>5min→idle); this prune also
-  // reclaims the bytes. Best-effort: wrapped in try/catch so a transient FS
-  // error never blocks the primary write. SKIP the current session's file —
-  // we're about to overwrite it with a fresh mtime anyway, and racing a prune
-  // against our own write would be pointless churn.
+  // diagnostic value. The aggregation layer ALREADY discounts these files for
+  // COUNTING (interrupted>24h→idle, running>30min→idle, done>5min→idle); this
+  // prune also reclaims the bytes. Best-effort: wrapped in try/catch so a
+  // transient FS error never blocks the primary write. SKIP the current
+  // session's file — we're about to overwrite it with a fresh mtime anyway.
   //
-  // Cross-session prune (round-3 review fix): the GC iterates the WHOLE
-  // STATE_DIR, so a UserPromptSubmit for session X may unlink a stale file
-  // belonging to ANY other session Y in the same CC installation. This is the
-  // SECOND writer-side deletion trigger (STATES.md §2 lists SessionEnd as the
-  // first). Functional rationale: there is no per-session cleanup hook besides
+  // Cross-session prune: the GC iterates the WHOLE STATE_DIR, so a
+  // UserPromptSubmit for session X may unlink a stale file belonging to ANY
+  // other session Y in the same CC installation. This is the SECOND writer-
+  // side deletion trigger (STATES.md §2 lists SessionEnd as the first).
+  // Functional rationale: there is no per-session cleanup hook besides
   // SessionEnd, and crashed sessions never fire SessionEnd — a global mtime
   // sweep is the only practical reclamation path. The skip-current rule below
   // protects only the writer's own target file; third-party files older than
   // 24h are pruned on any other session's UserPromptSubmit.
   //
-  // Interrupted-preservation contract (round-3 review fix, STATES.md §7.5):
-  // INTERRUPTED_RETENTION_MS(24h) is the SAME threshold the aggregation layer
-  // uses to decay interrupted>24h to idle FOR COUNTING — but STATES.md §7.5
-  // explicitly guarantees "文件不删（保留诊断价值，用户可手动检查…）". The
-  // aggregation layer honors that (it filters at READ time, leaves the bytes);
-  // the writer's GC must honor it too — so we PARSE the file's state and SKIP
-  // the prune when state==='interrupted'. A user who comes back to inspect
-  // yesterday's interrupted session via ~/.claude/cc-tab-status/<sid>.json will
-  // still find the file. Running/done/idle-by-default files older than 24h
-  // remain prunable (no diagnostic value, reader already discounts them).
+  // Interrupted-preservation contract (STATES.md §7.5): INTERRUPTED_RETENTION_MS
+  // (24h) is the SAME threshold the aggregation layer uses to decay
+  // interrupted>24h to idle FOR COUNTING — but STATES.md §7.5 explicitly
+  // guarantees "文件不删（保留诊断价值，用户可手动检查…）". The aggregation
+  // layer honors that (it filters at READ time, leaves the bytes); the writer's
+  // GC must honor it too — so we PARSE the file's state and SKIP the prune
+  // when state==='interrupted'. A user who comes back to inspect yesterday's
+  // interrupted session via ~/.claude/cc-tab-status/<sid>.json will still find
+  // the file. Running/done/idle-by-default files older than 24h remain
+  // prunable (no diagnostic value, reader already discounts them).
+  //
+  // Throttle: UserPromptSubmit is latency-sensitive (CC waits on the hook
+  // process before continuing the turn), so a full readdirSync + per-file
+  // statSync + (for stale candidates) readFileSync + JSON.parse + unlinkSync
+  // sweep on EVERY prompt is the wrong place for unbounded work — on an
+  // install with months of accumulated stale files the first UserPromptSubmit
+  // after launch pays the entire cost. A sidecar file at STATE_DIR/.gc
+  // records the timestamp of the last sweep; we skip the sweep unless
+  // GC_INTERVAL_MS (10 min) has elapsed. Tests can override via the
+  // CC_STATUS_GC_INTERVAL_MS env var (set to 0 to force the sweep on every
+  // UserPromptSubmit). The per-call unlink cap (GC_MAX_UNLINKS) bounds the
+  // worst case even when the sweep does fire.
+  //
+  // .tmp reaping: writeJsonAtomic uses `<sid>.<pid>.<ts>.tmp` + renameSync,
+  // and a SIGKILL/disk-full/EPERM between writeFileSync and renameSync leaves
+  // an orphan tmp that the `.endsWith('.json')` filter would otherwise skip
+  // forever. The sweep also reaps `.tmp` files older than GC_TMP_AGE_MS
+  // (5 min, well beyond any legitimate renameSync latency).
+  //
+  // TOCTOU: the original stat→unlink sequence could race a concurrent writer
+  // (session B writing between our statSync and unlinkSync). We re-statSync
+  // IMMEDIATELY before unlinkSync and bail if mtimeMs moved forward — the
+  // window is now bounded by the cost of a single statSync (microseconds),
+  // so a freshly-written file by another process survives.
+  const GC_INTERVAL_MS = Number(process.env.CC_STATUS_GC_INTERVAL_MS) || 10 * 60 * 1000;
+  const GC_MAX_UNLINKS = 50; // cap per-call unlinks so a single prompt never blocks on thousands
+  const GC_TMP_AGE_MS = 5 * 60 * 1000; // orphan .tmp reaping threshold
+  const gcSidecar = path.join(STATE_DIR, '.gc');
   const event = payload && payload.hook_event_name;
+  let gcRun = false;
   if (event === 'UserPromptSubmit') {
     try {
-      const cutoff = Date.now() - INTERRUPTED_RETENTION_MS;
-      for (const name of fs.readdirSync(STATE_DIR)) {
-        if (!name.endsWith('.json')) continue;
-        const p = path.join(STATE_DIR, name);
-        if (p === filePath) continue; // never prune the file we're about to write
-        try {
-          const st = fs.statSync(p);
-          if (st.mtimeMs >= cutoff) continue; // fresh enough — keep
-          // Interrupted-preservation: parse the state and skip interrupted
-          // files so the §7.5 "do not delete (diagnostic value preserved)"
-          // contract holds at the writer layer too. Parse failure on a
-          // corrupt/empty file falls through to prune — a corrupt file has
-          // no diagnostic value and the reader already skips it.
-          let preserved = false;
+      const now = Date.now();
+      let lastGc = 0;
+      try {
+        lastGc = fs.statSync(gcSidecar).mtimeMs || 0;
+      } catch {
+        /* no sidecar yet — lastGc stays 0, sweep will fire */
+      }
+      if (now - lastGc >= GC_INTERVAL_MS) {
+        gcRun = true;
+        const cutoff = now - INTERRUPTED_RETENTION_MS;
+        const tmpCutoff = now - GC_TMP_AGE_MS;
+        let unlinked = 0;
+        for (const name of fs.readdirSync(STATE_DIR)) {
+          if (unlinked >= GC_MAX_UNLINKS) break;
+          const isJson = name.endsWith('.json');
+          const isTmp = !isJson && name.endsWith('.tmp');
+          if (!isJson && !isTmp) continue;
+          if (name === '.gc') continue;
+          const p = path.join(STATE_DIR, name);
+          if (p === filePath) continue; // never prune the file we're about to write
           try {
-            const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
-            if (parsed && parsed.state === 'interrupted') preserved = true;
+            let st;
+            try {
+              st = fs.statSync(p);
+            } catch {
+              continue; // stat failed — best-effort skip
+            }
+            if (isJson) {
+              if (st.mtimeMs >= cutoff) continue; // fresh enough — keep
+              // Interrupted-preservation: parse the state and skip interrupted
+              // files so the §7.5 "do not delete (diagnostic value preserved)"
+              // contract holds at the writer layer too. Parse failure on a
+              // corrupt/empty file falls through to prune — a corrupt file has
+              // no diagnostic value and the reader already skips it.
+              let preserved = false;
+              try {
+                const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+                if (parsed && parsed.state === 'interrupted') preserved = true;
+              } catch {
+                /* corrupt JSON — fall through to prune */
+              }
+              if (preserved) continue;
+              // TOCTOU narrow: re-stat right before unlink; if another process
+              // wrote the file between our first stat and now (mtimeMs moved
+              // forward), keep it — they just refreshed it.
+              try {
+                const st2 = fs.statSync(p);
+                if (st2.mtimeMs > st.mtimeMs) continue;
+              } catch {
+                /* re-stat failed — best-effort proceed to unlink */
+              }
+            } else {
+              // .tmp orphan: reap only if older than GC_TMP_AGE_MS (a legitimate
+              // renameSync in flight is subsecond; 5 min is well past any
+              // reasonable hold). No TOCTOU narrowing needed — a tmp file is by
+              // definition not the target of any renameSync.
+              if (st.mtimeMs >= tmpCutoff) continue;
+            }
+            try {
+              fs.unlinkSync(p);
+              unlinked++;
+            } catch {
+              /* best-effort per-file */
+            }
           } catch {
-            /* corrupt JSON — fall through to prune */
+            /* best-effort per-file */
           }
-          if (!preserved) fs.unlinkSync(p);
+        }
+        // Touch the sidecar so subsequent prompts within GC_INTERVAL_MS skip.
+        // Best-effort: a failed touch just means the next prompt re-sweeps
+        // (cheap on a healthy dir).
+        try {
+          fs.writeFileSync(gcSidecar, String(now));
         } catch {
-          /* best-effort per-file */
+          /* non-fatal */
         }
       }
     } catch {
       /* STATE_DIR missing / unreadable — nothing to prune */
     }
   }
+  void gcRun;
 
   // --- Read current on-disk status (read-modify-write for activeSubagents + pending) ---
   // Missing/corrupt file or any read error -> benign defaults, stay silent.
@@ -463,14 +557,26 @@ async function main() {
   // no prior file should fall back to 'running' — subagents only exist within
   // a running turn. The writer contract (header line 13) forbids persisting
   // 'idle'; the explicit curState bound in deriveStatus enforces it regardless.
-  // v0.1.13 review fix: pending is now loaded into cur (previously the writer
-  // was structurally write-only on pending and every event picked true/false,
-  // so background events like SubagentStart/SubagentStop false-cleared a
-  // parent's open permission prompt). Loading pending lets the Subagent*
-  // cases write `pending: cur.pending === true` and preserve the flag across
-  // background events. Coerced to a strict boolean — a hand-edited / corrupt
+  // pending is loaded into cur (background events like SubagentStart/Stop
+  // write `pending: cur.pending === true` and preserve the flag across
+  // background events). Coerced to a strict boolean — a hand-edited / corrupt
   // file with `pending: "true"` (string) or `pending: 1` must NOT read as
   // truthy here (the reader's `j.pending === true` check would disagree).
+  //
+  // RMW race hazard (documented): the read-modify-write sequence is NOT atomic
+  // across processes. The counter (activeSubagents) race is bounded by Method
+  // B payload correction on every event that carries background_tasks, and is
+  // clamped at 0, so drift has no functional effect on the reader. The SAME
+  // race equally applies to `pending`, which has NO correcting signal — a
+  // Notification (writes pending:true) racing a SubagentStop (preserves
+  // cur.pending===false) for the same session means last-rename-wins, and if
+  // SubagentStop renames last the commandCenter blue light is false-cleared
+  // for the duration of the open prompt. The drift is BOUNDED: the next
+  // user-driven event (UserPromptSubmit / Pre/PostToolUse / Stop / StopFailure)
+  // OR a re-fired Notification from CC corrects it within one user action.
+  // A structural fix would be a separate <sid>.pending sidecar written only
+  // by Notification, but for a UI status flag the documented bound is the
+  // pragmatic bar.
   let cur = { state: 'running', activeSubagents: 0, since: 0, pending: false };
   try {
     const prev = JSON.parse(fs.readFileSync(filePath, 'utf8'));

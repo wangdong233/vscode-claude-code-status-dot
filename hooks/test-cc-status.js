@@ -54,10 +54,13 @@ function readState(home) {
 
 /** Fire one hook event against a fresh-ish cc-status.js process. `extra` is
  *  merged into the payload (use {background_tasks:[...]} to drive method B,
- *  {error:'rate_limit'} for StopFailure). Returns the post-fire status.
- *  R3 e2e-review fix: capture the spawnSync result and loudly fail the test
- *  if the child crashed (non-zero exit OR stderr output). Without this, a
- *  writer regression (dynamic-import error, accidental syntax error, Node-
+ *  {error:'rate_limit'} for StopFailure). Returns the post-fire status, or
+ *  `undefined` when the child crashed — calling check/checkBoth on undefined
+ *  is a no-op so a single crash is counted exactly ONCE (here) instead of
+ *  being double-counted as both 'child crash' and a misleading 'expected
+ *  done got null' next. Captures the spawnSync result and loudly fails the
+ *  test if the child crashed (non-zero exit OR stderr output). Without this,
+ *  a writer regression (dynamic-import error, accidental syntax error, Node-
  *  version incompatibility) leaves no file on disk and the test reports a
  *  generic "expected=done got=null" with no hint that the child crashed —
  *  actively hurting diagnosis. The check is per-fire so the failing case is
@@ -85,6 +88,10 @@ function fire(home, event, extra) {
         ' stderr=' +
         JSON.stringify((r.stderr || '').trim().slice(0, 200)),
     );
+    // Return undefined so check/checkBoth can recognize the crash and skip
+    // their own fail++ (otherwise a single crash would surface as 2 fails
+    // and the second message would point at a fake logic bug).
+    return undefined;
   }
   return readState(home);
 }
@@ -145,6 +152,10 @@ function runSeq(events) {
 }
 
 function check(name, got, expectedState) {
+  // Skip if fire() already recorded a child crash (got === undefined) —
+  // avoids double-counting the same crash as both 'child crash' and a
+  // misleading 'expected done got null'.
+  if (got === undefined) return false;
   const gotState = got ? got.state : null;
   const ok = gotState === expectedState;
   if (ok) {
@@ -161,6 +172,7 @@ function check(name, got, expectedState) {
 /** Like check(), but also asserts activeSubagents — used for regression cases
  *  that care about residual-counter cleanup, not just the visible state. */
 function checkBoth(name, got, expectedState, expectedActive) {
+  if (got === undefined) return false;
   const gotState = got ? got.state : null;
   const gotActive = got ? got.activeSubagents : null;
   const ok = gotState === expectedState && gotActive === expectedActive;
@@ -725,6 +737,8 @@ function listAllJsonUnder(home) {
     '.',
     '..',
     '.../foo',
+    '', // arch-r2 medium fix: empty string must be rejected (else path.join
+    //   produces STATE_DIR/.json — a hidden file at the dir root).
   ];
   for (const sid of malicious) {
     const home = newTempHome();
@@ -861,6 +875,7 @@ function listAllJsonUnder(home) {
     { label: 'object {x:1}', val: { x: 1 } },
     { label: 'null', val: null },
     { label: 'boolean true', val: true },
+    { label: 'boolean false', val: false },
   ];
   for (const e of badErrs) {
     const home = newTempHome();
@@ -882,6 +897,162 @@ function listAllJsonUnder(home) {
           JSON.stringify(got && got.error),
       );
     }
+  }
+}
+
+// --- §E. cur.since=0 corrupt-file guards (preserveSince + Notification) ----
+//
+// Round-2 code-style review gap: the strict `> 0` guards in deriveStatus —
+// preserveSince (SubagentStop line ~240) and curSince (Notification line ~273)
+// — were added specifically so a corrupt/hand-edited file with cur.since=0
+// does NOT permanently stick the session in a terminal state (the reader's
+// `since && now-since>DONE_TO_IDLE_MS` tick is falsy for 0, so the file would
+// never decay to idle). Until now these guards had ZERO direct coverage —
+// every other test enters via UserPromptSubmit/Stop which writes since=now(>0),
+// so the `> 0` branch was never exercised. These two tests plant cur.since=0
+// directly and assert the writer refreshes since=now on the next event.
+{
+  // §E.1 SubagentStop on a corrupt {state:'done', since:0} file must
+  //      REFRESH since=now (the > 0 guard rejects the corrupt since=0 and
+  //      falls through to the since=now branch). Regression: flipping `> 0`
+  //      back to `>= 0` would preserve the corrupt 0 and the session would
+  //      permanently read done.
+  const home = newTempHome();
+  plantStatus(home, SID, { state: 'done', since: 0, activeSubagents: 0 });
+  const before = readState(home);
+  const got = fire(home, 'SubagentStop');
+  const okRefreshed = got && typeof got.since === 'number' && got.since > 0 && got.since !== before.since;
+  if (okRefreshed) {
+    pass++;
+    console.log('  PASS  §E.1 SubagentStop on corrupt since=0 → since refreshed to now (>0 guard)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §E.1 SubagentStop on corrupt since=0 expected since refreshed to >0,' +
+        ' got since=' +
+        (got && got.since) +
+        ' (before=' +
+        before.since +
+        ')',
+    );
+  }
+}
+{
+  // §E.2 Notification on a corrupt {state:'running', since:0} file must
+  //      ALSO refresh since=now (same > 0 guard in the Notification case).
+  const home = newTempHome();
+  plantStatus(home, SID, { state: 'running', since: 0, activeSubagents: 0 });
+  const before = readState(home);
+  const got = fire(home, 'Notification');
+  const okRefreshed = got && typeof got.since === 'number' && got.since > 0 && got.since !== before.since;
+  const okPending = got && got.pending === true;
+  if (okRefreshed && okPending) {
+    pass++;
+    console.log('  PASS  §E.2 Notification on corrupt since=0 → since refreshed to now + pending=true');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §E.2 Notification on corrupt since=0 expected since>0 + pending=true,' +
+        ' got since=' +
+        (got && got.since) +
+        ' pending=' +
+        (got && got.pending),
+    );
+  }
+}
+
+// --- §F. SubagentStop preserves error on already-interrupted sessions ------
+//
+// Round-3 business-logic fix: an orphan SubagentStop arriving AFTER StopFailure
+// already wrote {state:'interrupted', error:'tool_blocked'} would rewrite the
+// file as {state:'interrupted'} (no error) — silently dropping the error enum
+// that the reader surfaces in the user-visible notification (STATES.md §4b).
+// Pin the fix: when SubagentStop preserves an interrupted state (preserveSince
+// path), it must ALSO propagate cur.error.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'StopFailure', { error: 'rate_limit' });
+  // File now: {state:'interrupted', error:'rate_limit', since:now, ...}
+  const afterFail = readState(home);
+  const okSetup = afterFail && afterFail.state === 'interrupted' && afterFail.error === 'rate_limit';
+  // Orphan SubagentStop arrives — should preserve interrupted + since + error.
+  const got = fire(home, 'SubagentStop');
+  const okState = got && got.state === 'interrupted';
+  const okError = got && got.error === 'rate_limit';
+  const okSince = got && got.since === afterFail.since;
+  if (okSetup && okState && okError && okSince) {
+    pass++;
+    console.log('  PASS  §F SubagentStop after StopFailure preserves interrupted + error enum + since');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §F expected interrupted+error=rate_limit+preserved since(' +
+        (afterFail && afterFail.since) +
+        '),' +
+        ' got state=' +
+        (got && got.state) +
+        ' error=' +
+        JSON.stringify(got && got.error) +
+        ' since=' +
+        (got && got.since) +
+        (okSetup ? '' : ' [setup failed]'),
+    );
+  }
+}
+
+// --- §G. GC also reaps orphan .tmp files -----------------------------------
+//
+// Round-3 architecture fix: writeJsonAtomic uses `<sid>.<pid>.<ts>.tmp` +
+// renameSync; a SIGKILL/EPERM between writeFileSync and renameSync leaves an
+// orphan .tmp that the `.endsWith('.json')` filter would skip forever. The
+// GC now also reaps .tmp files older than GC_TMP_AGE_MS (5 min). Plant a
+// stale .tmp + a fresh .tmp, fire UserPromptSubmit (with CC_STATUS_GC_INTERVAL_MS=0
+// to force the sweep), and assert exactly which survived.
+{
+  const home = newTempHome();
+  fs.mkdirSync(path.join(home, '.claude', 'cc-tab-status'), { recursive: true });
+  const dir = path.join(home, '.claude', 'cc-tab-status');
+  const MIN = 60 * 1000;
+  // Stale .tmp (10 min ago) — should be REAPED.
+  const staleTmp = path.join(dir, 'stale.123.999.tmp');
+  fs.writeFileSync(staleTmp, 'orphan');
+  const dOld = new Date(Date.now() - 10 * MIN);
+  fs.utimesSync(staleTmp, dOld, dOld);
+  // Fresh .tmp (10s ago) — should SURVIVE (could be a legitimate renameSync in flight).
+  const freshTmp = path.join(dir, 'fresh.456.888.tmp');
+  fs.writeFileSync(freshTmp, 'in-flight');
+  const dNew = new Date(Date.now() - 10 * 1000);
+  fs.utimesSync(freshTmp, dNew, dNew);
+  // Force GC on this UserPromptSubmit (sweep throttle off).
+  const env = Object.assign({}, process.env, {
+    HOME: home,
+    USERPROFILE: home,
+    CC_STATUS_GC_INTERVAL_MS: '0',
+  });
+  const r = spawnSync(process.execPath, [SCRIPT], {
+    input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'gc-tmp-test', prompt: 'x' }),
+    env,
+    encoding: 'utf8',
+  });
+  const okExit = r.status === 0 && !(r.stderr && r.stderr.trim());
+  const staleGone = !fs.existsSync(staleTmp);
+  const freshKept = fs.existsSync(freshTmp);
+  if (okExit && staleGone && freshKept) {
+    pass++;
+    console.log('  PASS  §G GC reaps stale .tmp (>5min) and keeps fresh .tmp (<5min)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §G exit=' +
+        r.status +
+        ' staleGone=' +
+        staleGone +
+        ' freshKept=' +
+        freshKept +
+        ' stderr=' +
+        JSON.stringify((r.stderr || '').trim().slice(0, 100)),
+    );
   }
 }
 

@@ -19,13 +19,13 @@
 
 ## ✨ 特点
 
-- 🔧 **一行装**——`npx vscode-claude-code-status-dot` 自动 patch CC 扩展、接 8 个 hooks、复制运行时文件，幂等可重跑
+- 🔧 **一行装**——`npx vscode-claude-code-status-dot` 自动 patch CC 扩展、接 9 个 hooks、复制运行时文件，幂等可重跑
 - 🛡️ **持久化不怕删源**——运行时副本落在 `~/.claude/cc-status-dot/`，删项目源 / 清 npx 缓存 / CC 自动更新都不影响已 patch 的扩展
 - 🎨 **四态全覆盖**——比 CC 原生（只有蓝/橙两点）更完整：idle / running / done / interrupted 全可视化
 - 🔔 **完成/中断通知**——macOS 走系统通知（屏幕右上角下拉，带声音，无按钮，几秒自动消失），前台后台都弹，不用一直盯着
 - ⚙️ **workflow 跑期间保持 running**——后台 subagent/cron 在飞时不假绿，`Stop` 权威裁定
 - 📂 **Open Editors 同步**——左上角"打开的编辑器"视图里的 CC tab 也带状态点
-- 📊 **底部 SBI 4 块（数字内置彩色块）**——状态栏左侧（`StatusBarAlignment.Left` + 4 块 priority `-9996..-9999`，靠近可见中心）显示 4 个**带数字的彩色块**并排（v0.1.15 替代 v0.1.14 的"emoji 球+数字分开"）：🟢完成（绿块）/ 🟡运行（黄块）/ 🔵待输入（蓝块）/ 🔴中断（红块）。每块计数封顶 0/1/2/3/N（>=4 显示 N）；count>0 → 块亮（`statusBarItem.*Background` 彩色 + 白字数字内置块里），count=0 → 块暗（透明底 + 灰字 "0"，块仍可见）。🔵 = 待用户输入（permission/question/elicit，writer 新增 Notification hook case）。完成超 5 分钟算 idle 不计绿。v0.1.15 用 **4 个独立运行时 StatusBarItem + 4 个内置主题色**（无需 patch CC package.json，IIFE 每 500ms 直接 mutate 每块的 text/color/backgroundColor）——配色跟随 VSCode 主题，跨平台稳定（不再依赖 emoji 字体栈）。
+- 📊 **底部 SBI 4 圆点（emoji 球+数字，位置固定）**——状态栏左侧（`StatusBarAlignment.Left` + 4 块 priority `-9996..-9999`，靠近可见中心）显示 4 个**带数字的圆点**并排（v0.1.16 恢复 v0.1.14 的 emoji 球样式，保留 v0.1.15 的 4 SBI 独立结构让位置固定）：🟢完成 / 🟡运行 / 🔵待输入 / 🔴中断。每灯 text 是 `<球><数字>`（球自带色，**移除了 v0.1.15 的彩色背景块 + 白字**），计数封顶 0/1/2/3/N（>=4 显示 N）；count>0 → 球亮（🟢/🟡/🔵/🔴 自带彩色 + 数字紧跟），count=0 → 灰球 ⚪ + "0"（占位同非0，**位置不位移**——这是 4 SBI 相对 v0.1.14 单 SBI 的核心优势：v0.1.14 的 `🟢N 🟡N 🔵N 🔴N` 拼接会因为数字宽度变化整行左右蹿，4 SBI 各自固定球+1数字宽度的 slot 永远不动）。🔵 = 待用户输入（permission/question/elicit，writer 新增 Notification hook case）。完成超 5 分钟算 idle 不计绿。v0.1.16 用 **4 个独立运行时 StatusBarItem + emoji 球**（无需 patch CC package.json，无需 ThemeColor 块，IIFE 每 500ms 直接 mutate 每 slot 的 text）——emoji 球自带颜色，渲染路径比 v0.1.15 更简单（无 backgroundColor、无 color 缓存、无 lit/dim 翻转）。
 - ↩️ **零副作用一键还原**——`--revert` 从 `.bak` 完整恢复 extension.js、外科手术式移除 hooks、保留你的用户数据
 
 > ⚠️ **诚实声明**：本项目是一个 **patch（补丁），不是独立扩展**——VSCode 不允许第三方扩展修改另一个扩展的 webview tab 图标，唯一可行路径是 patch CC 自己的 `extension.js`。代价：CC 自动更新会覆盖，需重跑命令。
@@ -85,7 +85,7 @@ npx vscode-claude-code-status-dot
 2. 自动清理旧版残留（如有）；
 3. **备份** `extension.js` → `extension.js.bak`（仅首次）；
 4. 注入定时器（设 tab 图标 + done/interrupted 通知）；
-5. 把 **8 个 hook 事件**写入 `~/.claude/settings.json`（带 `# cc-status-dot-managed` 标记，幂等）；
+5. 把 **9 个 hook 事件**写入 `~/.claude/settings.json`（带 `# cc-status-dot-managed` 标记，幂等）；
 6. 复制运行时副本（4 个 SVG = idle + running + done + error，加 hook 脚本）到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`）。
 
 > **或从源码（开发态）**：
@@ -238,6 +238,8 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 - **minified anchor 脆性**：patch 依赖 CC 代码里两段精确字符串，版本漂移时 patcher 报 "Anchor mismatch" 拒绝写入（扩展不会被破坏）。
 - **VSCode 完全关闭时不通知**：IIFE 跑在扩展宿主进程，VSCode 关闭则不运行 → 不通知。
 - **系统通知点击不跳 tab**：osascript 无 click callback，通知仅提醒，回 VSCode 靠 tab 绿/红点定位。
+- **SBI priority 区间无所有权**（v0.1.16）：底部 4 圆点占用 `StatusBarAlignment.Left` 的 priority 区间 `-9996..-9999`（4 单位相邻），VSCode StatusBarItem API 无扩展级命名空间/所有权机制——其它扩展若声明同区间 priority，可能在 4 slot 之间插入分隔，把 done/running/pending/interrupted 视觉上劈开（这是 4 SBI 相对单 SBI 的核心架构权衡：治愈了"数字宽度变化整行位移"，却引入"行被外部分隔"的新失败模式，且碰撞窗口扩大 4 倍；主流场景下不会触发，STATES.md §7.5 已诚实声明此限制）。
+- **emoji 字体栈依赖**（v0.1.16）：底部 SBI 圆点是 emoji 字形（🟢🟡🔵🔴⚪），依赖系统 emoji 字体栈——macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ 主流 Linux（Noto Color Emoji）正常显示彩色；Win7 / 部分 headless Linux / 无 emoji 字体的远程 SSH 环境可能渲染为黑白字形或豆腐块。v0.1.15 的 `ThemeColor` 路径跨平台稳定，v0.1.16 切回 emoji 球是有意取舍（用户审美偏好 > 跨平台一致）。
 
 ---
 

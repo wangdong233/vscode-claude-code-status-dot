@@ -78,13 +78,18 @@ const DONE_TO_IDLE_MS = 5 * 60 * 1000; // 5 min — §4 done→idle
 const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC
 const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
 
-// v0.1.15: the SBI surface renders each light as its own StatusBarItem with
-// the count digit INSIDE a colored block (white text on themed background).
-// There is no longer a single joined SBI.text string — each of the 4 SBIs has
-// its own text (digit-or-"N" or "0" for dim). expectedSbiTexts() below returns
-// the array of 4 per-SBI texts; assertions compare via JSON.stringify.
-// (v0.1.14 baked a SBI_LIGHT_EMOJI array + SBI_DIM_EMOJI here to build the
-// joined "🟢3 🟡1 🔵2 ⚪" string — both are gone in v0.1.15.)
+// v0.1.16: the SBI surface renders each light as its own StatusBarItem with
+// text `<ball><digit>` (e.g. "🟢3", "⚪0"). The v0.1.15 colored-block treatment
+// (digit on themed backgroundColor + white text) was reverted to emoji balls
+// per user feedback, but the 4-SBI structure is KEPT (positions stay fixed
+// when counts change). This replica covers ONLY the DIGIT-capping part of
+// the v0.1.16 per-SBI text rule (n===0→"0", 1/2/3→digit, >=4→"N"); the
+// emoji-ball prepend (`<ball>` selection via DIM_EM vs CFG[k].em) is
+// exercised in test-iife.mjs IIFE.38. (v0.1.14 baked a SBI_LIGHT_EMOJI array
+// + SBI_DIM_EMOJI here to build the joined "🟢3 🟡1 🔵2 ⚪" string; both
+// were gone in v0.1.15; v0.1.16 brings emoji balls back via CFG[k].em +
+// DIM_EM in the IIFE but this replica stays digit-only since capping is
+// what these assertions lock.)
 
 let pass = 0;
 let fail = 0;
@@ -177,13 +182,18 @@ function cap(n) {
   return n >= 4 ? 4 : n;
 }
 
-// sbiBlockText(n) — exact replica of the v0.1.15 IIFE's per-SBI text rule:
-//   `sbi.text=n===0?"0":(n>=4?"N":""+n)`
-// n===0 → "0" (block dim: gray text + transparent bg); n=1/2/3 → digit
-// (block lit: white text on themed bg); n>=4 (capped to 4) → "N".
+// sbiBlockText(n) — digit-only replica of the v0.1.16 IIFE's per-SBI text
+// rule's DIGIT component. The full v0.1.16 rule is
+//   `sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)`
+// — this function returns just the `(n>=4?"N":""+n)` part (or "0" for the
+// zero case so callers can compare a 4-array of digit-strings cleanly).
+// n===0 → "0" (paired with ⚪ in the IIFE); n=1/2/3 → digit (paired with
+// the light's colored ball in the IIFE); n>=4 (capped to 4) → "N".
 // (v0.1.14 used a separate disp(em,n) that joined emoji+digit into one
-// StatusBarItem.text; v0.1.15 splits into 4 SBIs so each shows just the
-// digit inside its own colored block.)
+// StatusBarItem.text; v0.1.15 split into 4 SBIs with digit-in-colored-block;
+// v0.1.16 split into 4 SBIs with emoji-ball+digit. This replica tracks only
+// the digit-capping behavior shared across v0.1.15 and v0.1.16 — the emoji
+// prepend is exercised in test-iife.mjs IIFE.38.)
 function sbiBlockText(n) {
   return n === 0 ? '0' : n >= 4 ? 'N' : String(n);
 }

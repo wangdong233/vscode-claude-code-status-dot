@@ -55,19 +55,25 @@ function check(name, cond, detail) {
   }
 }
 
-// Mirror patch.ts SBI_LIGHTS_CFG — single source of truth is patch.ts; this
-// local copy must stay in sync. v0.1.15 replaced the v0.1.14 SBI_LIGHTS emoji
-// array + SBI_DIM_EMOJI with this config table: each entry pins the light's
-// background ThemeColor id (a VScode built-in statusBarItem.* color) and
-// StatusBarItem.priority. Order matches the IIFE's `var CFG=[...]` array:
-//   done(🟢) / running(🟡) / pending(🔵) / interrupted(🔴)
-// Used to assert the IIFE bakes the same config via JSON.stringify in buildIIFE.
+// Mirror patch.ts SBI_LIGHTS_CFG + SBI_DIM_EM — single source of truth is
+// patch.ts; this local copy must stay in sync. v0.1.16 replaced the v0.1.15
+// `bg` field (a ThemeColor id for a colored block background) with the `em`
+// field (the "on" emoji ball codepoint — a pre-colored Unicode circle that
+// carries its own green/yellow/blue/red fill, no theme dependency). The
+// shared dim/zero ball SBI_DIM_EM (⚪ U+26AA gray outline circle) replaces
+// any light's colored ball when its count is 0. Order matches the IIFE's
+// `var CFG=[...]` array: done(🟢) / running(🟡) / pending(🔵) /
+// interrupted(🔴). Used to assert the IIFE bakes the same config via
+// JSON.stringify in buildIIFE. Emoji written as \u{XXXX} escapes so the
+// test file mirrors patch.ts source form (ASCII-only); the parsed values
+// are the actual emoji chars.
 const SBI_LIGHTS_CFG = [
-  { key: 'done', bg: 'statusBarItem.remoteBackground', pri: -9996 }, // 🟢 leftmost
-  { key: 'running', bg: 'statusBarItem.warningBackground', pri: -9997 }, // 🟡
-  { key: 'pending', bg: 'statusBarItem.prominentBackground', pri: -9998 }, // 🔵
-  { key: 'interrupted', bg: 'statusBarItem.errorBackground', pri: -9999 }, // 🔴 rightmost
+  { key: 'done', em: '\u{1F7E2}', pri: -9996 }, // 🟢 leftmost
+  { key: 'running', em: '\u{1F7E1}', pri: -9997 }, // 🟡
+  { key: 'pending', em: '\u{1F535}', pri: -9998 }, // 🔵
+  { key: 'interrupted', em: '\u{1F534}', pri: -9999 }, // 🔴 rightmost
 ];
+const SBI_DIM_EM = '\u{26AA}'; // ⚪ — shared zero-count gray outline ball
 
 // --- Obtain the IIFE string via --check-iife ---------------------------------
 function getIife() {
@@ -206,10 +212,10 @@ check(
   'IIFE.21b banner carries content-hash suffix',
   /\/\*cc-status-dot-injected:v\d+\.\d+\.\d+:[0-9a-f]{8}\*\//.test(iife),
 );
-// v0.1.15 banner specifically: locks the digit-in-block pivot version (a
-// regression that rolled back to v0.1.14 would surface here before any SBI
-// assertion fires).
-check('IIFE.21c banner carries v0.1.15 stamp', /\/\*cc-status-dot-injected:v0\.1\.15:/.test(iife));
+// v0.1.16 banner specifically: locks the emoji-ball restoration version (a
+// regression that rolled back to v0.1.15 colored blocks would surface here
+// before any SBI assertion fires).
+check('IIFE.21c banner carries v0.1.16 stamp', /\/\*cc-status-dot-injected:v0\.1\.16:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -232,26 +238,37 @@ check('IIFE.23 no bare `seq` counter (M8 rename)', !/\bseq\s*%/.test(iife) && !/
 // retains the project-scoped __ccsd* prefix (NOT CC's __cc* namespace — see
 // the `cc-status-bar-injected` tombstone in restoreWebview()).
 
-// SBI text + dim color set at CREATION TIME (not only inside the timer tick).
-// Business-logic review round-2 (carried from v0.1.14): the SBI was created
-// with .tooltip set but .text NEVER set, leaving it zero-width/invisible for
-// the ~500ms until the first tick — and silently permanent if the timer-setup
-// try/catch swallowed a throw. v0.1.15 creates 4 SBIs, each starting at the
-// count=0 dim form: text "0" + color statusBarItem.deactivatedForeground
-// (gray) + transparent background. The first aggregation tick flips any
-// non-zero light to its colored form. Assert the literal "0" text + the
-// deactivatedForeground dim color appear at the creation site so a regression
-// that dropped the creation-time assignment would re-open the invisibility
-// window.
+// SBI text set at CREATION TIME (not only inside the timer tick).
+// Business-logic review round-2 (carried from v0.1.14, then v0.1.15, now
+// v0.1.16): the SBI was created with .tooltip set but .text NEVER set,
+// leaving it zero-width/invisible for the ~500ms until the first tick —
+// and silently permanent if the timer-setup try/catch swallowed a throw.
+// v0.1.16 creates 4 SBIs, each starting at the count=0 form: text
+// DIM_EM+"0" ("⚪0" — gray outline ball + "0") so the slot is born at
+// fixed width and the 4 slots are visible + aligned from the very first
+// paint. The first aggregation tick flips any non-zero light to its
+// colored ball (CFG[k].em + digit). Assert the literal `sbi.text=DIM_EM+"0"`
+// appears at the creation site so a regression that dropped the
+// creation-time assignment would re-open the invisibility window.
 check(
-  'IIFE.23b each SBI.text="0" set at creation (no 500ms invisibility window)',
-  iife.includes('sbi.text="0"'),
-  'expected creation-time sbi.text="0"',
+  'IIFE.23b each SBI.text=DIM_EM+"0" set at creation (no 500ms invisibility window)',
+  iife.includes('sbi.text=DIM_EM+"0"'),
+  'expected creation-time sbi.text=DIM_EM+"0"',
 );
 check(
-  'IIFE.23c each SBI created with dim color statusBarItem.deactivatedForeground',
-  iife.includes('new vs.ThemeColor("statusBarItem.deactivatedForeground")'),
-  'expected creation-time deactivatedForeground dim color',
+  'IIFE.23c NO creation-time sbi.color= assignment (v0.1.16 drops the v0.1.15 dim ThemeColor)',
+  !/sbi\.color\s*=/.test(iife),
+  'v0.1.16 must not set sbi.color — emoji ball carries its own color',
+);
+check(
+  'IIFE.23d NO creation-time sbi.backgroundColor= assignment (v0.1.16 drops the v0.1.15 themed block)',
+  !/sbi\.backgroundColor\s*=/.test(iife),
+  'v0.1.16 must not set sbi.backgroundColor — emoji ball carries its own color',
+);
+check(
+  'IIFE.23e NO deactivatedForeground ThemeColor (v0.1.15 dim color gone)',
+  !/statusBarItem\.deactivatedForeground/.test(iife),
+  'v0.1.16 uses ⚪ emoji for dim, not statusBarItem.deactivatedForeground',
 );
 
 // SBI 4-item creation — one window-scoped createStatusBarItem PER LIGHT,
@@ -311,7 +328,7 @@ check(
 // the only legitimate prefix is `__ccsd*` (lowercase s after __cc). CC's own
 // namespace is `__cc` + capital letter directly. Lock the discriminator so a
 // future bad refactor cannot silently occupy CC's __cc* namespace.
-check('IIFE.24b SBI uses project-scoped __ccsd* (NOT CC __cc[A-Z] ns)', !/globalThis\.__cc[A-Z]/.test(iife));
+check('IIFE.24e SBI uses project-scoped __ccsd* (NOT CC __cc[A-Z] ns)', !/globalThis\.__cc[A-Z]/.test(iife));
 // v0.1.14 review round-1 widened the __ccsd* rule to ALSO cover per-panel-
 // instance fields stashed on the same `this`/`t` object CC's minified code
 // operates on (was: __ccDotStarted / __ccSid / __ccTitle / __ccPending; now
@@ -319,7 +336,7 @@ check('IIFE.24b SBI uses project-scoped __ccsd* (NOT CC __cc[A-Z] ns)', !/global
 // release could mint a minified `this.__ccXxx` field that silently overwrites
 // our stash. Lock the same discriminator on the panel-instance surface so a
 // regression that revived the bare prefix would surface here.
-check('IIFE.24c panel-instance stash uses __ccsd* (NOT CC __cc[A-Z] ns)', !/(\bt|this)\.__cc[A-Z]/.test(iife));
+check('IIFE.24f panel-instance stash uses __ccsd* (NOT CC __cc[A-Z] ns)', !/(\bt|this)\.__cc[A-Z]/.test(iife));
 // SBI singleton timer — one window-scoped setInterval, idempotent via the
 // __ccsdSbiTimer guard.
 check(
@@ -482,32 +499,43 @@ check(
   ),
 );
 
-// --- 14. v0.1.15 per-SBI render (digit-in-block) ---------------------------
-// v0.1.15 replaced v0.1.14's disp()/text-join with a per-SBI update loop.
-// Each of the 4 SBIs gets its OWN text + color + backgroundColor assigned
-// from counts[k] (the capped count for that light). The render rules:
-//   n===0 → text "0" + color deactivatedForeground (gray) + bg undefined (dim)
-//   n>0   → text (n>=4?"N":""+n) + color "#ffffff" (white) + bg themed block
-// Round-4 (v0.1.15): the bg + dim-color ThemeColors are now allocated ONCE
-// at creation time (cached in globalThis.__ccsdSbiLitBgs[k] +
-// globalThis.__ccsdSbiDimClr) and REUSED per tick — was `new vs.ThemeColor(...)`
-// per block per tick (~8 allocations/tick). The cached form locks the same
-// lit/dim intent, just via the cached identifier.
+// --- 14. v0.1.16 per-SBI render (emoji ball + fixed-width digit) -----------
+// v0.1.16 reverted v0.1.15's digit-in-colored-block treatment back to emoji
+// balls (user feedback "色块效果不如圆点好看"), KEEPING the v0.1.15 4-SBI
+// structure (each light in its own fixed-width slot — positions never shift
+// when counts change). Each of the 4 SBIs gets its OWN text assigned from
+// counts[k] (the capped count for that light). The render rule:
+//   text = (n===0 ? DIM_EM : CFG[k].em) + (n>=4?"N":""+n)
+// so:
+//   n===0 → "⚪0" (gray outline ball + "0" — slot width matches non-zero)
+//   n>0   → "🟢3" / "🟡N" / etc. (colored ball + digit-or-"N")
+// NO backgroundColor, NO color field is set — the emoji ball carries its
+// own color, so the v0.1.15 lit/dim themed-block flip + cached ThemeColor
+// identifiers (__ccsdSbiLitBgs / __ccsdSbiDimClr) are GONE from executable
+// code (the only remaining mentions are in the historical comments
+// documenting what v0.1.15 used to do).
 check(
-  'IIFE.38 per-SBI text ternary (0→"0", 1-3→digit, >=4→"N")',
-  iife.includes('sbi.text=n===0?"0":(n>=4?"N":""+n)'),
-  'expected: sbi.text=n===0?"0":(n>=4?"N":""+n)',
+  'IIFE.38 per-SBI text rule: (n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)',
+  iife.includes('sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)'),
+  'expected: sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)',
 );
 check(
-  'IIFE.38b per-SBI lit branch (n>0 → cached themed bg + white text)',
-  iife.includes('if(n>0){sbi.backgroundColor=globalThis.__ccsdSbiLitBgs[k];sbi.color="#ffffff"}'),
+  'IIFE.38b NO sbi.backgroundColor assignment in executable code (v0.1.16 drops themed block)',
+  !/sbi\.backgroundColor\s*=/.test(iife),
+  'v0.1.16 must not set sbi.backgroundColor — emoji carries its own color',
 );
 check(
-  'IIFE.38c per-SBI dim branch (n===0 → bg undefined + cached deactivatedForeground)',
-  iife.includes('else{sbi.backgroundColor=undefined;sbi.color=globalThis.__ccsdSbiDimClr}'),
+  'IIFE.38c NO sbi.color assignment in executable code (v0.1.16 drops white/gray text flip)',
+  !/sbi\.color\s*=/.test(iife),
+  'v0.1.16 must not set sbi.color — emoji carries its own color',
 );
-// The cap() helper is UNCHANGED from v0.1.14 — still clamps 4+ to 4 so the
-// "N" variant kicks in for >=4 sessions.
+check(
+  'IIFE.38c2 NO __ccsdSbiLitBgs / __ccsdSbiDimClr in executable code (only in historical comments)',
+  !/__ccsdSbiLitBgs|__ccsdSbiDimClr/.test(iife.replace(/\/\*[\s\S]*?\*\//g, '')),
+  'cached ThemeColor identifiers must be gone from executable code',
+);
+// The cap() helper is UNCHANGED from v0.1.14/v0.1.15 — still clamps 4+ to 4
+// so the "N" variant kicks in for >=4 sessions.
 check(
   'IIFE.38d cap() helper unchanged (4+ → 4, drives the "N" variant)',
   /var\s+cap\s*=\s*function\s*\(\s*n\s*\)\s*\{\s*return\s+n\s*>=\s*4\s*\?\s*4\s*:\s*n/.test(iife),
@@ -521,7 +549,7 @@ check(
 );
 // Tooltip carries the UNcapped breakdown so the user can see real counts even
 // when the lights cap at N. All 4 SBIs carry the same tooltip. UNCHANGED from
-// v0.1.14 — lock the literal format string.
+// v0.1.14/v0.1.15 — lock the literal format string.
 check(
   'IIFE.40 SBI tooltip = "Claude Code: N done, N running, N pending, N interrupted"',
   iife.includes(
@@ -529,18 +557,20 @@ check(
   ),
 );
 // Per-tick update loop iterates globalThis.__ccsdSbis and mutates each item's
-// text + tooltip + (bg/color per count) + show. Round-4 (v0.1.15) hardening:
-// (a) the loop body is now per-iteration try/catch (was a single outer
-// try/catch — one disposed SBI froze ALL later blocks for that tick and every
-// future tick); (b) the whole mutate pass is short-circuited via a lastKey
-// memo keyed on the UNcapped aggregation tuple, so a long-running session
-// whose capped counts don't change for hours skips the loop entirely
-// (steady-state IPC writes drop from ~40/s to 0); (c) bg + dim-color reuse
-// the cached ThemeColor identifiers (no `new` per tick). A regression that
-// dropped the per-iteration try/catch OR the short-circuit OR the cached
-// identifiers would surface here.
+// text + tooltip + show. v0.1.16 simplifications from v0.1.15:
+// (a) STILL has per-iteration try/catch (carried over from v0.1.15 round-4
+//     hardening — one disposed SBI froze ALL later slots for that tick and
+//     every future tick);
+// (b) STILL has the lastKey memo short-circuit keyed on the UNcapped
+//     aggregation tuple (steady-state IPC writes drop from ~40/s to 0);
+// (c) DROPS the cached ThemeColor reuse (`__ccsdSbiLitBgs` / `__ccsdSbiDimClr`)
+//     — no backgroundColor/color is set anymore, so there are no ThemeColors
+//     to cache. The ball emoji is read directly from CFG[k].em / DIM_EM.
+// A regression that dropped the per-iteration try/catch OR the short-circuit
+// would surface here; a regression that RE-ADDED the cached ThemeColor
+// identifiers would surface at IIFE.38c2 above.
 check(
-  'IIFE.40b per-tick update: lastKey short-circuit + per-iteration try/catch + cached ThemeColor',
+  'IIFE.40b per-tick update: lastKey short-circuit + per-iteration try/catch (v0.1.16 simplified)',
   /var\s+key\s*=\s*ag\.done\s*\+\s*","\s*\+\s*ag\.running\s*\+\s*","\s*\+\s*ag\.pending\s*\+\s*","\s*\+\s*ag\.interrupted/.test(
     iife,
   ) &&
@@ -552,42 +582,60 @@ check(
     /sbi\.tooltip\s*=\s*tip/.test(iife),
 );
 
-// --- 15. SBI config baking (v0.1.15; replaces v0.1.14 emoji baking) ---------
-// The 4-light config (key/bg/pri per light) is baked into the IIFE as a
-// JSON-stringified array literal `var CFG=[...]` from SBI_LIGHTS_CFG (patch.ts
-// source). Locking the exact content matters: a permutation would silently
-// swap two lights' colors/positions, and a wrong bg id would make a light
-// render with the wrong theme color.
+// --- 15. SBI config baking (v0.1.16: em field; replaces v0.1.15 bg field) ---
+// The 4-light config (key/em/pri per light) is baked into the IIFE as a
+// JSON-stringified array literal `var CFG=[...]` from SBI_LIGHTS_CFG
+// (patch.ts source). Locking the exact content matters: a permutation would
+// silently swap two lights' emoji/positions, and a wrong codepoint would
+// make a light render with the wrong colored ball.
 check(
-  'IIFE.41 SBI CFG array baked from SBI_LIGHTS_CFG (4 lights, bg/pri per entry)',
+  'IIFE.41 SBI CFG array baked from SBI_LIGHTS_CFG (4 lights, em/pri per entry)',
   iife.includes('var CFG=' + JSON.stringify(SBI_LIGHTS_CFG) + ';'),
 );
-// Lock the 4 background ThemeColor ids explicitly so a typo (e.g.
-// "statusBarItem.remoteBackgroud") would surface before any visual test.
+// DIM_EM baked as a sibling string literal — locks the shared zero-count
+// gray ball. JSON.stringify emits the ⚪ literal (BMP codepoint U+26AA,
+// single ⚪ escape), which VSCode parses back to ⚪ at load time.
 check(
-  'IIFE.41b CFG bg[0] done = statusBarItem.remoteBackground',
-  iife.includes('"bg":"statusBarItem.remoteBackground"'),
+  'IIFE.41a SBI DIM_EM baked from SBI_DIM_EM (shared zero-count gray ball)',
+  iife.includes('var DIM_EM=' + JSON.stringify(SBI_DIM_EM) + ';'),
+);
+// Lock the 4 on-color emoji codepoints explicitly so a wrong codepoint (e.g.
+// 🟠 U+1F7E0 instead of 🟢 U+1F7E2) would surface before any visual test.
+// The bake emits each emoji as a surrogate pair; comparing via the parsed
+// SBI_LIGHTS_CFG value (not raw bytes) is what we want.
+check(
+  'IIFE.41b CFG em[0] done = 🟢 U+1F7E2 (green large circle)',
+  iife.includes('"em":"' + SBI_LIGHTS_CFG[0].em + '"'),
 );
 check(
-  'IIFE.41c CFG bg[1] running = statusBarItem.warningBackground',
-  iife.includes('"bg":"statusBarItem.warningBackground"'),
+  'IIFE.41c CFG em[1] running = 🟡 U+1F7E1 (yellow large circle)',
+  iife.includes('"em":"' + SBI_LIGHTS_CFG[1].em + '"'),
 );
 check(
-  'IIFE.41d CFG bg[2] pending = statusBarItem.prominentBackground',
-  iife.includes('"bg":"statusBarItem.prominentBackground"'),
+  'IIFE.41d CFG em[2] pending = 🔵 U+1F535 (blue large circle)',
+  iife.includes('"em":"' + SBI_LIGHTS_CFG[2].em + '"'),
 );
 check(
-  'IIFE.41e CFG bg[3] interrupted = statusBarItem.errorBackground',
-  iife.includes('"bg":"statusBarItem.errorBackground"'),
+  'IIFE.41e CFG em[3] interrupted = 🔴 U+1F534 (red large circle)',
+  iife.includes('"em":"' + SBI_LIGHTS_CFG[3].em + '"'),
 );
 // Lock the 4 priorities (done leftmost / interrupted rightmost).
 check('IIFE.41f CFG pri done=-9996 (leftmost)', iife.includes('"pri":-9996'));
 check('IIFE.41g CFG pri interrupted=-9999 (rightmost)', iife.includes('"pri":-9999'));
-// v0.1.14 emoji artifacts (EM array, DIM) MUST be gone — a regression that
-// revived them would indicate a partial rollback.
-check('IIFE.41h no var EM (v0.1.14 emoji array gone)', !/var\s+EM\s*=/.test(iife));
-check('IIFE.41i no var DIM (v0.1.14 dim emoji gone)', !/var\s+DIM\s*=/.test(iife));
-check('IIFE.41j no disp() function (v0.1.14 render fn gone)', !/var\s+disp\s*=/.test(iife));
+// v0.1.15 ThemeColor bg field MUST be gone — a regression that revived it
+// would indicate a partial rollback to the colored-block treatment. The
+// `bg` key should not appear anywhere in CFG.
+check(
+  'IIFE.41h NO CFG "bg" field (v0.1.15 ThemeColor ids gone)',
+  !/"bg"\s*:/.test(iife),
+  'v0.1.16 CFG must use "em" (emoji), not "bg" (ThemeColor id)',
+);
+// v0.1.14 emoji artifacts (EM array, DIM, disp fn) MUST ALSO be gone —
+// v0.1.16 brought emoji balls back but via CFG[k].em + DIM_EM, NOT via the
+// v0.1.14 single-SBI `var EM=[...]` + `var DIM=...` + `disp(em,n)` join.
+check('IIFE.41i no var EM (v0.1.14 emoji array form not revived)', !/var\s+EM\s*=/.test(iife));
+check('IIFE.41j no var DIM (v0.1.14 dim emoji form not revived)', !/var\s+DIM\s*=/.test(iife));
+check('IIFE.41k no disp() function (v0.1.14 single-SBI render fn not revived)', !/var\s+disp\s*=/.test(iife));
 
 // --- 16. SBI click command (v0.1.14; replaces v0.1.13 20-command pkg block) -
 // ONE command registered via runtime vs.commands.registerCommand (no
@@ -653,7 +701,7 @@ check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*
   );
 }
 
-// --- 17. Writer-hook content-hash gate (R3 architecture fix; mirrors IIFE.21b) ---
+// --- 19. Writer-hook content-hash gate (R3 architecture fix; mirrors IIFE.21b) ---
 // The writer hook (hooks/cc-status.js) carries a banner
 // `/*cc-status-dot-hook:vX.Y.Z:HASH*/` where HASH is sha1 of the body with
 // the banner line replaced by an empty line, truncated to 8 hex chars. The
@@ -671,7 +719,7 @@ check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*
     hookSrc = fs.readFileSync(HOOK_SRC, 'utf8');
   } catch (e) {
     // read failure -> skip section but record a fail so the missing file is loud
-    check('IIFE.47 source hook readable', false, String(e));
+    check('IIFE.47a source hook readable', false, String(e));
     hookSrc = '';
   }
   if (hookSrc) {

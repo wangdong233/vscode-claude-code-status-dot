@@ -25,7 +25,7 @@
 - 🔔 **Notificaciones de completado/interrupción** — en macOS salta una notificación del sistema (esquina superior derecha + sonido `Glass` por defecto, sin botones, se cierra sola), tanto si VSCode está en primer plano como en segundo; en Windows/Linux se usa el mensaje integrado de VSCode, sin tener que mirar fijamente
 - ⚙️ **Mantiene running durante la ejecución de workflows** — cuando hay subagentes/cron en vuelo no se pone verde por error, `Stop` es el árbitro definitivo
 - 📂 **Sincronización con Open Editors** — las pestañas de CC en la vista "Editores abiertos" arriba a la izquierda también muestran el punto de estado
-- 📊 **4 bolas SBI emoji abajo (v0.1.17: SBI único, concatenación compacta, hueco 0px, dígitos nunca se desplazan)** — el lado izquierdo de la barra de estado (`StatusBarAlignment.Left` + un solo SBI con prioridad `-9996`, cerca del centro visible) renderiza **una fila compacta de 4 bolas emoji** (v0.1.17 colapsa la fila de 4 SBI de v0.1.16 de vuelta a un solo SBI cuyo texto es la concatenación de 4 segmentos `🟢3🟡1⚪0⚪0` — causa raíz: el `statusbarpart.css` de VSCode fija `margin:0 3px;padding:0 5px` por SBI (~6-16px de hueco entre SBIs adyacentes, no controlable vía API pública; el «hueco suelto» que veías bajo v0.1.16 es un límite hard del framework, solo SBI único da compacidad real): 🟢hecho / 🟡corriendo / 🔵pendiente / 🔴interrumpido. El token de cada luz es `<bola><dígito>` (la bola lleva su propio color); los 4 tokens se concatenan **sin separador** (**hueco de 0px entre luces** — el ancho de la fila pasa de ~120px a ~70px); cantidades limitadas a 0/1/2/3/N (>=4 muestra N); cantidad>0 → bola iluminada (🟢/🟡/🔵/🔴 precoloreadas + dígito justo al lado), cantidad=0 → bola gris ⚪ + «0». 🔵 = esperando entrada del usuario (permiso/pregunta/elicit, alimentado por el caso de hook Notification). Hecho de >5 min cuenta como idle (no verde). **«Los dígitos nunca se desplazan» lo garantiza la regla CSS `font-variant-numeric:tabular-nums` del propio VSCode** (statusbarpart.css aplica tabular-nums a cada elemento de la barra de estado — los dígitos ASCII 0-9 son de igual ancho en cualquier fuente), independiente del renderizado de la fuente emoji. v0.1.17 usa **1 StatusBarItem en runtime + texto concatenado** (sin parchear el package.json de CC, sin bloque ThemeColor, el IIFE muta el text directamente cada 500ms).
+- 📊 **4 luces agregadas en la barra de estado inferior (un único StatusBarItem en bloque)** — el lado izquierdo de la barra de estado inferior (la mitad cercana al centro) renderiza **un único StatusBarItem** que agrega internamente **4 luces separadas por un espacio pequeño**: 🟢done / 🟡running / 🔵pending / 🔴interrupted. Cada luz es un token `<bola emoji><dígito>`; los 4 tokens se unen con espacios (`parts.join`) formando un bloque compacto. Cantidades limitadas a 0/1/2/3/N (>=4 muestra N); cantidad>0 → bola de color (🟢/🟡/🔵/🔴 precoloreadas + dígito justo al lado), cantidad=0 → bola gris ⚪ + «0» atenuado. 🔵 = esperando entrada del usuario (permiso / pregunta / elicit), alimentado por el hook `Notification`, **contador independiente desacoplado de state**. Las 4 posiciones están fijas, los dígitos no desplazan la fila al cambiar (VSCode aplica `tabular-nums` a la barra de estado: dígitos ASCII de igual ancho). GC por tramos: done mtime>5min → idle (verde −1); running mtime>30min → idle (sesión colapsada); interrupted mtime>24h → idle; pending GC basado en `st` (pending colapsado → idle, resta amarillo+azul).
 - ↩️ **Reversión sin efectos secundarios en una línea** — `--revert` restaura por completo `extension.js` desde `.bak`, retira los hooks de forma quirúrgica y conserva tus datos de usuario
 
 > ⚠️ **Declaración honesta**: este proyecto es un **parche (patch), no una extensión independiente** — VSCode no permite que una extensión de terceros modifique el icono de la pestaña webview de otra extensión; la única vía viable es parchear el `extension.js` del propio CC. El precio: las actualizaciones automáticas de CC lo sobrescriben, hay que volver a ejecutar el comando.
@@ -126,7 +126,7 @@ Envía un prompt en CC:
 
 ### 🟡 Punto de icono de pestaña de cuatro estados
 
-El icono de la pestaña de cada sesión de CC cambia de color según el estado, **a la vez en la barra de pestañas superior y en la vista "Editores abiertos" arriba a la izquierda**. running/idle/done son puntos de color estático; interrupted parpadea en rojo rápido.
+El icono de la pestaña de cada sesión de CC cambia de color según el estado, **a la vez en la barra de pestañas superior y en la vista "Editores abiertos" arriba a la izquierda**. running/idle/done son puntos de color estático; interrupted parpadea en rojo rápido. Cuando CC muestra una solicitud de permiso, el reader **cede el icono** y deja que se muestre el punto azul nativo de CC (este proyecto **no lo sobrescribe**).
 
 ### 🔔 Notificaciones de completado / interrupción
 
@@ -144,6 +144,19 @@ Cuando se ejecutan workflows o subagentes en segundo plano, la sesión principal
 ### 📂 Sincronización con Open Editors
 
 Las pestañas de CC en la vista "Editores abiertos" arriba a la izquierda de VSCode **también muestran el punto de estado**, totalmente sincronizadas con la barra de pestañas superior.
+
+### 📊 Cuatro luces agregadas en la barra de estado inferior
+
+El lado izquierdo de la barra de estado inferior (la mitad cercana al centro) renderiza **un único StatusBarItem** que agrega 4 luces separadas por un espacio pequeño, en orden fijo: 🟢done / 🟡running / 🔵pending / 🔴interrupted. Cada luz es un token `<bola emoji><dígito>`; las 4 posiciones están fijas, los dígitos no desplazan la fila al cambiar (VSCode aplica `tabular-nums` a la barra de estado, dígitos ASCII de igual ancho).
+
+- 🟢 **done**: rondas completadas (a los 5 minutos pasa a idle y resta 1).
+- 🟡 **running**: sesiones en ejecución; se mantiene durante workflows/subagentes (no degrada a verde por error).
+- 🔵 **pending**: esperando entrada del usuario — permiso / pregunta / elicit — alimentado por el hook `Notification`; **contador independiente desacoplado de state** (se cuenta por separado, sin mezclar con running/done).
+- 🔴 **interrupted**: interrupciones por limitación de velocidad / sobrecarga.
+
+Cantidades limitadas a 0/1/2/3/N (>=4 muestra N); cantidad>0 → bola de color + dígito, cantidad=0 → bola gris ⚪ + «0» atenuado.
+
+**GC por tramos**: done mtime>5min → idle (verde −1); running mtime>30min → idle (sesión colapsada); interrupted mtime>24h → idle; pending GC basado en `st` (pending colapsado → idle, resta amarillo+azul).
 
 <details>
 <summary>📖 Mecanismo de persistencia (por qué no teme borrar el código fuente)</summary>

@@ -25,7 +25,7 @@
 - 🔔 **Fertig-/Unterbrochen-Benachrichtigung** – macOS-Systembenachrichtigung (rechte obere Ecke, mit Ton, standardmäßig `Glass`) erscheint im Vordergrund wie im Hintergrund; auf Windows/Linux Fallback auf VSCode-interne Nachricht (Toast unten rechts), ohne Schaltflächen, verschwindet automatisch
 - ⚙️ **Bleibt während Workflow-Lauf auf running** – Hintergrund-Subagent/Cron in der Luft zeigt nicht fälschlich Grün; `Stop` entscheidet autoritativ
 - 📂 **Open Editors synchron** – der CC-Tab in der Ansicht „Offene Editoren" oben links trägt ebenfalls den Zustands-Punkt
-- 📊 **SBI 4 Emoji-Bälle unten (v0.1.17: einzelnes SBI, kompakte Konkatenation, 0px Lücke, Ziffern verschieben sich nie)** — die linke Seite der Statusleiste (`StatusBarAlignment.Left` + ein einzelnes SBI mit Priorität `-9996`, nahe der sichtbaren Mitte) zeigt **eine enge Reihe von 4 Emoji-Bällen** (v0.1.17 fasst die v0.1.16 4-SBI-Reile zu einem einzigen SBI zusammen, dessen Text die 4-Segment-Konkatenation `🟢3🟡1⚪0⚪0` ist — Ursache: VSCodes `statusbarpart.css` härtet `margin:0 3px;padding:0 5px` pro SBI (~6-16px Abstand zwischen benachbarten SBIs, über die öffentliche API nicht steuerbar; der unter v0.1.16 sichtbare „lockere Abstand" ist ein Framework-Limit, nur Single-SBI gibt echte Kompaktheit): 🟢fertig / 🟡läuft / 🔵wartet / 🔴unterbrochen. Jedes Licht-Token ist `<Ball><Ziffer>` (Ball bringt seine eigene Farbe mit); die 4 Tokens werden **ohne Trennzeichen** konkateniert (**0px Lücke zwischen den Lichtern** —Zeilenbreite schrumpft von ~120px auf ~70px); Zählungen gedeckelt auf 0/1/2/3/N (>=4 zeigt N); Anzahl>0 → Ball leuchtet (🟢/🟡/🔵/🔴 vorgefärbt + Ziffer direkt daneben), Anzahl=0 → grauer Ball ⚪ + „0". 🔵 = wartet auf Benutzereingabe (Permission/Question/Elicit, gespeist vom Notification-Hook-Case). Fertig vor >5 Min zählt als idle (nicht grün). **„Ziffern verschieben sich nie" wird von VSCodes eigener CSS-Regel `font-variant-numeric:tabular-nums` garantiert** (statusbarpart.css wendet tabular-nums auf jedes Statusleisten-Item an — ASCII-Ziffern 0-9 sind in jeder Schriftart gleich breit), unabhängig vom Emoji-Font-Rendering. v0.1.17 verwendet **1 Laufzeit-StatusBarItem + konkatenierten Text** (kein CC-package.json-Patch, kein ThemeColor-Block, die IIFE mutiert text direkt alle 500ms).
+- 📊 **Vier-Lichter-Block in der unteren Statusleiste** – die untere Statusleiste (linke Hälfte, nahe der Mitte) zeigt **einen einzigen kompakten Block** (ein einzelnes StatusBarItem), intern vier Emoji-Bälle durch kleine Leerzeichen getrennt: 🟢fertig 🟡läuft 🔵wartet 🔴unterbrochen. Jeder Ball wird sofort von einer Ziffer gefolgt (gedeckelt auf 0/1/2/3/N, N=4+). Anzahl 0 → grauer Ball ⚪ + gedimmte Ziffer; Anzahl >0 → farbiger Ball + leuchtende Ziffer. Die vier Positionen sind fix – Ziffernwechsel bewirkt keine Verschiebung (VSCode-eigene `tabular-nums` sorgt für gleichbreite Ziffern). 🔵 = wartet auf Benutzereingabe (Permission/Question/Elicit, gespeist vom Notification-Hook und unabhängig vom Hauptzustand gezählt). Drei-stufige GC bereinigt die Zählungen automatisch (`done`>5 Min, `running`-mtime>30 Min, `interrupted`-mtime>24 Std → idle)
 - ↩️ **Ein-Klick-Wiederherstellung ohne Nebeneffekte** – `--revert` stellt extension.js vollständig aus `.bak` wieder her, entfernt Hooks chirurgisch und behält deine Benutzerdaten
 
 > ⚠️ **Ehrliche Erklärung**: Dieses Projekt ist ein **Patch, keine eigenständige Erweiterung** – VSCode erlaubt es Drittanbieter-Erweiterungen nicht, das Webview-Tab-Icon einer anderen Erweiterung zu ändern. Der einzig mögliche Pfad ist es, die `extension.js` von CC selbst zu patchen. Preis: CC-Auto-Updates überschreiben es, Befehl erneut ausführen.
@@ -61,6 +61,7 @@ Nach der Installation siehst du **auf einen Blick, was jede Session gerade macht
 | CC durch Rate-Limit / Überlast unterbrochen | 🔴 Tab rotes Schnellblinken + Benachrichtigung (Text enthält Grund wie `rate limit reached`) |
 | Workflow / Hintergrund-Subagent noch läuft | Haupt-Session-Tab **bleibt gelb** (kein falsches Grün), `Stop` entscheidet autoritativ, kein falsches Fertig |
 | Ansicht „Offene Editoren" oben links ansehen | Der CC-Tab hat **hier ebenfalls den Zustands-Punkt**, komplett synchron zur oberen Tab-Leiste |
+| Untere Statusleiste ansehen | Ein kompakter Vier-Lichter-Block (🟢🟡🔵🔴, jeweils + Ziffer) zeigt sofort die Anzahl Sessions pro Zustand |
 | CC fragt nach Berechtigung | 🔵 Blauer Punkt (**CC nativ, dieses Projekt überschreibt das nicht**) |
 
 > **All das sofort nach der Installation, ohne jegliche Konfiguration.** Nur um Benachrichtigungen/Töne abzustellen, musst du die Konfiguration ändern.
@@ -144,6 +145,23 @@ Wenn im Hintergrund ein Workflow / Subagent läuft, bleibt die Haupt-Session gel
 ### 📂 Open Editors synchron
 
 Der CC-Tab in der VSCode-Ansicht „Offene Editoren" oben links **trägt ebenfalls den Zustands-Punkt**, komplett synchron zur oberen Tab-Leiste.
+
+### 📊 Vier-Lichter-Block in der unteren Statusleiste
+
+Die untere Statusleiste (linke Hälfte, nahe der Mitte) zeigt **einen kompakten Block aus einem einzigen StatusBarItem** mit vier Lichtern, durch kleine Leerzeichen getrennt: 🟢fertig / 🟡läuft / 🔵wartet / 🔴unterbrochen. Jeder Ball trägt eine Ziffer (gedeckelt auf 0/1/2/3/N, N=4+). Anzahl 0 → grauer Ball ⚪ + gedimmte Ziffer; Anzahl >0 → farbiger Ball + leuchtende Ziffer. Die vier Positionen sind fix – Ziffernwechsel bewirkt keine Verschiebung (VSCode-eigene `tabular-nums` hält ASCII-Ziffern in jeder Schriftart gleich breit). 🔵 = wartet auf Benutzereingabe (Permission/Question/Elicit), gespeist vom Notification-Hook und unabhängig vom Hauptzustand gezählt.
+
+### 🔵 Berechtigung: Tab-Blau übernimmt CC nativ
+
+Wenn CC eine Berechtigungsanfrage stellt (Tool-Nutzung, Question, Elicit usw.), übernimmt CCs eigener nativer Blau-Punkt die Tab-Anzeige – der Reader tritt zurück und überschreibt ihn nicht. Parallel legt der Notification-Hook ein `pending`-Markierung in der Ablage ab, die der Reader unabhängig vom Hauptzustand als 🔵 in der unteren Statusleiste zählt.
+
+### 🧹 Drei-stufige GC (automatische Zählbereinigung)
+
+Damit die Zählungen in der unteren Statusleiste nicht durch abgestürzte oder vergessene Sessions verfälscht werden:
+
+- `done` älter als 5 Minuten → idle (Grün-Zähler minus 1)
+- `running` mit `mtime` älter als 30 Minuten → idle (abgestürzte Session)
+- `interrupted` mit `mtime` älter als 24 Stunden → idle
+- `pending`-GC basiert auf `st` (abgestürzte `pending` → idle, korrigiert Blau- und Gelb-Zähler)
 
 <details>
 <summary>📖 Dauerhaftigkeitsmechanismus (warum Löschen der Quelle kein Problem ist)</summary>

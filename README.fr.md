@@ -25,7 +25,8 @@
 - 🔔 **Notifications de fin / interruption** — sur macOS, notification système native (coin supérieur droit de l'écran, avec son `Glass` par défaut), **à l'avant-plan comme à l'arrière-plan**, sans aucun bouton, disparaît automatiquement — plus besoin de fixer l'écran
 - ⚙️ **Reste jaune running pendant l'exécution d'un workflow** — pas de faux vert tant que des subagents/cron tournent en arrière-plan, `Stop` est l'arbitre
 - 📂 **Synchronisation de la vue Open Editors** — l'onglet CC dans la vue « Open Editors » en haut à gauche porte aussi le point d'état
-- 📊 **4 boules SBI emoji en bas (v0.1.17 : SBI unique, concaténation compacte, écart 0px, les chiffres ne se décalent jamais)** — le côté gauche de la barre d'état (`StatusBarAlignment.Left` + un seul SBI à priorité `-9996`, près du centre visible) affiche **une rangée compacte de 4 boules emoji** (v0.1.17 regroupe la rangée 4-SBI de v0.1.16 en un seul SBI dont le texte est la concaténation de 4 segments `🟢3🟡1⚪0⚪0` — cause racine : le `statusbarpart.css` de VSCode durcit `margin:0 3px;padding:0 5px` par SBI (~6-16px d'écart entre SBI adjacents, non contrôlable via l'API publique ; l'« écart lâche » que vous voyiez sous v0.1.16 est une limite hard du framework, seul un SBI unique donne une vraie compacité) : 🟢terminé / 🟡en cours / 🔵en attente / 🔴interrompu. Le token de chaque lumière est `<boule><chiffre>` (la boule porte sa propre couleur) ; les 4 tokens sont concaténés **sans séparateur** (**écart de 0px entre les lumières** — la largeur de la rangée passe de ~120px à ~70px) ; quantité plafonnée à 0/1/2/3/N (>=4 affiche N) ; quantité>0 → boule allumée (🟢/🟡/🔵/🔴 précolorées + chiffre juste à côté), quantité=0 → boule grise ⚪ + « 0 ». 🔵 = en attente d'entrée utilisateur (permission/question/elicit, alimenté par le cas de hook Notification). Terminé depuis >5 min compte comme idle (pas vert). **« Les chiffres ne se décalent jamais » est garanti par la règle CSS `font-variant-numeric:tabular-nums` de VSCode lui-même** (statusbarpart.css applique tabular-nums à chaque élément de barre d'état — les chiffres ASCII 0-9 sont de largeur égale dans n'importe quelle police), indépendant du rendu de la police emoji. v0.1.17 utilise **1 StatusBarItem à l'exécution + texte concaténé** (pas de patch du package.json CC, pas de bloc ThemeColor, l'IIFE mute le text directement toutes les 500ms).
+- 📊 **Barre d'état à 4 boules agrégées en bas** — la partie gauche de la barre d'état inférieure (`StatusBarAlignment.Left`, un seul `StatusBarItem` à priorité `-9996`, près de la zone centrale visible) affiche **un bloc compact de 4 boules emoji séparées par une petite espace** : 🟢terminé / 🟡en cours / 🔵en attente / 🔴interrompu. Chaque boule est immédiatement suivie de son compte (plafonné à 0/1/2/3/N, où N=4+). Compte = 0 → boule grise ⚪ + chiffre atténué ; compte > 0 → boule colorée + chiffre en clair. **Les 4 positions sont fixes — les chiffres ne se décalent jamais** (VSCode applique nativement `font-variant-numeric: tabular-nums` à chaque élément de barre d'état, les chiffres ASCII 0-9 ont la même largeur quelle que soit la police). 🔵 = en attente d'entrée utilisateur (permission/question/elicit via le cas de hook `Notification`, compté indépendamment de l'état running). Terminé depuis >5 min compte comme idle (la boule verte décrémente).
+- 🔵 **Cède le pas au bleu natif de CC** — quand CC affiche une demande d'autorisation, le reader s'efface et laisse le point bleu natif de CC s'afficher (aucun recouvrement)
 - ↩️ **Restauration en un clic, sans effet de bord** — `--revert` restaure `extension.js` depuis `.bak`, retire les hooks chirurgicalement et conserve vos données utilisateur
 
 > ⚠️ **Avertissement honnête** : ce projet est un **patch, pas une extension autonome** — VSCode ne permet pas à une extension tierce de modifier l'icône d'onglet webview d'une autre extension. La seule voie possible est de patcher le `extension.js` de CC lui-même. Conséquence : les mises à jour automatiques de CC écrasent le patch, il faut relancer la commande.
@@ -61,7 +62,7 @@ Une fois installé, pendant que Claude Code travaille, **voyez en un coup d'œil
 | CC interrompu par limite de débit / surcharge | 🔴 l'onglet clignote rapidement en rouge + notification (le texte précise `rate limit reached` et autres causes) |
 | Un workflow / subagent en arrière-plan tourne encore | L'onglet de la session principale **reste jaune** (pas de faux vert), `Stop` tranche en arbitre sans fausse fin |
 | Regarder la vue « Open Editors » en haut à gauche | L'onglet CC s'y affiche **aussi avec le point d'état**, parfaitement synchronisé avec la barre d'onglets supérieure |
-| CC affiche une demande d'autorisation | 🔵 point bleu (**natif à CC, ce projet ne le remplace pas**) |
+| CC affiche une demande d'autorisation / question / elicit | 🔵 le reader cède l'icône → **le point bleu natif de CC s'affiche** (non recouvert) + la boule 🔵 de la barre d'état inférieure s'allume |
 
 > **Tout fonctionne dès l'installation, sans rien configurer.** Ce n'est que pour désactiver les notifications / changer le son qu'il faudra toucher à la configuration.
 
@@ -116,7 +117,7 @@ Dans CC, envoyez un prompt :
 | 🟢 Vert `#3FB950` (statique) | Tour terminé | CC déclenche `Stop` (**au-delà de 5 minutes, retour au gris automatiquement**) |
 | 🔴 Rouge `#F85149` (clignotement rapide) | Interruption / erreur | CC déclenche `StopFailure` (limite de débit, surcharge, etc.) |
 | ⚪ Gris `#808080` (statique) | Inactif | Initial / terminé depuis plus de 5 minutes / aucun fichier d'état |
-| 🔵 Bleu (natif CC) | En attente d'autorisation | Point bleu natif de CC, **ce projet ne le remplace pas** |
+| 🔵 Bleu (natif CC) | En attente d'entrée utilisateur | CC affiche une demande d'autorisation / question / elicit — le reader cède l'icône, **le point bleu natif de CC s'affiche sans être recouvert** (projet ne le remplace pas, compté dans la boule 🔵 en bas) |
 
 > Running = point jaune statique (pas d'animation) ; interruption = clignotement rapide d'alerte rouge. Le contrat d'état complet (événements / SVG / IPC / notifications) se trouve dans [`docs/STATES.md`](docs/STATES.md).
 
@@ -144,6 +145,20 @@ Pendant qu'un workflow / subagent tourne en arrière-plan, la session principale
 ### 📂 Synchronisation de la vue Open Editors
 
 L'onglet CC dans la vue « Open Editors » en haut à gauche **porte aussi le point d'état**, parfaitement synchronisé avec la barre d'onglets supérieure.
+
+### 📊 Barre d'état à 4 boules agrégées en bas
+
+La partie gauche de la barre d'état inférieure affiche **un seul `StatusBarItem` compact** contenant 4 boules emoji séparées par une petite espace : 🟢terminé / 🟡en cours / 🔵en attente / 🔴interrompu. Chaque boule est immédiatement suivie de son compte (plafonné à 0/1/2/3/N, où N=4+).
+
+- **Compte = 0** → boule grise ⚪ + chiffre atténué (éteint)
+- **Compte > 0** → boule colorée + chiffre en clair (allumé)
+- **Positions fixes** — les chiffres ne se décalent jamais (`font-variant-numeric: tabular-nums` natif à VSCode, les chiffres 0-9 ont tous la même largeur)
+
+🔵 = en attente d'entrée utilisateur (permission/question/elicit via le hook `Notification`), **compté indépendamment de l'état running**. Trois cycles de GC pour éviter l'accumulation : `done` depuis plus de 5 min → idle (boule verte décrémente) ; `running` dont le fichier n'a pas été mis à jour depuis plus de 30 min → idle (session plantée) ; `interrupted` depuis plus de 24 h → idle ; la GC de pending est basée sur le timestamp `st` (pending plantée → idle, décrémente jaune et bleu).
+
+### 🔵 Cède le pas au bleu natif de CC
+
+Quand CC affiche une demande d'autorisation / question / elicit, **le reader s'efface et laisse le point bleu natif de CC s'afficher sans le recouvrir**. Comportement non intrusif : la boule 🔵 de la barre d'état inférieure reflète simplement cet état via le hook `Notification` (compté côté reader, indépendant de la couleur de l'onglet).
 
 <details>
 <summary>📖 Mécanisme de persistance (pourquoi supprimer la source n'a pas d'impact)</summary>

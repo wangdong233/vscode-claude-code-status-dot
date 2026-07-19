@@ -9,7 +9,7 @@
 
 **给 Claude Code 的 VSCode 扩展打补丁，让每个会话的 tab 图标变成四态状态点**
 
-🟡 运行中 · 🟢 完成 · 🔴 中断快闪 · ⚪ 空闲 —— 外加完成/中断通知
+🟡 运行中 · 🟢 完成 · 🔴 中断快闪 · ⚪ 空闲 —— tab 四态点 + 底部状态栏 4 灯聚合，外加完成/中断通知
 
 **简体中文** | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
@@ -22,10 +22,10 @@
 - 🔧 **一行装**——`npx vscode-claude-code-status-dot` 自动 patch CC 扩展、接 9 个 hooks、复制运行时文件，幂等可重跑
 - 🛡️ **持久化不怕删源**——运行时副本落在 `~/.claude/cc-status-dot/`，删项目源 / 清 npx 缓存 / CC 自动更新都不影响已 patch 的扩展
 - 🎨 **四态全覆盖**——比 CC 原生（只有蓝/橙两点）更完整：idle / running / done / interrupted 全可视化
-- 🔔 **完成/中断通知**——macOS 走系统通知（屏幕右上角下拉，带声音，无按钮，几秒自动消失），前台后台都弹，不用一直盯着
-- ⚙️ **workflow 跑期间保持 running**——后台 subagent/cron 在飞时不假绿，`Stop` 权威裁定
+- 🔔 **完成/中断通知**——macOS 走系统通知（屏幕右上角下拉，Glass 声，无按钮，几秒自动消失，前台后台都弹）；Windows/Linux 退化为 VSCode 消息 toast（无按钮），不用一直盯着
+- ⚙️ **workflow 跑期间保持 running**——后台 subagent/cron 在飞时不假绿，`Stop` 只信 payload `background_tasks` 不漂移
 - 📂 **Open Editors 同步**——左上角"打开的编辑器"视图里的 CC tab 也带状态点
-- 📊 **底部 SBI 4 圆点紧凑拼接（v0.1.17 单 SBI，0 间距，数字不位移）**——状态栏左侧（`StatusBarAlignment.Left` + 单 SBI priority `-9996`，靠近可见中心）显示**一行紧贴的 4 个圆点**（v0.1.17 把 v0.1.16 的 4 个独立 SBI 合并回单 SBI + 4 段拼接 text `🟢3🟡1🟤0🟤0`——根因：VSCode `statusbarpart.css` 给每个 SBI 硬编码 `margin:0 3px;padding:0 5px`，相邻 SBI 约 6-16px 间距，**公开 API 无法控制**；4 SBI 路径下"间隔松散"是框架硬限制，必须收回到单 SBI 才能紧凑）：🟢完成 / 🟡运行 / 🔵待输入 / 🔴中断。每灯 token 是 `<球><数字>`（球自带色），4 段直接拼接无分隔符（**0 像素间距**，整行宽度从 ~120px 压到 ~70px）；计数封顶 0/1/2/3/N（>=4 显示 N）；count>0 → 球亮（🟢/🟡/🔵/🔴 自带彩色 + 数字紧跟），count=0 → dim 球 🟤 + "0"（v0.1.17 ⚪→🟤 pivot：🟤 与 🟢🟡 同属 Geometric Shapes Extended 块，跨字体等宽）。🔵 = 待用户输入（permission/question/elicit，writer 新增 Notification hook case）。完成超 5 分钟算 idle 不计绿。**"数字不位移"由 VSCode CSS `font-variant-numeric:tabular-nums` 强制保证**（statusbarpart.css 给所有状态栏 item 应用 tabular-nums，ASCII 数字 0-9 在任何字体下都等宽）——独立于 emoji 字体渲染。v0.1.17 用 **1 个运行时 StatusBarItem + 拼接 text**（无需 patch CC package.json，无需 ThemeColor 块，IIFE 每 500ms 直接 mutate SBI 的 text）。
+- 📊 **底部状态栏 4 灯聚合（单 StatusBarItem 整体块，4 灯位置固定）**——窗口底部状态栏（左半靠近中间）一个整体块（单个 StatusBarItem + `parts.join(' ')` 空格拼接）显示一行 4 灯：🟢done 🟡running 🔵pending 🔴interrupted，每灯紧跟数字（封顶 0/1/2/3/N，N 表示 ≥4）。count=0 → 灰球 ⚪ + 数字（灰灭）；count>0 → 彩球 + 数字（亮）。**4 灯位置固定，数字变化不位移**——VSCode 状态栏 CSS `font-variant-numeric:tabular-nums` 给所有 item 强制数字等宽，ASCII 0-9 在任何字体下都不抖。🔵 pending = 待用户输入（permission / question / elicit，writer 接 CC `Notification` hook 落盘 pending 标记，reader 独立计数，与 state 解耦）。3 段 GC：done>5min→idle（绿减 1）/ running mtime>30min→idle（崩溃会话）/ interrupted mtime>24h→idle；pending GC 基于 st（崩溃 pending→idle，减黄 + 减蓝）。整块通过 **1 个运行时 StatusBarItem + 拼接 text**（IIFE 每 500ms 直接 mutate SBI 的 text），无需 patch CC package.json，无需 ThemeColor 块。
 - ↩️ **零副作用一键还原**——`--revert` 从 `.bak` 完整恢复 extension.js、外科手术式移除 hooks、保留你的用户数据
 
 > ⚠️ **诚实声明**：本项目是一个 **patch（补丁），不是独立扩展**——VSCode 不允许第三方扩展修改另一个扩展的 webview tab 图标，唯一可行路径是 patch CC 自己的 `extension.js`。代价：CC 自动更新会覆盖，需重跑命令。
@@ -61,7 +61,7 @@
 | CC 被限速 / 过载中断 | 🔴 tab 红色快闪 + 通知（文案带 `rate limit reached` 等原因） |
 | workflow / 后台 subagent 还在跑 | 主会话 tab **保持黄**（不误显绿），`Stop` 权威裁定不假完成 |
 | 看左上角"打开的编辑器"视图 | CC 的 tab 这里**也带状态点**，和顶部 tab 栏完全同步 |
-| CC 弹出权限请求 | 🔵 蓝色点（**CC 原生，本项目不覆盖**） |
+| CC 弹出权限授权 | tab 上 reader **让出图标** → CC 原生蓝点显示（不覆盖）；底部状态栏 🔵 pending 计数 +1 |
 
 > **全部装完即得，不用配任何东西。** 想关通知 / 换声音才需要改配置。
 
@@ -116,7 +116,7 @@ npx vscode-claude-code-status-dot
 | 🟢 绿色 `#3FB950`（静态） | 本轮完成 | CC 触发 `Stop`（**超 5 分钟自动转灰**） |
 | 🔴 红色 `#F85149`（快闪） | 中断 / 出错 | CC 触发 `StopFailure`（限速、过载等） |
 | ⚪ 灰色 `#808080`（静态） | 空闲 | 初始 / 完成超 5 分钟 / 无状态文件 |
-| 🔵 蓝色（CC 原生） | 待授权 | CC 原生蓝点，**本项目不覆盖** |
+| 🔵 蓝色（CC 原生） | CC 弹权限授权 | reader 让出图标，CC 原生蓝点显示（**不覆盖**）；底部状态栏另独立计 pending |
 
 > running 静态黄点（无动画）；interrupted 红色快闪告警。完整状态契约（事件 / SVG / IPC / 通知）见 [`docs/STATES.md`](docs/STATES.md)。
 
@@ -141,11 +141,24 @@ npx vscode-claude-code-status-dot
 
 ### ⚙️ workflow 跑期间保持 running
 
-后台跑 workflow / subagent 时，主会话保持黄色（不误显绿），不会假报完成。
+后台跑 workflow / subagent 时，主会话保持黄色（不误显绿），不会假报完成——`Stop` 只信 payload 里的 `background_tasks` 计数，不退化漂移。
 
 ### 📂 Open Editors 同步
 
 左上角"打开的编辑器"视图里的 CC tab **也带状态点**，和顶部 tab 栏完全同步。
+
+### 📊 底部状态栏 4 灯聚合
+
+窗口底部状态栏（左半靠近中间）一个整体块（单 StatusBarItem + 空格拼接）聚合显示 4 灯：**🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted**，每灯紧跟数字（封顶 0/1/2/3/N，N 表示 ≥4）：
+
+- count=0 → 灰球 ⚪ + 数字（灰灭，占位但不亮）
+- count>0 → 彩球 + 数字（亮）
+
+**4 灯位置固定，数字变化不位移**——VSCode 状态栏自带 `font-variant-numeric:tabular-nums`，ASCII 数字 0-9 在任何字体下都等宽。
+
+🔵 pending 是独立维度（与 state 解耦）：CC 弹权限授权 / question / elicit 等"待用户输入"场景，writer 接 CC `Notification` hook 落盘 pending 标记，reader 单独计数。权限授权时 tab 图标让位给 CC 原生蓝点（不覆盖），底部状态栏仍独立计 pending。
+
+**3 段 GC** 防止计数漂移：done 超 5 分钟 → idle（绿减 1）/ running 文件 mtime 超 30 分钟 → idle（崩溃会话回收）/ interrupted 文件 mtime 超 24 小时 → idle；pending 基于 st 字段 GC（崩溃 pending 回 idle，同时减黄 + 减蓝）。
 
 <details>
 <summary>📖 持久化机制（为什么删源也不怕）</summary>
@@ -235,11 +248,11 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 
 - **手动 Esc 中断无 hook**：CC 不触发 Stop/StopFailure（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)），状态会停在 running，靠下次 prompt/Stop 自然更正。
 - **CC 自动更新覆盖**：patched `extension.js` 被原版覆盖 → 静默失效，重跑命令恢复。
-- **minified anchor 脆性**：patch 依赖 CC 代码里两段精确字符串，版本漂移时 patcher 报 "Anchor mismatch" 拒绝写入（扩展不会被破坏）。
+- **minified anchor 脆性**：patch 依赖 CC 代码里两段精确字符串，版本漂移时 patcher 报 "Anchor mismatch" 拒绝写入；写 extension.js 前还会对完整 2.6MB 文件跑 `node --check`（assertCompiles 守卫，坏 IIFE 拒绝写入），原子写（`.tmp` + rename），`INJECT_VERSION` 自动重注入——**绝不砖 CC**。
 - **VSCode 完全关闭时不通知**：IIFE 跑在扩展宿主进程，VSCode 关闭则不运行 → 不通知。
 - **系统通知点击不跳 tab**：osascript 无 click callback，通知仅提醒，回 VSCode 靠 tab 绿/红点定位。
-- **SBI priority 区间无所有权**（v0.1.17，**碰撞窗口从 4 单位缩到 1 单位**）：底部 SBI 占用 `StatusBarAlignment.Left` 的 priority `-9996`（单点，v0.1.17 从 v0.1.16 的 `-9996..-9999` 4 单位区间缩到 1 单位），VSCode StatusBarItem API 无扩展级命名空间/所有权机制——其它扩展若声明同 priority，可能把我们的 SBI 挤到角落。**v0.1.17 单 SBI 架构消除了 v0.1.16 的"行被外部分隔"失败模式**（v0.1.16 的 4 个独立 SBI 可能被其它扩展的 SBI 插入 done 与 interrupted 之间劈开；v0.1.17 整行是一个 SBI，外部插入只能插到整行两侧，不会拆开 4 灯）；碰撞概率也降低到 1/4。主流场景下不会触发，STATES.md §7.5 已诚实声明此限制。
-- **emoji 字体栈依赖**（v0.1.17 沿用 v0.1.16）：底部 SBI 圆点是 emoji 字形（🟢🟡🔵🔴🟤，v0.1.17 ⚪→🟤 pivot 后），依赖系统 emoji 字体栈——macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ 主流 Linux（Noto Color Emoji）正常显示彩色；Win7 / 部分 headless Linux / 无 emoji 字体的远程 SSH 环境可能渲染为黑白字形或豆腐块。v0.1.15 的 `ThemeColor` 路径跨平台稳定，v0.1.16+切回 emoji 球是有意取舍（用户审美偏好 > 跨平台一致）。
+- **SBI priority 无所有权**：底部状态栏块占用 `StatusBarAlignment.Left` 的 priority `-9996`（单点），VSCode StatusBarItem API 无扩展级命名空间/所有权机制——其它扩展若声明同 priority，可能把我们的 SBI 挤到角落。**单 SBI 整体块的架构消除了"行被外部分隔"失败模式**（4 个独立 SBI 会被其它扩展的 SBI 插入灯之间劈开；整行作为一个 SBI，外部插入只能落到整行两侧，不会拆开 4 灯）。主流场景下不会触发，STATES.md §7.5 已诚实声明此限制。
+- **emoji 字体栈依赖**：底部状态栏圆点是 emoji 字形（🟢🟡🔵🔴⚪），依赖系统 emoji 字体栈——macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ 主流 Linux（Noto Color Emoji）正常显示彩色；Win7 / 部分 headless Linux / 无 emoji 字体的远程 SSH 环境可能渲染为黑白字形或豆腐块。这是有意的审美取舍（圆点 emoji > 跨平台一致的色块）。
 
 ---
 

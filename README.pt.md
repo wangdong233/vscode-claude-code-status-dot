@@ -31,7 +31,7 @@
 
 *Notificação do sistema + som quando a sessão termina*
 
-<!-- SCREENSHOT-TODO: adicionar docs/images/status-bar-4-lights.png mostrando o bloco de 4 luzes agregadas (🟢🟡🔵🔴 com contagem) na barra de status inferior. Sugestão de captura: tenha 2+ sessões em estados diferentes (uma rodando, uma concluída, um pedido de permissão pendente) para mostrar as 4 luzes acesas lado a lado. -->
+
 
 </div>
 

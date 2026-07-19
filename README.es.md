@@ -47,8 +47,7 @@ Este proyecto resuelve eso. Tras instalarlo:
 
 <br>
 
-<!-- TODO: añadir captura de la barra de estado inferior con las 4 luces agregadas (🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted). -->
-<!-- Sugerencia: doc/docs/images/status-bar-4-lights.png — un recorte de la esquina inferior izquierda con las 4 luces y sus números. -->
+
 
 </div>
 

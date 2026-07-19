@@ -38,7 +38,7 @@ Wenn du mehrere Claude Code Sessions gleichzeitig laufen hast, musst du nicht me
 
 *macOS-Systembenachrichtigung mit Glass-Ton, wenn die Session fertig wird oder unterbrochen wird — auch wenn VSCode im Vordergrund ist.*
 
-<!-- TODO Screenshot nachreichen: Vier-Lichter-Block in der unteren Statusleiste (🟢🟡🔵🔴 + Ziffern) — neue Visualisierung, noch nicht im docs/images/-Ordner vorhanden. Gern als docs/images/status-bar-4-lights.png ergänzen. -->
+
 
 </div>
 

@@ -1,6 +1,6 @@
 // companion/extension.ts — cc-status-dot companion VS Code extension.
 //
-// PURPOSE (v0.2.1)
+// PURPOSE (v0.2.2)
 //   The patcher (vscode-claude-code-status-dot on npm) injects an IIFE into the
 //   Claude Code extension.js. CC auto-updates frequently (2.1.204 → 2.1.214 →
 //   2.1.215 …) and each update REPLACES extension.js with a fresh unpatched
@@ -26,7 +26,7 @@
 //   activationEvents: ["onStartupFinished"] (VS Code 1.74+; fires once after
 //   startup completes, asynchronously — does not block the EH like onStartup
 //   would, and is the documented replacement for the never-standardized
-//   "onStartup" token which VS Code silently ignored in early v0.2.1 builds
+//   "onStartup" token which VS Code silently ignored in early v0.2.2 builds
 //   and thereby disabled this entire safety net). The detect step is cheap
 //   (one file read + substring search) and self-rate-limits via a per-extDir
 //   globalThis Set so the same CC install is checked at most once per window
@@ -54,13 +54,13 @@ import * as vscode from "vscode";
  *  other way to learn it. If the patcher ever moves INSTALL_DIR, update this
  *  constant in lockstep.
  *
- *  v0.2.1: this constant is now a FALLBACK. The patcher writes its actual
+ *  v0.2.2: this constant is now a FALLBACK. The patcher writes its actual
  *  INSTALL_DIR (along with all other constants the companion needs) to
  *  `INSTALL_DIR/companion-config.json` at install time; the companion reads
  *  that file at activate() and prefers its values. The fallback is taken only
  *  when the config is missing (e.g. the companion was installed by an older
  *  patcher that pre-dates the config write — in that case we behave exactly
- *  like v0.2.1). */
+ *  like v0.2.2). */
 const INSTALL_DIR = path.join(os.homedir(), ".claude", "cc-status-dot");
 
 /** The patch.js runtime copy. The patcher's installRuntimeFiles() step copies
@@ -84,7 +84,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.2.1";
+const MIN_PATCHER_VERSION = "0.2.2";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -102,7 +102,7 @@ interface CompanionConfig {
 
 /** Read INSTALL_DIR/companion-config.json. Returns null if missing / corrupt
  *  (the companion falls back to its hardcoded constants in that case — same
- *  behavior as v0.2.1). Logs nothing on failure; the caller decides whether
+ *  behavior as v0.2.2). Logs nothing on failure; the caller decides whether
  *  to surface a warning (we only warn if the patcher version is stale, not if
  *  the file is missing — a missing file is normal for installs done by an
  *  older patcher). */
@@ -122,17 +122,17 @@ function readCompanionConfig(): CompanionConfig | null {
  *  is written by the patcher at install time, not at companion runtime). */
 let effectiveConfig: CompanionConfig | null = null;
 
-/** Marker grepped in CC's extension.js. Falls back to the v0.2.1 hardcoded
+/** Marker grepped in CC's extension.js. Falls back to the v0.2.2 hardcoded
  *  value if the config is missing. */
 function injectMarker(): string {
     return effectiveConfig?.injectMarker ?? "cc-status-dot-injected";
 }
 
-/** Expected IIFE version stamp. Falls back to the v0.2.1 hardcoded value if
+/** Expected IIFE version stamp. Falls back to the v0.2.2 hardcoded value if
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.2.1";
+    return effectiveConfig?.injectVersion ?? "v0.2.2";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -143,7 +143,7 @@ function ccExtIdPrefix(): string {
 
 /** Effective SEARCH_DIRS for the disk-only fallback scan. Returns the
  *  config's list if present (so new flavors added by a future patcher flow
- *  through without a .vsix rebuild), else the v0.2.1 hardcoded list. */
+ *  through without a .vsix rebuild), else the v0.2.2 hardcoded list. */
 function searchDirs(): string[] {
     if (Array.isArray(effectiveConfig?.searchDirs) && effectiveConfig!.searchDirs!.length > 0) {
         return effectiveConfig!.searchDirs!;
@@ -160,7 +160,7 @@ function searchDirs(): string[] {
 /** Global guard key — per-extDir, ensures detect+patch runs at most once per
  *  CC install per extension host lifetime, even if onStartupFinished fires for
  *  multiple roots in a multi-root workspace or the user re-opens a folder
- *  without reloading the window. v0.2.1 changed from a single boolean to a
+ *  without reloading the window. v0.2.2 changed from a single boolean to a
  *  Set<string> keyed by extDir so a multi-root workspace with CC installed in
  *  multiple flavors can be checked independently per flavor. */
 const ALREADY_RAN_KEY = "__ccsdCompanionRanDirs";
@@ -185,7 +185,7 @@ let laterRetryTimer: NodeJS.Timeout | null = null;
  *  This is the same prefix patch.ts uses in its dir-name regex
  *  /^anthropic\.claude-code-(\d+)\.(\d+)\.(\d+)/.
  *
- *  v0.2.1: this is now a fallback default; the effective value is read from
+ *  v0.2.2: this is now a fallback default; the effective value is read from
  *  companion-config.json (ccExtIdPrefix accessor). Kept as a const so the
  *  fallback has a stable name (vs an inline string). */
 const CC_EXT_ID_PREFIX_FALLBACK = "anthropic.claude-code";
@@ -195,7 +195,7 @@ const CC_EXT_ID_PREFIX_FALLBACK = "anthropic.claude-code";
  *  API (which scopes to the current flavor automatically) and falling back to
  *  a SEARCH_DIRS scan if the API can't see CC for any reason.
  *
- *  v0.2.1 fix (architecture review, was HIGH): the pre-fix version scanned ALL
+ *  v0.2.2 fix (architecture review, was HIGH): the pre-fix version scanned ALL
  *  SEARCH_DIRS and picked the highest version globally. With stable + insiders
  *  both having CC, stable's companion would detect insiders' higher CC version,
  *  decide "already patched", and never re-patch stable's own CC — stable users
@@ -244,7 +244,7 @@ function discoverCcInThisFlavor(): string | null {
     }
     // Fallback — disk-only scan across all flavors (preserves old behavior if
     // vscode.extensions.all is somehow empty/unavailable). Picks highest
-    // version globally, same as pre-v0.2.1; not ideal for stable+insiders
+    // version globally, same as pre-v0.2.2; not ideal for stable+insiders
     // split but better than silently no-oping.
     let best: { dir: string; version: number[] } | null = null;
     for (const base of dirs) {
@@ -299,7 +299,7 @@ function cmpVerStr(a: string, b: string): number {
 /** Freshness check for the on-disk CC extension.js.
  *   "fresh"  — marker present AND version stamp matches the effective
  *              INJECT_VERSION (from companion-config.json, falling back to
- *              the v0.2.1 hardcoded default if config is missing).
+ *              the v0.2.2 hardcoded default if config is missing).
  *   "stale"  — marker present BUT version stamp differs (older patcher was
  *              used last time; CC hasn't auto-updated since). We re-run patch
  *              so the new INJECT_VERSION's IIFE body lands.
@@ -310,7 +310,7 @@ function cmpVerStr(a: string, b: string): number {
  *  does it authoritatively, and re-spawning patch.js for hash-only drift
  *  would add startup cost for a case that only manifests during dev.
  *
- *  v0.2.1: marker + expected version are taken from accessors (which read
+ *  v0.2.2: marker + expected version are taken from accessors (which read
  *  companion-config.json) so a version bump in patch.ts that ships via `npx`
  *  flows through without a .vsix rebuild. */
 function ccPatchState(extDir: string): "fresh" | "stale" | "absent" {
@@ -345,7 +345,7 @@ function ccPatchState(extDir: string): "fresh" | "stale" | "absent" {
  *       a real Electron wrapper).
  *  Returns the absolute path or the string "node" as a PATH fallback.
  *
- *  JSDoc correction (v0.2.1 architecture review): the prior comment claimed
+ *  JSDoc correction (v0.2.2 architecture review): the prior comment claimed
  *  process.execPath "is a node binary" — it is NOT, it's an Electron wrapper.
  *  It only behaves as Node when ELECTRON_RUN_AS_NODE=1 is in the env, which
  *  we now set explicitly in runPatcher (no longer relying on EH-internal env
@@ -529,7 +529,7 @@ async function detectAndPatch(): Promise<void> {
 }
 
 /** Schedule a single 10-minute re-prompt after the user dismisses the post-
- *  patch reload message with "Later". Closes the v0.2.1 half-state gap:
+ *  patch reload message with "Later". Closes the v0.2.2 half-state gap:
  *  pre-fix, clicking Later left the on-disk extension.js patched but the
  *  window's in-memory CC code still stale, with NO follow-up — the user had
  *  to remember to reload manually. The 10-minute interval is a compromise:
@@ -581,7 +581,7 @@ function scheduleLaterRetry(extDir: string): void {
 
 /** Read `ts` + `extDir` from INSTALL_DIR/last-repatch.json. Returns null if
  *  the file is missing or unparseable (typical for installs done by a
- *  patcher that pre-dates the flag write — same v0.2.1 behavior, no
+ *  patcher that pre-dates the flag write — same v0.2.2 behavior, no
  *  cross-window signal). */
 function readRepatchFlag(): { ts: number; extDir: string } | null {
     try {
@@ -664,10 +664,10 @@ function startRepatchWatcher(extDir: string): void {
 // We deliberately do not declare contributions — this extension is invisible
 // unless it needs to act.
 export function activate(_ctx: vscode.ExtensionContext): void {
-    // v0.2.1: load the patcher-written config FIRST so all subsequent
+    // v0.2.2: load the patcher-written config FIRST so all subsequent
     // accessors (injectMarker / injectVersion / searchDirs / ccExtIdPrefix)
     // see the refreshed values. If the config is missing (older patcher
-    // install) we silently fall back to the v0.2.1 hardcoded constants.
+    // install) we silently fall back to the v0.2.2 hardcoded constants.
     effectiveConfig = readCompanionConfig();
     if (effectiveConfig) {
         const cfgVer = effectiveConfig.patcherVersion;

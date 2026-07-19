@@ -7,9 +7,9 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Type](https://img.shields.io/badge/Type-VSCode%20Patch-CCA700?style=flat-square)](#-原理--文档)
 
-**给 Claude Code 的 VSCode 扩展打补丁，让每个会话的 tab 图标变成四态状态点**
+**一眼看清所有 Claude Code 会话在干嘛 —— 不用逐个 tab 切过去看**
 
-🟡 运行中 · 🟢 完成 · 🔴 中断快闪 · ⚪ 空闲 —— tab 四态点 + 底部状态栏 4 灯聚合，外加完成/中断通知
+🟡 运行中 · 🟢 完成 · 🔴 中断快闪 · 🔵 待你输入 —— **tab 四态点 + 底部 4 灯聚合 + 完成/中断通知 + CC 更新自动恢复**
 
 **简体中文** | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
@@ -17,95 +17,97 @@
 
 ---
 
-## ✨ 特点
-
-- 🔧 **一行装**——`npx vscode-claude-code-status-dot` 自动 patch CC 扩展、接 9 个 hooks、复制运行时文件，幂等可重跑
-- 🛡️ **持久化不怕删源**——运行时副本落在 `~/.claude/cc-status-dot/`，删项目源 / 清 npx 缓存 / CC 自动更新都不影响已 patch 的扩展
-- 🎨 **四态全覆盖**——比 CC 原生（只有蓝/橙两点）更完整：idle / running / done / interrupted 全可视化
-- 🔔 **完成/中断通知**——macOS 走系统通知（屏幕右上角下拉，Glass 声，无按钮，几秒自动消失，前台后台都弹）；Windows/Linux 退化为 VSCode 消息 toast（无按钮），不用一直盯着
-- ⚙️ **workflow 跑期间保持 running**——后台 subagent/cron 在飞时不假绿，`Stop` 只信 payload `background_tasks` 不漂移
-- 📂 **Open Editors 同步**——左上角"打开的编辑器"视图里的 CC tab 也带状态点
-- 📊 **底部状态栏 4 灯聚合（单 StatusBarItem 整体块，4 灯位置固定）**——窗口底部状态栏（左半靠近中间）一个整体块（单个 StatusBarItem + `parts.join(' ')` 空格拼接）显示一行 4 灯：🟢done 🟡running 🔵pending 🔴interrupted，每灯紧跟数字（封顶 0/1/2/3/N，N 表示 ≥4）。count=0 → 灰球 ⚪ + 数字（灰灭）；count>0 → 彩球 + 数字（亮）。**4 灯位置固定，数字变化不位移**——VSCode 状态栏 CSS `font-variant-numeric:tabular-nums` 给所有 item 强制数字等宽，ASCII 0-9 在任何字体下都不抖。🔵 pending = 待用户输入（permission / question / elicit，writer 接 CC `Notification` hook 落盘 pending 标记，reader 独立计数，与 state 解耦）。3 段 GC：done>5min→idle（绿减 1）/ running mtime>30min→idle（崩溃会话）/ interrupted mtime>24h→idle；pending GC 基于 st（崩溃 pending→idle，减黄 + 减蓝）。整块通过 **1 个运行时 StatusBarItem + 拼接 text**（IIFE 每 500ms 直接 mutate SBI 的 text），无需 patch CC package.json，无需 ThemeColor 块。
-- ↩️ **零副作用一键还原**——`--revert` 从 `.bak` 完整恢复 extension.js、外科手术式移除 hooks、保留你的用户数据
-
-> ⚠️ **诚实声明**：本项目是一个 **patch（补丁），不是独立扩展**——VSCode 不允许第三方扩展修改另一个扩展的 webview tab 图标，唯一可行路径是 patch CC 自己的 `extension.js`。代价：CC 自动更新会覆盖，需重跑命令。
+> 开好几个 Claude Code 会话并行跑活儿时，挨个 tab 切过去看谁跑完了、谁卡住等授权、谁被限速中断——太累。装上这个，**每个 tab 自己告诉你它在干嘛**，底部一行还能看完所有会话的整体状态，跑完或中断顺手弹个系统通知。你可以放心切去干别的。
 
 ---
 
-## 🖼️ 预览
+## 🖼️ 看一眼就懂
 
 <div align="center">
 
-<img src="docs/images/status-dots.png" alt="状态点展示" width="640">
+<img src="docs/images/status-dots.png" alt="顶部 tab 与侧边打开的编辑器里的状态点" width="640">
 
-**顶部 tab 与左侧"打开的编辑器"侧边栏里的 CC 会话状态点**——🟡 运行中 · 🟢 完成 · 🔴 中断
+**顶部 tab + 左上"打开的编辑器"侧边栏**——🟡 运行中 · 🟢 完成 · 🔴 中断
 
 <br>
 
-<img src="docs/images/completion-notification.png" alt="完成通知展示" width="640">
+<img src="docs/images/completion-notification.png" alt="macOS 完成通知 + Glass 声" width="640">
 
-**会话完成时弹出的 macOS 系统通知 + 提示音**（前台后台都弹）
+**会话完成时弹出的系统通知 + 提示音**（前台后台都弹）
+
+<!-- 底部 4 灯聚合截图占位：建议补一张窗口底部状态栏的整体块截图，展示 🟢done 🟡running 🔵pending 🔴interrupted + 数字的视觉效果。 -->
 
 </div>
 
 ---
 
-## 💬 你能得到什么?
+## 🚀 三步用上
 
-装上后，在 Claude Code 跑活儿时，**一眼看清每个会话在干嘛**：
-
-| 场景 | 你看到 / 得到 |
-|---|---|
-| CC 跑起来（你发了 prompt） | 🟡 tab 图标变**静态黄点** `#CCA700`（无动画） |
-| CC 本轮正常完成 | 🟢 tab 变绿 + macOS 系统通知（右上角 + 声音；Windows/Linux 退化为 VSCode 右下角消息） |
-| CC 被限速 / 过载中断 | 🔴 tab 红色快闪 + 通知（文案带 `rate limit reached` 等原因） |
-| workflow / 后台 subagent 还在跑 | 主会话 tab **保持黄**（不误显绿），`Stop` 权威裁定不假完成 |
-| 看左上角"打开的编辑器"视图 | CC 的 tab 这里**也带状态点**，和顶部 tab 栏完全同步 |
-| CC 弹出权限授权 | tab 上 reader **让出图标** → CC 原生蓝点显示（不覆盖）；底部状态栏 🔵 pending 计数 +1 |
-
-> **全部装完即得，不用配任何东西。** 想关通知 / 换声音才需要改配置。
-
----
-
-## 🚀 快速开始
-
-### ① 确认前置
-
-- **Node.js 18+**
-- **Claude Code 的 VSCode 扩展已安装**（即能在 VSCode 里开 CC 聊天面板）
-
-### ② 一行装
+**前置**：Node.js 18+，VSCode 里已装 Claude Code 扩展。
 
 ```bash
 npx vscode-claude-code-status-dot
 ```
 
-这一行会自动完成：
-1. 在 `~/.vscode/extensions`（及 insiders / cursor / vscodium 等）找到 `anthropic.claude-code-*`，选版本最高的；
-2. 自动清理旧版残留（如有）；
-3. **备份** `extension.js` → `extension.js.bak`（仅首次）；
-4. 注入定时器（设 tab 图标 + done/interrupted 通知）；
-5. 把 **9 个 hook 事件**写入 `~/.claude/settings.json`（带 `# cc-status-dot-managed` 标记，幂等）；
-6. 复制运行时副本（4 个 SVG = idle + running + done + error，加 hook 脚本）到 `~/.claude/cc-status-dot/`（`INSTALL_DIR`）。
-7. **v0.2.0 新增**：检测 PATH 上的 `code` CLI（含 `code-insiders` / `cursor` / `codium`），把 **companion .vsix**（`cc-status-dot-companion`）`code --install-extension` 进每个检测到的 VS Code 系编辑器；同时把 `patch.js` 拷贝到 `INSTALL_DIR/patch.js`，让 companion 在 CC 自动更新覆盖 patch 后能自动重跑。
+`Cmd+Shift+P`（Mac）/ `Ctrl+Shift+P`（Win/Linux）→ 输入 `Developer: Reload Window` → 在 CC 里发一条 prompt。
 
-> **或从源码（开发态）**：
-> ```bash
-> git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
-> cd vscode-claude-code-status-dot
-> npx tsx patch.ts
-> ```
-> 两种方式等价、幂等。IIFE 与 hook 都引用 `INSTALL_DIR` 绝对路径——**删项目源 / 清 npx 缓存都不影响已 patch 的扩展**。
+tab 图标立刻变 🟡 黄，跑完变 🟢 绿并弹通知。**装一次就生效，不用配任何东西。**
 
-### ③ Reload Window
+> 想关通知 / 换声音才需要看后面的[配置](#-配置可选)。
 
-`Cmd+Shift+P`（Mac）/ `Ctrl+Shift+P`（Win/Linux）→ 输入 `Developer: Reload Window`。
+---
 
-### ④ 发 prompt 观察
+## 💬 你能得到什么
 
-在 CC 里发一条 prompt：
-- tab 图标变 🟡 **静态黄点** → CC 完成 → 变 🟢 绿色
-- **CC 完成 / 中断** → 收到 macOS 系统通知（右上角 + Glass 声音），前台后台都弹
+### 1. 每个 tab 都带四态状态点
+
+CC 会话的 tab 图标按状态变色——🟡 运行中 / 🟢 完成 / 🔴 中断快闪 / ⚪ 空闲。**顶部 tab 栏 + 左上"打开的编辑器"侧边栏都显示**，两边完全同步。开几个会话并排跑，扫一眼就知道哪个还在干、哪个完事了。
+
+### 2. 底部 4 灯聚合：所有会话整体状态一眼看完
+
+窗口底部状态栏一个整体块，4 个圆点 + 数字：
+
+```
+🟢 1   🟡 2   🔵 1   🔴 0
+done   running  pending  interrupted
+```
+
+开 3 个会话——一个跑着、一个等你授权、一个完成了——底部直接看到 `🟢1 🟡1 🔵1 🔴0`，不用切 tab。**4 灯位置固定，数字变化不会让整行位移**（状态栏数字等宽）。每灯 count=0 时灰灭（占位但不亮），count>0 时亮彩球。
+
+### 3. 完成 / 中断通知
+
+CC 跑完或被限速中断时弹**系统通知**——前台后台都弹：
+
+- **macOS**：屏幕右上角下拉，Glass 声，无按钮，几秒自动消失
+- **Windows / Linux**：VSCode 右下角 toast，同样无按钮
+
+你可以放心切去浏览器 / 别的窗口干别的，跑完自会提醒，不用一直盯着。
+
+### 4. 🔵 pending：CC 等你输入时立刻让你知道
+
+CC 弹**权限授权**、question、elicit 这种"等你输入"的场景，底部 🔵 灯 +1。tab 上 reader 让出图标给 CC 原生蓝点（**不覆盖**），底部状态栏还能独立计 pending——一眼知道有几个会话卡在等你。
+
+### 5. companion 自愈：CC 更新覆盖后自动恢复
+
+CC 自动更新会把 patch 整体覆盖掉。**v0.2.0 起**，`npx` 装的时候会自动装一个 **companion 扩展**进你的 VSCode 系编辑器（含 Insiders / Cursor / VSCodium）；下次 VSCode 启动时，companion 检测到 CC 把 patch 冲掉了，**自动重跑 patcher + 提示一次 Reload Window**——多数情况你什么都不用做，无感恢复。
+
+### 6. 持久化：删源 / 清缓存 / CC 更新都不影响
+
+运行时副本落在 `~/.claude/cc-status-dot/`（SVG 图标 + hook 脚本 + patcher）。所有 hook 命令和图标路径都指向这个**绝对路径**——删项目源、清 npx 缓存、CC 自动更新都不碰这里，已 patch 的扩展照常渲染。
+
+### 7. workflow 跑期间不假绿
+
+后台跑 subagent / cron 时，主会话 tab **保持黄色**（不误显完成）——`Stop` hook 只信 payload 里的 `background_tasks` 计数，不退化漂移。活儿真跑完才转绿。
+
+### 8. 安全兜底（绝不砖 CC）
+
+写 `extension.js` 前对完整 2.6MB 文件跑 `node --check`（assertCompiles 守卫，坏的注入直接拒绝写入），原子写（`.tmp` + rename），`INJECT_VERSION` 自动重注入。哪怕 patcher 出错，也**不会把 CC 扩展写坏**。
+
+### 9. 一键零副作用还原
+
+`npx vscode-claude-code-status-dot --revert` 从 `.bak` 完整恢复 `extension.js`，外科手术式移除 hooks，**保留你的所有用户数据**。
+
+> ⚠️ **诚实声明**：这是一个 **patch（补丁），不是独立扩展**——VSCode 不允许第三方扩展修改另一个扩展的 webview tab 图标，唯一可行路径是 patch CC 自己的 `extension.js`。代价：CC 自动更新会覆盖，但 companion 自愈扩展会自动恢复（见第 5 点）。
 
 ---
 
@@ -129,6 +131,21 @@ npx vscode-claude-code-status-dot
 
 每个 CC 会话的 tab 图标按状态变色，**顶部 tab 栏 + 左上角"打开的编辑器"视图都显示**。running/idle/done 是静态色点，interrupted 红色快闪。
 
+### 📊 底部状态栏 4 灯聚合
+
+窗口底部状态栏（左半靠近中间）一个整体块（**单个 StatusBarItem + `parts.join(' ')` 空格拼接**）聚合显示 4 灯：**🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted**，每灯紧跟数字（封顶 0/1/2/3/N，N 表示 ≥4）：
+
+- count=0 → 灰球 ⚪ + 数字（灰灭，占位但不亮）
+- count>0 → 彩球 + 数字（亮）
+
+**4 灯位置固定，数字变化不位移**——VSCode 状态栏 CSS `font-variant-numeric:tabular-nums` 给所有 item 强制数字等宽，ASCII 0-9 在任何字体下都不抖。
+
+🔵 pending 是独立维度（与 state 解耦）：CC 弹权限授权 / question / elicit 等"待用户输入"场景，writer 接 CC `Notification` hook 落盘 pending 标记，reader 独立计数。权限授权时 tab 图标让位给 CC 原生蓝点（不覆盖），底部状态栏仍独立计 pending。
+
+**3 段 GC** 防止计数漂移：done 超 5 分钟 → idle（绿减 1）/ running 文件 mtime 超 30 分钟 → idle（崩溃会话回收）/ interrupted 文件 mtime 超 24 小时 → idle；pending 基于 st 字段 GC（崩溃 pending 回 idle，同时减黄 + 减蓝）。
+
+整块通过 **1 个运行时 StatusBarItem + 拼接 text**（IIFE 每 500ms 直接 mutate SBI 的 text），无需 patch CC `package.json`，无需 ThemeColor 块。
+
 ### 🔔 完成 / 中断通知
 
 会话转为 `done` 或 `interrupted` 时（每个新的完成/中断 `since` 触发一次，不重复）：
@@ -136,9 +153,13 @@ npx vscode-claude-code-status-dot
 - **macOS**：弹**系统通知**（从屏幕右上角下拉，带声音，无任何按钮，几秒后自动消失）——**前台和后台都弹**（`notifyWhenFocused` 默认 `true`）。
 - **Windows / Linux**：没有 osascript，退化为 VSCode 内置消息（右下角 toast，同样无按钮、自动消失）。
 
-> 想彻底安静？设 `"ccStatusDot.notifyWhenFocused": false`（仅后台时通知），或直接关 `"ccStatusDot.notify": false`（图标变绿/红快闪即足够）。
-
 通知声音由 `ccStatusDot.notifySound` 控制（默认 `Glass`，done 与中断共用；`""` 静音）。首次 macOS 系统通知会弹一次"Script Editor 想发送通知"授权，允许即可。
+
+### 🛡️ companion 自愈扩展（v0.2.0+）
+
+`npx` 装的时候会自动检测 PATH 上的 `code` CLI（含 `code-insiders` / `cursor` / `codium`），把 **companion .vsix**（`cc-status-dot-companion`）`code --install-extension` 进每个检测到的 VS Code 系编辑器；同时把 `patch.js` 拷贝到 `INSTALL_DIR/patch.js`。
+
+VSCode 每次启动时，companion 扩展检测 CC 扩展里的 `cc-status-dot-injected` marker——如果 CC 自动更新把 patch 冲掉了（marker 不见了），companion 自动跑 `node ~/.claude/cc-status-dot/patch.js` 重 patch，并提示一次 `Reload Window`。用户**无感恢复**，不用手动跑 `npx`。
 
 ### ⚙️ workflow 跑期间保持 running
 
@@ -148,30 +169,13 @@ npx vscode-claude-code-status-dot
 
 左上角"打开的编辑器"视图里的 CC tab **也带状态点**，和顶部 tab 栏完全同步。
 
-### 📊 底部状态栏 4 灯聚合
+### 🔒 持久化机制
 
-窗口底部状态栏（左半靠近中间）一个整体块（单 StatusBarItem + 空格拼接）聚合显示 4 灯：**🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted**，每灯紧跟数字（封顶 0/1/2/3/N，N 表示 ≥4）：
+reader（注入 IIFE）引用的 SVG 路径与 settings.json 接线的 hook 命令都指向 `INSTALL_DIR`（`~/.claude/cc-status-dot/`）的**绝对路径**，而非项目源目录。安装时 patcher 从项目源（`resources/` + `hooks/`）幂等复制一份过去。所以即便删除项目源目录、npx 缓存被清、CC 自动更新（只覆盖扩展目录，不碰 `~/.claude/`），已 patch 的扩展仍照常渲染。
 
-- count=0 → 灰球 ⚪ + 数字（灰灭，占位但不亮）
-- count>0 → 彩球 + 数字（亮）
+### ↩️ 零副作用一键还原
 
-**4 灯位置固定，数字变化不位移**——VSCode 状态栏自带 `font-variant-numeric:tabular-nums`，ASCII 数字 0-9 在任何字体下都等宽。
-
-🔵 pending 是独立维度（与 state 解耦）：CC 弹权限授权 / question / elicit 等"待用户输入"场景，writer 接 CC `Notification` hook 落盘 pending 标记，reader 单独计数。权限授权时 tab 图标让位给 CC 原生蓝点（不覆盖），底部状态栏仍独立计 pending。
-
-**3 段 GC** 防止计数漂移：done 超 5 分钟 → idle（绿减 1）/ running 文件 mtime 超 30 分钟 → idle（崩溃会话回收）/ interrupted 文件 mtime 超 24 小时 → idle；pending 基于 st 字段 GC（崩溃 pending 回 idle，同时减黄 + 减蓝）。
-
-<details>
-<summary>📖 持久化机制（为什么删源也不怕）</summary>
-
-reader（注入 IIFE）引用的 SVG 路径与 settings.json 接线的 hook 命令都指向 `INSTALL_DIR`（`~/.claude/cc-status-dot/`）的**绝对路径**，而非项目源目录。安装时 patcher 从项目源（`resources/` + `hooks/`）幂等复制一份过去。所以即便：
-- 删除项目源目录
-- npx 缓存被清
-- CC 自动更新（只覆盖扩展目录，不碰 `~/.claude/`）
-
-已 patch 的扩展仍照常渲染。只需 CC 更新后**重跑一次** `npx vscode-claude-code-status-dot` 恢复 patch 即可。
-
-</details>
+`--revert` 从 `.bak` 完整恢复 extension.js、外科手术式移除 hooks、保留你的用户数据。
 
 <details>
 <summary>📖 升级路径（旧版 git clone 装的怎么升级）</summary>
@@ -183,7 +187,7 @@ reader（注入 IIFE）引用的 SVG 路径与 settings.json 接线的 hook 命�
 <details>
 <summary>📖 为什么是 patch（不是独立扩展）</summary>
 
-VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩展独占设置**，没有公开 API 让第三方扩展改它。CC 的 session tab 正是 CC 扩展自己创建的 WebviewPanel，其图标只能在 CC 的 `extension.js` 内部赋值。穷尽替代方案（独立扩展、proposed API、webview 拦截等）均不可达，唯一可行路径是 patch。代价：CC 自动更新会覆盖，需重跑 patch。
+VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩展独占设置**，没有公开 API 让第三方扩展改它。CC 的 session tab 正是 CC 扩展自己创建的 WebviewPanel，其图标只能在 CC 的 `extension.js` 内部赋值。穷尽替代方案（独立扩展、proposed API、webview 拦截等）均不可达，唯一可行路径是 patch。代价：CC 自动更新会覆盖（v0.2.0 起 companion 自愈自动恢复）。
 
 </details>
 
@@ -192,11 +196,19 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 
 | 命令 | 作用 |
 |---|---|
-| `npx vscode-claude-code-status-dot` | 安装（patch extension.js + 接 hooks，幂等；自动清理旧版残留） |
+| `npx vscode-claude-code-status-dot` | 安装（patch extension.js + 接 hooks + 装 companion，幂等；自动清理旧版残留） |
 | `npx vscode-claude-code-status-dot --revert` | 还原（从 `.bak` 恢复 + 移除 hooks + 删 INSTALL_DIR，保留用户数据） |
-| `npx vscode-claude-code-status-dot --status` | dry-run 报告，不改任何文件 |
+| `npx vscode-claude-code-status-dot --status` | dry-run 诊断报告，不改任何文件 |
 
 开发态把命令换成 `npx tsx patch.ts`（带同样参数）。
+
+或从源码（开发态）：
+```bash
+git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
+cd vscode-claude-code-status-dot
+npx tsx patch.ts
+```
+两种方式等价、幂等。IIFE 与 hook 都引用 `INSTALL_DIR` 绝对路径——**删项目源 / 清 npx 缓存都不影响已 patch 的扩展**。
 
 </details>
 
@@ -265,7 +277,7 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)——图标注入原理（anchor / IIFE / SVG 绑定）
 - [`docs/USAGE.md`](docs/USAGE.md)——使用指南（安装 / 排错 / 还原）
 
-> 本项目修改 CC 扩展的 `extension.js`（已备份，`--revert` 完整还原），并写入 `~/.claude/settings.json`（首次备份）。hook 脚本**永不阻塞 CC**——任何错误静默退出。
+> 本项目修改 CC 扩展的 `extension.js`（已备份，`--revert` 完整还原），并写入 `~/.claude/settings.json`（首次备份）。hook 脚本**永不阻塞 CC**——任何错误静默退出。**9 个 hooks**（含 Notification 落盘 pending）。
 
 ---
 

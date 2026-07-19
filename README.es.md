@@ -9,7 +9,7 @@
 
 **Ves de un vistazo el estado de cada sesión de Claude Code en VSCode — sin cambiar de pestaña, sin esperar mirando la pantalla.**
 
-🟡 En ejecución · 🟢 Completado · 🔴 Interrupción · 🔵 Esperando tu entrada — puntos de color en cada pestaña, cuatro luces agregadas abajo y notificaciones del sistema cuando CC termina.
+⚪ Inactivo · 🟡 En ejecución · 🟢 Completado · 🔴 Interrupción · 🔵 Esperando tu entrada — puntos de color en cada pestaña (5 estados), cuatro luces agregadas abajo y notificaciones del sistema cuando CC termina.
 
 [简体中文](README.md) | [English](README.en.md) | [Deutsch](README.de.md) | **Español** | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
@@ -23,7 +23,7 @@ Si trabajas con varias sesiones de Claude Code a la vez (o aunque sea una), el p
 
 Este proyecto resuelve eso. Tras instalarlo:
 
-- **Cada pestaña de CC muestra su estado con un punto de color** — 🟡 corriendo, 🟢 listo, 🔴 interrumpido — arriba del todo **y** en la vista "Editores abiertos" a la izquierda.
+- **Cada pestaña de CC muestra su estado con un punto de color** — ⚪ inactivo, 🟡 corriendo, 🟢 listo, 🔵 esperando tu entrada, 🔴 interrumpido — arriba del todo **y** en la vista "Editores abiertos" a la izquierda.
 - **La barra de estado inferior agrega las cuatro luces de todas tus sesiones en un solo bloque**: 🟢 hechos · 🟡 corriendo · 🔵 esperando que respondas · 🔴 interrumpidos. **Un vistazo te dice en qué estado está todo tu trabajo con CC.**
 - **Una notificación del sistema (con sonido) salta cuando CC termina o se interrumpe** — aunque estés en otra aplicación. Ya no necesitas mirar VSCode para saber que llegó el momento de volver.
 - **🔵 El punto azul te avisa cuando CC está pidiendo permiso / una respuesta tuya** — autorización, pregunta, formularios. No se te queda esperando.
@@ -37,7 +37,7 @@ Este proyecto resuelve eso. Tras instalarlo:
 
 <img src="docs/images/status-dots.png" width="640" alt="Puntos de estado en la pestaña y en Editores abiertos">
 
-**Cada pestaña de CC lleva un punto de estado de cuatro colores** — arriba en la barra de pestañas y a la izquierda en "Editores abiertos". 🟡 corriendo · 🟢 completado · 🔴 interrumpido.
+**Cada pestaña de CC lleva un punto de estado de cinco colores** — arriba en la barra de pestañas y a la izquierda en "Editores abiertos". 🟡 corriendo · 🟢 completado · 🔵 esperando tu entrada · 🔴 interrumpido.
 
 <br>
 
@@ -77,6 +77,7 @@ Eso es todo. El comando es **idempotente** — puedes repetirlo sin miedo.
 ### ④ Envía un prompt en Claude Code y mira
 
 - La pestaña de CC se vuelve 🟡 amarilla mientras trabaja
+- Si CC pide permiso / una respuesta (autorización, pregunta, formulario), la pestaña se vuelve 🔵 azul — el reader cede el icono al punto azul nativo de CC, y la luz 🔵 de la barra inferior suma +1
 - Al terminar, se pone 🟢 verde + salta una **notificación del sistema con sonido**
 - La barra inferior suma las cuatro luces con sus conteos
 
@@ -110,7 +111,7 @@ Eso es todo. El comando es **idempotente** — puedes repetirlo sin miedo.
 
 - 🔧 **Instalación en una línea** — `npx vscode-claude-code-status-dot` aplica el parche, conecta 9 hooks y copia los archivos de runtime. Idempotente: se puede repetir sin efectos secundarios.
 - 🛡️ **Persistente — sobrevive a borrar el código fuente** — la copia de runtime vive en `~/.claude/cc-status-dot/`. Borrar el proyecto, limpiar la caché de npx o una actualización automática de CC no rompen la extensión ya parcheada.
-- 🎨 **Cuatro estados completos** — más completo que CC nativo (que solo tiene azul/naranja): idle / running / done / interrupted, todos visibles.
+- 🎨 **Cinco estados completos** — más completo que CC nativo (que solo tiene azul/naranja): idle / running / done / interrupted + permission (azul, cede el icono al punto nativo de CC), todos visibles.
 - 📊 **Barra inferior con 4 luces agregadas** — un único bloque en la barra de estado inferior muestra 🟢done · 🟡running · 🔵pending · 🔴interrupted con sus conteos. Las 4 posiciones son fijas: los números cambian sin desplazar la fila.
 - 🔵 **Contador independiente de *pending*** — esperando autorización / pregunta / elicit, alimentado por el hook `Notification`, desacoplado del estado principal.
 - 🔔 **Notificaciones de completado / interrupción** — macOS: notificación del sistema (esquina superior derecha, sonido `Glass`, sin botones, se cierra sola) en primer y segundo plano. Windows/Linux: toast integrado de VSCode, sin botones.
@@ -140,7 +141,7 @@ Eso es todo. El comando es **idempotente** — puedes repetirlo sin miedo.
 
 ## 🛠️ Capacidades en detalle
 
-### 🟡 Punto de icono de pestaña de cuatro estados
+### 🟡 Punto de icono de pestaña de cinco estados
 
 El icono de cada sesión de CC cambia de color según el estado, **a la vez en la barra de pestañas superior y en la vista "Editores abiertos" arriba a la izquierda**. `running` / `idle` / `done` son puntos estáticos; `interrupted` parpadea en rojo rápido. Cuando CC muestra una solicitud de permiso, el reader **cede el icono** y deja que se muestre el punto azul nativo de CC (no lo sobrescribe).
 
@@ -293,7 +294,7 @@ Asegúrate de haber recargado VSCode tras instalar. Si usas Win7 / un Linux head
 
 **Parchea el `extension.js` de CC (inyecta un temporizador que fija el icono de la pestaña) + los hooks de CC escriben el estado + notificaciones de completado/interrupción.** Documentación completa:
 
-- [`docs/STATES.md`](docs/STATES.md) — **Contrato de estados (única fuente de verdad)**: cuatro estados / mapeo de eventos / IPC / notificaciones
+- [`docs/STATES.md`](docs/STATES.md) — **Contrato de estados (única fuente de verdad)**: cinco estados / mapeo de eventos / IPC / notificaciones
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — Principio de inyección del icono (anchor / IIFE / enlace SVG)
 - [`docs/USAGE.md`](docs/USAGE.md) — Guía de uso (instalación / resolución de problemas / reversión)
 

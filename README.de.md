@@ -21,7 +21,7 @@
 
 Wenn du mehrere Claude Code Sessions gleichzeitig laufen hast, musst du nicht mehr jeden Tab einzeln anklicken, um nachzusehen, ob CC fertig ist oder auf eine Antwort wartet. **Nach der Installation siehst du auf einen Blick:**
 
-- **Statuspunkt auf jedem Session-Tab** — 🟡 läuft / 🟢 fertig / 🔴 unterbrochen / ⚪ leerlauf, zusätzlich auch in der Ansicht „Offene Editoren" oben links.
+- **Statuspunkt auf jedem Session-Tab** — 🟡 läuft / 🟢 fertig / 🔵 wartet auf dich / 🔴 unterbrochen / ⚪ leerlauf, zusätzlich auch in der Ansicht „Offene Editoren" oben links.
 - **Vier-Lichter-Block unten in der Statusleiste** — eine kompakte Zeile mit 🟢 🟡 🔵 🔴 und je einer Ziffer: sofort sichtbar, wie viele Sessions laufen, fertig sind, auf dich warten oder unterbrochen wurden.
 - **Systembenachrichtigung bei Fertigstellung oder Unterbrechung** — macOS Rechtsch-rechte-Ecke-Nachricht mit Ton (Glass), Windows/Linux VSCode-Toast; kommt auch im Hintergrund, ohne Knöpfe, verschwindet von selbst.
 - **Selbstheilung nach Claude Code Updates** (seit v0.2.0) — CC-Auto-Updates überschreiben den Patch; eine kleine Companion-Erweiterung erkennt das beim nächsten VSCode-Start und repariert ihn automatisch + schlägt einen Reload vor. Meistens merkst du davon nichts.
@@ -30,7 +30,7 @@ Wenn du mehrere Claude Code Sessions gleichzeitig laufen hast, musst du nicht me
 
 <img src="docs/images/status-dots.png" width="640" alt="Zustands-Punkte auf Tabs und in „Offene Editoren"">
 
-*Oben auf dem Session-Tab und links in der Ansicht „Offene Editoren" trägt jede CC-Session ihren eigenen Farbpunkt — 🟡 läuft / 🟢 fertig / 🔴 unterbrochen.*
+*Oben auf dem Session-Tab und links in der Ansicht „Offene Editoren" trägt jede CC-Session ihren eigenen Farbpunkt — 🟡 läuft / 🟢 fertig / 🔵 wartet auf dich / 🔴 unterbrochen.*
 
 <br>
 
@@ -54,7 +54,7 @@ npx vscode-claude-code-status-dot
 
 **② Einmal neu laden:** `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux) → `Developer: Reload Window` eingeben.
 
-**③ Prompt senden und beobachten:** Sende einen Prompt an Claude Code — der Tab-Icon wird zum 🟡 gelben Punkt, bei Fertigstellung zu 🟢 grün, und eine Systembenachrichtigung erscheint. Unten in der Statusleiste siehst du parallel den Vier-Lichter-Block.
+**③ Prompt senden und beobachten:** Sende einen Prompt an Claude Code — der Tab-Icon wird zum 🟡 gelben Punkt, bei Fertigstellung zu 🟢 grün, und eine Systembenachrichtigung erscheint. Fordert CC eine Berechtigung an, wird der Tab 🔵 blau (wartet auf dich) und der untere Block zeigt 🔵 +1. Unten in der Statusleiste siehst du parallel den Vier-Lichter-Block.
 
 Fertig. Keine Konfiguration nötig — alles funktioniert out of the box.
 
@@ -97,9 +97,9 @@ Fertig. Keine Konfiguration nötig — alles funktioniert out of the box.
 
 ## 🛠️ Fähigkeiten im Detail
 
-### 🟡 Vier Zustands-Tab-Icon-Punkte
+### 🟡 Fünf Zustands-Tab-Icon-Punkte
 
-Das Tab-Icon jeder CC-Session ändert die Farbe nach Zustand und **erscheint gleichzeitig in der oberen Tab-Leiste und in der Ansicht „Offene Editoren" oben links**. running/idle/done sind statische Farbpunkte, unterbrochen ist rotes Schnellblinken.
+Das Tab-Icon jeder CC-Session ändert die Farbe nach Zustand und **erscheint gleichzeitig in der oberen Tab-Leiste und in der Ansicht „Offene Editoren" oben links**. running/idle/done sind statische Farbpunkte, unterbrochen ist rotes Schnellblinken, und bei Berechtigung/anstehender Eingabe übernimmt CCs nativer 🔵 Blau-Punkt die Anzeige (der Reader tritt zurück und überschreibt ihn nicht).
 
 ### 📊 Vier-Lichter-Block in der unteren Statusleiste
 
@@ -235,7 +235,7 @@ vscode-claude-code-status-dot        # nach der Installation direkt den Befehl a
 
 **Patcht CCs `extension.js` (injiziert einen Timer, der das Tab-Icon setzt) + 9 CC-Hooks schreiben den Zustand + Companion-Erweiterung repariert den Patch nach CC-Updates automatisch + Fertig-/Unterbrochen-Benachrichtigung.** Vollständige Dokumentation:
 
-- [`docs/STATES.md`](docs/STATES.md) – **Zustandsvertrag (einzige Quelle der Wahrheit)**: vier Zustände / Ereignis-Mapping / IPC / Benachrichtigung
+- [`docs/STATES.md`](docs/STATES.md) – **Zustandsvertrag (einzige Quelle der Wahrheit)**: fünf Zustände (idle / running / done / interrupted + permission) / Ereignis-Mapping / IPC / Benachrichtigung
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) – Prinzip der Icon-Injektion (Anchor / IIFE / SVG-Bindung)
 - [`docs/USAGE.md`](docs/USAGE.md) – Gebrauchsanleitung (Installation / Fehlersuche / Wiederherstellung)
 

@@ -17,13 +17,13 @@
 
 ---
 
-> Cada sessão do Claude Code ganha um **ponto colorido na aba** (amarelo / verde / vermelho / cinza) — tanto na barra de abas do topo quanto na vista "Open Editors". Além disso, a **barra de status inferior agrega tudo num único bloco de 4 luzes 🟢🟡🔵🔴 com contagem**, para ver **todas** as sessões de uma vez. E você ainda recebe **notificações do sistema** quando o CC termina ou é interrompido.
+> Cada sessão do Claude Code ganha um **ponto colorido na aba** (amarelo / verde / vermelho / cinza / azul) — tanto na barra de abas do topo quanto na vista "Open Editors". Além disso, a **barra de status inferior agrega tudo num único bloco de 4 luzes 🟢🟡🔵🔴 com contagem** (sem o cinza: ocioso não é sessão ativa e não entra no agregado), para ver **todas** as sessões de uma vez. E você ainda recebe **notificações do sistema** quando o CC termina ou é interrompido.
 
 <div align="center">
 
 <img src="docs/images/status-dots.png" width="640" alt="Pontos de estado nas abas">
 
-*Pontos de estado nas abas do topo e em "Open Editors" — amarelo em execução, verde concluído, vermelho interrompido*
+*Pontos de estado nas abas do topo e em "Open Editors" — 🟡 amarelo em execução · 🟢 verde concluído · 🔵 azul aguardando você · 🔴 vermelho interrompido*
 
 <br>
 
@@ -45,7 +45,7 @@ npx vscode-claude-code-status-dot
 
 Depois, no VSCode: `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux) → digite `Developer: Reload Window`.
 
-Pronto. Envie um prompt no Claude Code e observe o ponto da aba mudar de cor.
+Pronto. Envie um prompt no Claude Code e observe o ponto da aba: 🟡 amarelo em execução → 🟢 verde quando concluído; e quando o CC pedir autorização / pergunta / elicit, a aba cede lugar ao ponto 🔵 azul nativo do CC (aguardando você) e a luz 🔵 da barra de status inferior soma +1.
 
 <details>
 <summary>Pré-requisitos e instalação alternativa</summary>
@@ -99,7 +99,7 @@ Os dois caminhos são equivalentes e idempotentes — pode rodar de novo quantas
 
 ## ✨ Recursos
 
-- **📍 Ponto de estado de 4 cores em cada aba** — visível simultaneamente na barra de abas do topo e em "Open Editors". idle/running/done são estáticos; interrupted pisca vermelho rápido.
+- **📍 Ponto de estado de 5 cores em cada aba** — visível simultaneamente na barra de abas do topo e em "Open Editors". idle/running/done são estáticos; interrupted pisca vermelho rápido; quando o CC pede autorização, o leitor devolve o ícone ao CC, que mostra o ponto 🔵 azul nativo (permission yield).
 - **📊 Bloco de 4 luzes agregadas na barra de status inferior** — 🟢concluído · 🟡correndo · 🔵pendente · 🔴interrompido, cada uma com sua contagem ao lado. As 4 posições são fixas — os dígitos mudam sem deslocar as luzes. Veja **todas** as sessões num único olhar.
 - **🔵 Pending = aguardando você** — sempre que o CC pede permissão / pergunta / elicit, a luz azul acende e o contador soma +1 (alimentado pelo hook `Notification`, independente do estado da sessão).
 - **🔔 Notificações de conclusão / interrupção** — macOS: notificação do sistema (canto superior direito, som `Glass`, sem botões, some sozinha), em primeiro ou segundo plano. Windows / Linux: toast embutido do VSCode.
@@ -200,7 +200,7 @@ O ícone da aba de `WebviewPanel` do VSCode (`iconPath`) é definido **exclusiva
 
 Documentação completa:
 
-- [`docs/STATES.md`](docs/STATES.md) — **Contrato de estados (fonte única de verdade)**: quatro estados / mapeamento de eventos / IPC / notificações
+- [`docs/STATES.md`](docs/STATES.md) — **Contrato de estados (fonte única de verdade)**: cinco estados (4 do leitor + azul de permission yield) / mapeamento de eventos / IPC / notificações
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — Princípio da injeção do ícone (âncora / IIFE / associação de SVG)
 - [`docs/USAGE.md`](docs/USAGE.md) — Guia de uso (instalação / troubleshooting / restauração)
 

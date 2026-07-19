@@ -23,7 +23,7 @@ Chaque session porte un point coloré sur son onglet (🟡 en cours · 🟢 term
 
 <img src="docs/images/status-dots.png" width="640" alt="Points d'état des sessions Claude Code">
 
-*Le point d'état sur l'onglet CC (en haut) et dans la vue « Open Editors » — chaque session porte sa couleur : 🟡 en cours / 🟢 terminé / 🔴 interrompu.*
+*Le point d'état sur l'onglet CC (en haut) et dans la vue « Open Editors » — chaque session porte sa couleur : 🟡 en cours / 🟢 terminé / 🔵 en attente / 🔴 interrompu.*
 
 <br>
 
@@ -53,7 +53,7 @@ npx vscode-claude-code-status-dot
 
 **③ Recharger la fenêtre** — `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux) → `Developer: Reload Window`.
 
-Envoyez un prompt dans CC : l'onglet devient 🟡 jaune, puis 🟢 vert à la fin, avec une notification système. C'est tout.
+Envoyez un prompt dans CC : l'onglet devient 🟡 jaune, puis 🟢 vert à la fin, avec une notification système. Quand CC demande une autorisation (ou une question / elicit), l'onglet passe en 🔵 bleu (attente de votre saisie) et la boule 🔵 du bas s'incrémente. C'est tout.
 
 > **Désinstaller** : `npx vscode-claude-code-status-dot --revert` (restaure l'original, retire les hooks, conserve vos données).
 > **Diagnostiquer** : `npx vscode-claude-code-status-dot --status` (ne modifie rien).
@@ -62,8 +62,8 @@ Envoyez un prompt dans CC : l'onglet devient 🟡 jaune, puis 🟢 vert à la fi
 
 ## 💬 Ce que vous obtenez
 
-- **👀 Chaque session visible en un coup d'œil** — chaque onglet CC porte un point coloré selon son état : 🟡 en cours · 🟢 terminé · 🔴 interrompu (clignotement rapide) · ⚪ inactif. Le même point apparaît aussi sur l'onglet de la vue « Open Editors » en haut à gauche, parfaitement synchronisé avec la barre d'onglets supérieure.
-- **📊 Toutes les sessions, en un seul bloc** — la barre d'état inférieure affiche **4 boules emoji avec leurs comptes** : 🟢 terminé · 🟡 en cours · 🔵 en attente · 🔴 interrompu. Les 4 positions sont fixes — les chiffres ne sautent jamais en changeant. Vous saisissez l'état global de **toutes** vos sessions sans ouvrir chaque onglet.
+- **👀 Chaque session visible en un coup d'œil** — chaque onglet CC porte un point coloré selon son état (**5 couleurs** : 🟡 en cours · 🟢 terminé · 🔵 en attente d'autorisation · 🔴 interrompu, clignotement rapide · ⚪ inactif). Le même point apparaît aussi sur l'onglet de la vue « Open Editors » en haut à gauche, parfaitement synchronisé avec la barre d'onglets supérieure.
+- **📊 Toutes les sessions, en un seul bloc** — la barre d'état inférieure affiche **4 boules emoji avec leurs comptes** : 🟢 terminé · 🟡 en cours · 🔵 en attente · 🔴 interrompu. L'inactif ⚪ n'apparaît pas en bas (idle = aucune session active, hors agrégat). Les 4 positions sont fixes — les chiffres ne sautent jamais en changeant. Vous saisissez l'état global de **toutes** vos sessions sans ouvrir chaque onglet.
 - **🔵 Le bleu « en attente de vous »** — dès que CC demande une autorisation, pose une question ou sollicite une saisie (elicit), la boule 🔵 s'allume (+1 en bas). Sur l'onglet, le reader s'efface et **laisse le point bleu natif de CC s'afficher**, sans aucun recouvrement.
 - **🔔 Notifications de fin / interruption** — sur macOS, notification système native (coin supérieur droit, son `Glass` par défaut), **au premier plan comme à l'arrière-plan**, sans bouton, disparaît automatiquement. Sous Windows / Linux : toast intégré VSCode. Vous pouvez quitter VSCode pendant un long traitement — vous saurez quand CC a fini.
 - **🛡️ Auto-réparation après mise à jour de CC** — quand Claude Code se met à jour et écrase le patch, **l'extension companion (v0.2.0+) détecte le problème au prochain démarrage de VSCode, repatche automatiquement et propose un `Reload Window` en un clic**. Vous n'avez plus à relancer la commande à la main après chaque mise à jour CC.
@@ -90,9 +90,9 @@ Envoyez un prompt dans CC : l'onglet devient 🟡 jaune, puis 🟢 vert à la fi
 
 ## 🛠️ Détail des capacités
 
-### 🟡 Point d'icône d'onglet à quatre états
+### 🟡 Point d'icône d'onglet à cinq états
 
-L'icône d'onglet de chaque session CC change de couleur selon l'état — **affichée à la fois dans la barre d'onglets supérieure et dans la vue « Open Editors » en haut à gauche**. running / idle / done sont des points statiques ; interrupted clignote rapidement en rouge.
+L'icône d'onglet de chaque session CC change de couleur selon l'état (**5 couleurs au total** : jaune / vert / bleu / rouge / gris) — **affichée à la fois dans la barre d'onglets supérieure et dans la vue « Open Editors » en haut à gauche**. running / idle / done sont des points statiques ; interrupted clignote rapidement en rouge ; permission (demande d'autorisation / question / elicit) cède la place au point bleu natif de CC (le reader s'efface pour ne pas le recouvrir).
 
 ### 📊 Barre d'état à 4 boules agrégées en bas
 
@@ -241,7 +241,7 @@ vscode-claude-code-status-dot        # lancez directement la commande après ins
 
 **Patche le `extension.js` de CC (injecte un minuteur pour régler l'icône d'onglet) + hooks CC écrivent l'état vers un fichier IPC + notifications de fin / interruption.** Documentation complète :
 
-- [`docs/STATES.md`](docs/STATES.md) — **Contrat d'état (source unique de vérité)** : quatre états / mapping d'événements / IPC / notifications
+- [`docs/STATES.md`](docs/STATES.md) — **Contrat d'état (source unique de vérité)** : cinq états / mapping d'événements / IPC / notifications
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — Principe d'injection de l'icône (ancre / IIFE / liaison SVG)
 - [`docs/USAGE.md`](docs/USAGE.md) — Guide d'utilisation (installation / dépannage / restauration)
 

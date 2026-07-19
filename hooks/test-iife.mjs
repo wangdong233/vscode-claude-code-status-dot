@@ -224,7 +224,7 @@ check(
 // v0.1.17 banner specifically: locks the single-SBI compact-concat pivot
 // (a regression that rolled back to v0.1.16 4-SBI would surface here
 // before any SBI assertion fires).
-check('IIFE.21c banner carries v0.2.0 stamp', /\/\*cc-status-dot-injected:v0\.2\.2:/.test(iife));
+check('IIFE.21c banner carries v0.2.0 stamp', /\/\*cc-status-dot-injected:v0\.2\.3:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));

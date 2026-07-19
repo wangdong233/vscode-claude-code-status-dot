@@ -9,7 +9,7 @@
 
 **See every Claude Code session's status at a glance — without cycling through tabs.**
 
-🟡 running · 🟢 done · 🔴 interrupted flashes · ⚪ idle — plus a one-glance bottom bar, system notifications, and self-healing after Claude Code updates.
+🟡 running · 🟢 done · 🔵 permission · 🔴 interrupted flashes · ⚪ idle — plus a one-glance bottom bar, system notifications, and self-healing after Claude Code updates.
 
 [简体中文](README.md) | **English** | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
@@ -25,9 +25,9 @@ When you've got several Claude Code sessions going in parallel — one coding, o
 
 <div align="center">
 
-<img src="docs/images/status-dots.png" width="640" alt="Four-state status dots on every CC session">
+<img src="docs/images/status-dots.png" width="640" alt="Five-state status dots on every CC session">
 
-*Every CC session's tab — in both the top tab bar and the left-side "Open Editors" view — shows its live state. 🟡 yellow = running, 🟢 green = done, 🔴 red = interrupted, ⚪ gray = idle.*
+*Every CC session's tab — in both the top tab bar and the left-side "Open Editors" view — shows its live state. 🟡 yellow = running, 🟢 green = done, 🔵 blue = awaiting your input (permission yield), 🔴 red = interrupted, ⚪ gray = idle.*
 
 <br>
 
@@ -47,7 +47,7 @@ When you've got several Claude Code sessions going in parallel — one coding, o
 npx vscode-claude-code-status-dot
 ```
 
-Then **reload the window** — `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux) → `Developer: Reload Window` — send any prompt to Claude Code, and watch the tab turn 🟡 yellow → 🟢 green. That's it.
+Then **reload the window** — `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux) → `Developer: Reload Window` — send any prompt to Claude Code, and watch the tab turn 🟡 yellow → 🟢 green. When CC asks for approval, the tab turns 🔵 blue (and the bottom bar's 🔵 pending light ticks up). That's it.
 
 > **Prerequisites:** Node.js 18+, and the Claude Code VSCode extension installed.
 
@@ -63,6 +63,7 @@ Each Claude Code session's tab icon — **in both the top tab bar and the top-le
 
 - 🟡 **Yellow** while CC is working
 - 🟢 **Green** when the turn finished cleanly
+- 🔵 **Blue** when CC is waiting on you (permission / question / elicit)
 - 🔴 **Red, fast-flashing** when interrupted or rate-limited
 - ⚪ **Gray** when idle
 
@@ -115,7 +116,7 @@ Every patch is preceded by a syntax check (we never ship a broken `extension.js`
 | 🟢 Green `#3FB950` (static) | Turn done | CC fires `Stop` (**turns gray after 5 min**) |
 | 🔴 Red `#F85149` (fast flash) | Interrupted / errored | CC fires `StopFailure` (rate limit, overload, etc.) |
 | ⚪ Gray `#808080` (static) | Idle | Initial / done > 5 min ago / no state file |
-| 🔵 Blue (CC native) | Awaiting approval | CC's native blue dot, **not overridden** |
+| 🔵 Blue | Awaiting your input | **Tab:** CC's native blue dot on permission yield (reader steps aside, never overrides). **Bottom bar:** 🔵 pending light counts permission / question / elicit events from the Notification hook |
 
 > Running is a static yellow dot (no animation); interrupted flashes red as an alert. Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](docs/STATES.md).
 
@@ -259,7 +260,7 @@ vscode-claude-code-status-dot        # run the command directly after install
 
 **Patches CC's extension.js (injects a timer to set tab icons) + CC hooks write state + completion/interruption notifications.** Full docs:
 
-- [`docs/STATES.md`](docs/STATES.md) — **state contract (single source of truth)**: four states / event mapping / IPC / notifications
+- [`docs/STATES.md`](docs/STATES.md) — **state contract (single source of truth)**: five states / event mapping / IPC / notifications
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — icon injection rationale (anchors / IIFE / SVG wiring)
 - [`docs/USAGE.md`](docs/USAGE.md) — usage guide (install / troubleshooting / revert)
 

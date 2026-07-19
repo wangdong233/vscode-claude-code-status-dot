@@ -9,7 +9,7 @@
 
 **一眼看清所有 Claude Code 会话在干嘛 —— 不用逐个 tab 切过去看**
 
-🟡 运行中 · 🟢 完成 · 🔴 中断快闪 · 🔵 待你输入 —— **tab 四态点 + 底部 4 灯聚合 + 完成/中断通知 + CC 更新自动恢复**
+🟡 运行中 · 🟢 完成 · 🔵 待你输入 · 🔴 中断快闪 —— **tab 五态点（灰 idle / 黄 running / 绿 done / 红 interrupted / 蓝 permission）+ 底部 4 灯聚合（🟢🟡🔵🔴，无灰——idle 不计底部）+ 完成/中断通知 + CC 更新自动恢复**
 
 **简体中文** | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
@@ -27,7 +27,7 @@
 
 <img src="docs/images/status-dots.png" alt="顶部 tab 与侧边打开的编辑器里的状态点" width="640">
 
-**顶部 tab + 左上"打开的编辑器"侧边栏**——🟡 运行中 · 🟢 完成 · 🔴 中断
+**顶部 tab + 左上"打开的编辑器"侧边栏**——🟡 运行中 · 🟢 完成 · 🔵 待输入 · 🔴 中断
 
 <br>
 
@@ -51,7 +51,7 @@ npx vscode-claude-code-status-dot
 
 `Cmd+Shift+P`（Mac）/ `Ctrl+Shift+P`（Win/Linux）→ 输入 `Developer: Reload Window` → 在 CC 里发一条 prompt。
 
-tab 图标立刻变 🟡 黄，跑完变 🟢 绿并弹通知。**装一次就生效，不用配任何东西。**
+tab 图标立刻变 🟡 黄，跑完变 🟢 绿并弹通知；CC 弹权限授权时 tab 变 🔵 蓝（reader 让出图标给 CC 原生蓝点显示，待你授权），底部 🔵 pending 灯 +1。**装一次就生效，不用配任何东西。**
 
 > 想关通知 / 换声音才需要看后面的[配置](#-配置可选)。
 
@@ -59,9 +59,9 @@ tab 图标立刻变 🟡 黄，跑完变 🟢 绿并弹通知。**装一次就�
 
 ## 💬 你能得到什么
 
-### 1. 每个 tab 都带四态状态点
+### 1. 每个 tab 都带五态状态点
 
-CC 会话的 tab 图标按状态变色——🟡 运行中 / 🟢 完成 / 🔴 中断快闪 / ⚪ 空闲。**顶部 tab 栏 + 左上"打开的编辑器"侧边栏都显示**，两边完全同步。开几个会话并排跑，扫一眼就知道哪个还在干、哪个完事了。
+CC 会话的 tab 图标按状态变色——🟡 运行中 / 🟢 完成 / 🔴 中断快闪 / ⚪ 空闲 / 🔵 待输入（CC 弹权限授权时 reader 让出图标，CC 原生蓝点显示，**不覆盖**）。**顶部 tab 栏 + 左上"打开的编辑器"侧边栏都显示**，两边完全同步。开几个会话并排跑，扫一眼就知道哪个还在干、哪个完事了、哪个卡在等你授权。
 
 ### 2. 底部 4 灯聚合：所有会话整体状态一眼看完
 
@@ -127,9 +127,9 @@ CC 自动更新会把 patch 整体覆盖掉。**v0.2.0 起**，`npx` 装的时�
 
 ## 🛠️ 能力详解
 
-### 🟡 四态 tab 图标点
+### 🟡 五态 tab 图标点
 
-每个 CC 会话的 tab 图标按状态变色，**顶部 tab 栏 + 左上角"打开的编辑器"视图都显示**。running/idle/done 是静态色点，interrupted 红色快闪。
+每个 CC 会话的 tab 图标按状态变色，**顶部 tab 栏 + 左上角"打开的编辑器"视图都显示**。running/idle/done 是静态色点，interrupted 红色快闪，permission 时 reader 让出图标给 CC 原生蓝点显示（**不覆盖**）。
 
 ### 📊 底部状态栏 4 灯聚合
 
@@ -273,7 +273,7 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 
 **patch CC extension.js（注入定时器设 tab 图标）+ CC hooks 写状态 + 完成/中断通知。** 完整文档：
 
-- [`docs/STATES.md`](docs/STATES.md)——**状态契约（唯一真相源）**：四态 / 事件映射 / IPC / 通知
+- [`docs/STATES.md`](docs/STATES.md)——**状态契约（唯一真相源）**：五态（灰/黄/绿/红/蓝）+ 底部 4 灯聚合 / 事件映射 / IPC / 通知
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)——图标注入原理（anchor / IIFE / SVG 绑定）
 - [`docs/USAGE.md`](docs/USAGE.md)——使用指南（安装 / 排错 / 还原）
 

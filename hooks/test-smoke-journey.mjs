@@ -13,14 +13,15 @@
  *   - The unit file proves "each rule is correct in isolation". A journey
  *     proves "the rules compose correctly across state transitions on the
  *     SAME working set" — which is what users actually experience. The
- *     0→1→2→3→N cap progression, the "dim ⚪ ↔ colored+digit" flip, the
+ *     0→1→2→3→N cap progression, the "dim 🟤 ↔ colored+digit" flip (🟤 since
+ *     the v0.1.17 ⚪→🟤 pivot; pre-pivot this read ⚪), the
  *     "blue pending is INDEPENDENT of state" claim, and the "idle decay
  *     does NOT light green" claim are all narrated in one place so a future
  *     regression in any of them surfaces as a broken step in the journey,
  *     not just an isolated assertion failure.
  *   - Mirrors the task's explicit ask: 多会话状态(running/done/pending/
- *     interrupted/idle) → 4 灯统计 + text 拼接(0-3+N 封顶, 0 灭⚪/非0亮,
- *     蓝 pending, 灰不计绿).
+ *     interrupted/idle) → 4 灯统计 + text 拼接(0-3+N 封顶, 0 灭🟤/非0亮,
+ *     蓝 pending, 灰不计绿). (🟤 since the v0.1.17 ⚪→🟤 pivot; pre-pivot ⚪).
  *
  * Approach: replicate the IIFE aggregation (same DRY posture as
  * test-sbi-aggregation.mjs). The IIFE body is locked byte-for-byte by
@@ -66,12 +67,14 @@ const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running G
 const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
 
 // v0.1.16: each SBI is its own StatusBarItem with text `<ball><digit>`
-// (e.g. "🟢3", "⚪0"). The v0.1.15 colored-block treatment was reverted to
+// (e.g. "🟢3", "🟤0" — 🟤 since the v0.1.17 ⚪→🟤 pivot; pre-pivot "⚪0").
+// The v0.1.15 colored-block treatment was reverted to
 // emoji balls per user feedback, but the 4-SBI structure is KEPT. There is
 // no single joined SBI.text — sbiTexts() below returns the array of 4
 // per-SBI texts (digit-only — the emoji-ball prepend is exercised in
 // test-iife.mjs IIFE.38). (v0.1.14 kept SBI_LIGHT_EMOJI + SBI_DIM_EMOJI
-// here to build the joined "🟢3 🟡1 🔵2 ⚪" string; both were gone in v0.1.15;
+// here to build the joined "🟢3 🟡1 🔵2 🟤" string (🟤 since the v0.1.17
+// ⚪→🟤 pivot; pre-pivot ⚪); both were gone in v0.1.15;
 // v0.1.16 brings emoji balls back via CFG[k].em + DIM_EM in the IIFE but
 // this replica stays digit-only since capping is what these journey
 // assertions lock.)
@@ -170,7 +173,7 @@ function cap(n) {
 //   `sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)`
 // — this function returns just the digit/"N" part (and "0" for the zero
 // case so callers can compare a 4-array of digit-strings cleanly).
-// n===0 → "0" (paired with ⚪ in the IIFE); n=1/2/3 → digit (paired with
+// n===0 → "0" (paired with 🟤 in the IIFE since the v0.1.17 ⚪→🟤 pivot); n=1/2/3 → digit (paired with
 // the light's colored ball in the IIFE); n>=4 (capped to 4) → "N".
 // (v0.1.14 used disp(em,n) that joined emoji+digit; v0.1.15 splits into 4
 // SBIs with digit-in-colored-block; v0.1.16 splits into 4 SBIs with emoji-

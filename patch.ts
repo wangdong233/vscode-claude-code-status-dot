@@ -125,7 +125,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.1.16";
+const INJECT_VERSION = "v0.1.18";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -144,18 +144,21 @@ const HOOK_MARKER = "cc-status-dot-managed";
 /** Version banner stamped at the top of hooks/cc-status.js
  *  (`cc-status-dot-hook:vX.Y.Z`). Mirrors the IIFE's INJECT_VERSION+hash gate
  *  so installRuntimeFiles can detect a stale on-disk hook copy the same way
- *  patchExtension detects a stale IIFE. *  writer/reader drift detection was asymmetric — the reader side was hash-
- *  stamped and auto-reinjected, the writer side was copied verbatim with NO
- *  version check, so a user running an old hook against a new IIFE (e.g. the
- *  install copied the IIFE but the hook copy failed silently, or the user
- *  hand-edited INSTALL_DIR/hooks/cc-status.js) saw silent feature loss with
- *  no warning. MUST be kept in lockstep with the banner at the top of
+ *  patchExtension detects a stale IIFE.
+ *
+ *  Historical rationale: writer/reader drift detection was asymmetric — the
+ *  reader side was hash-stamped and auto-reinjected, the writer side was
+ *  copied verbatim with NO version check, so a user running an old hook
+ *  against a new IIFE (e.g. the install copied the IIFE but the hook copy
+ *  failed silently, or the user hand-edited
+ *  INSTALL_DIR/hooks/cc-status.js) saw silent feature loss with no warning.
+ *  MUST be kept in lockstep with the banner at the top of
  *  hooks/cc-status.js. */
 const HOOK_VERSION = "v0.1.14";
 const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
 
 /** CC extension version against which the anchor strings (ANCHOR_A / ANCHOR_B)
- *  were last verified byte-exact. the
+ *  were last verified byte-exact. Historical rationale: the
  *  'verified byte-exact against CC X.Y.Z' comment lived inline at the anchor
  *  declarations but was NOT surfaced anywhere user-visible. CC updates that
  *  drift either anchor's bytes are still caught by countOccurrences==1 (the
@@ -170,11 +173,15 @@ const LAST_VERIFIED_CC = "2.1.204";
  *  banner (`cc-status-dot-hook:vX.Y.Z:HASH`). Mirrors STAMP_HASH_LEN — same
  *  sha1-over-body scheme as the IIFE hash, so a dev iteration on
  *  hooks/cc-status.js that doesn't bump HOOK_VERSION is still detectable by
- *  installRuntimeFiles + --status. *  a prior round added a writer version banner + version-string check, but the *  reader side had content-hash and the writer side did NOT — asymmetric
- *  drift detection. A dev who edited hooks/cc-status.js and forgot to bump
- *  the banner would have the patcher silently overwrite an installed hook
- *  whose body differed, no warn. The hash closes that gap: install compares
- *  BOTH version AND body hash, --status surfaces either drift. */
+ *  installRuntimeFiles + --status.
+ *
+ *  Historical rationale: a prior round added a writer version banner +
+ *  version-string check, but the reader side had content-hash and the writer
+ *  side did NOT — asymmetric drift detection. A dev who edited
+ *  hooks/cc-status.js and forgot to bump the banner would have the patcher
+ *  silently overwrite an installed hook whose body differed, no warn. The
+ *  hash closes that gap: install compares BOTH version AND body hash,
+ *  --status surfaces either drift. */
 const HOOK_HASH_LEN = 8;
 
 /** Redraw cadence (ms). 500 drives:
@@ -265,41 +272,78 @@ const HOOK_EVENTS = [
 const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
 
 /** The 4 lights, in fixed left→right display order. Each entry pins the
- *  light's "on" emoji ball and its StatusBarItem.priority. This table is the
- *  SINGLE source of truth consumed by buildIIFE (baked into the IIFE's
- *  `var CFG=[...]` via JSON.stringify) and mirrored in test-iife.mjs.
- *  Renaming an emoji codepoint or reordering lights here changes both the
- *  IIFE bytes and the test assertions in lockstep.
+ *  light's "on" emoji ball. This table is the SINGLE source of truth consumed
+ *  by buildIIFE (baked into the IIFE's `var CFG=[...]` via JSON.stringify)
+ *  and mirrored in test-iife.mjs. Renaming an emoji codepoint or reordering
+ *  lights here changes both the IIFE bytes and the test assertions in lockstep.
+ *
+ *  v0.1.17 dropped the v0.1.15/v0.1.16 `pri` field: the 4 lights now render
+ *  inside ONE window-scoped StatusBarItem (single-SBI concatenated text
+ *  `<ball><digit><ball><digit>...`, 0px inter-light gap — VSCode's per-SBI
+ *  CSS `margin:0 3px;padding:0 5px` makes a 4-SBI row look ~16px loose,
+ *  uncontrollable via the public API). The single SBI's priority is pinned
+ *  by the sibling SBI_PRIORITY constant. Position stability (digits never
+ *  shift the row) comes from VSCode's `statusbarpart.css` forcing
+ *  `font-variant-numeric:tabular-nums` on every statusbar item — ASCII digits
+ *  0-9 render at equal width regardless of font, so count 0→1→2→3→N keeps the
+ *  row byte-stable as long as the surrounding emoji are equal-width too.
+ *  SBI_DIM_EM is 🟤 (U+1F7E4, Geometric Shapes Extended) — the SAME Unicode
+ *  block as 🟢🟡, so all three balls share the font vendor's 1em square glyph
+ *  by construction (no cross-block width gamble). 🔵🔴 sit in the adjacent
+ *  Miscellaneous Symbols And Pictographs block but ship as the same 1em
+ *  square in every modern emoji font (Apple Color Emoji / Noto Color Emoji /
+ *  Segoe UI Emoji). v0.1.17 originally used ⚪ (U+26AA, Miscellaneous Symbols)
+ *  which sat in a THIRD block — switched to 🟤 to retire the residual
+ *  cross-block width risk. See docs/STATES.md §7.5 for the rationale trail.
  *
  *  Emoji escapes: patch.ts SOURCE stays ASCII-only (`\u{XXXX}`); the baked
  *  IIFE bytes do NOT — JSON.stringify embeds literal emoji chars (astral
- *  surrogate pairs + BMP ⚪). VSCode loads extension.js as UTF-8 and recovers
- *  the emoji at parse time. Do NOT "fix" JSON.stringify to emit escapes:
- *  changing the IIFE bytes would shift the content hash and force
- *  unnecessary re-injects.
+ *  surrogate pairs only, since v0.1.17 switched SBI_DIM_EM from BMP ⚪ to
+ *  astral 🟤). VSCode loads extension.js as UTF-8 and recovers the emoji at
+ *  parse time. Do NOT "fix" JSON.stringify to emit escapes: changing the IIFE
+ *  bytes would shift the content hash and force unnecessary re-injects.
  *
  *  Visual-design rationale (why emoji balls vs ThemeColor blocks, why these
- *  4 codepoints, why these priorities): see docs/STATES.md §7. */
-const SBI_LIGHTS_CFG: ReadonlyArray<{ key: string; em: string; pri: number }> = [
-    { key: "done", em: "\u{1F7E2}", pri: -9996 }, // 🟢 leftmost
-    { key: "running", em: "\u{1F7E1}", pri: -9997 }, // 🟡
-    { key: "pending", em: "\u{1F535}", pri: -9998 }, // 🔵
-    { key: "interrupted", em: "\u{1F534}", pri: -9999 }, // 🔴 rightmost
+ *  4 codepoints, why single-SBI concat vs v0.1.16 4-SBI): see docs/STATES.md §7. */
+const SBI_LIGHTS_CFG: ReadonlyArray<{ key: string; em: string }> = [
+    { key: "done", em: "\u{1F7E2}" }, // 🟢 leftmost
+    { key: "running", em: "\u{1F7E1}" }, // 🟡
+    { key: "pending", em: "\u{1F535}" }, // 🔵
+    { key: "interrupted", em: "\u{1F534}" }, // 🔴 rightmost
 ];
+
+/** Priority of the single v0.1.17 StatusBarItem (StatusBarAlignment.Left).
+ *  Replaces the v0.1.15/v0.1.16 per-light `pri` field that used to live in
+ *  SBI_LIGHTS_CFG. -9996 keeps the SBI rightmost among Left items (closest
+ *  to the visible center), matching the v0.1.16 leftmost-done priority so
+ *  the SBI's screen position is preserved across the 4-SBI → 1-SBI pivot
+ *  (the user's "位置固定" requirement covers BOTH per-light slot position
+ *  AND whole-bar position — this const holds the latter). */
+const SBI_PRIORITY = -9996;
 
 /** Dim/zero emoji — used in place of any light's colored ball when its count
  *  is 0. Paired with digit "0" so the slot width at zero matches the non-zero
  *  width exactly (ball + 1 digit) — the position-stability guarantee (the
  *  4-SBI row never shifts when counts change). Baked into the IIFE as
  *  `var DIM_EM=<JSON.stringify(SBI_DIM_EM)>`. Visual rationale + baking
- *  discipline: see SBI_LIGHTS_CFG above + docs/STATES.md §7. */
-const SBI_DIM_EM = "\u{26AA}"; // ⚪
+ *  discipline: see SBI_LIGHTS_CFG above + docs/STATES.md §7.
+ *
+ *  v0.1.17 originally shipped ⚪ (U+1F7E4's predecessor U+26AA — white medium
+ *  circle, Miscellaneous Symbols block). Switched to 🟤 (U+1F7E4, Geometric
+ *  Shapes Extended — the SAME block as 🟢🟡) to retire the cross-Unicode-block
+ *  width gamble: with ⚪ the 5 balls sat in 3 different blocks and a width
+ *  mismatch on cold fonts could shift the row 1-2px on count changes. 🟤
+ *  stays in the colored-ball block so width parity is enforced by Unicode
+ *  allocation, not by per-font rendering luck. (See docs/STATES.md §7.5 for
+ *  the v0.1.17 ⚪→🟤 pivot rationale.) */
+const SBI_DIM_EM = "\u{1F7E4}"; // 🟤
 
 /** The SBI click-command id. Registered at runtime via
  *  vs.commands.registerCommand (no package.json contribution needed for
  *  registerCommand). Single source of truth — baked into the IIFE at the
- *  registerCommand site AND assigned to EACH of the 4 SBIs' `.command`
- *  field via ${JSON.stringify(SBI_CLICK_CMD)}, and mirrored in test-iife.mjs.
+ *  registerCommand site AND assigned to the single v0.1.17 StatusBarItem's
+ *  `.command` field via ${JSON.stringify(SBI_CLICK_CMD)} (v0.1.14-v0.1.16
+ *  assigned it to EACH of 4 SBIs), and mirrored in test-iife.mjs.
  *  Renaming the command touches this const once; the IIFE bytes + the test
  *  assertions both follow. */
 const SBI_CLICK_CMD = "ccStatusDot.sbiClick";
@@ -417,7 +461,8 @@ function parseJsonc(text: string, sourceLabel: string): Record<string, unknown> 
 }
 
 // ---------------------------------------------------------------------------
-// Surgical JSONC editor // ---------------------------------------------------------------------------
+// Surgical JSONC editor
+// ---------------------------------------------------------------------------
 // The pre-fix wireHooks/unwireHooks used a parse-mutate-stringify round-trip
 // that DROPPED user // and /* */ comments and reformatted the entire file.
 // Users who keep notes / section headers in settings.json lost them on every
@@ -1018,14 +1063,20 @@ function assertCompiles(code: string, label: string): void {
 //       done>5min→idle fallback, __ccsdPending yield, notify dedup keyed on
 //       terminal `since`, macOS osascript + VSCode fallback): docs/STATES.md
 //       §1/§4/§4b + docs/DESIGN-injection.md §2/§4.2.
-//     - SBI 4-light aggregation (4 window-scoped StatusBarItem instances,
-//       emoji-ball render `<ball><digit>`, position-stable slots, §4 decay
+//     - SBI aggregation (v0.1.17: ONE window-scoped StatusBarItem rendering
+//       4 lights as concatenated `<ball><digit>` text at 0px gap; v0.1.15/
+//       v0.1.16 used 4 independent SBIs but VSCode's statusbarpart.css
+//       `margin:0 3px;padding:0 5px` per item makes a 4-SBI row look ~16px
+//       loose, uncontrollable via public API. Position stability comes from
+//       VSCode's `font-variant-numeric:tabular-nums` on every statusbar item,
+//       which forces ASCII digits 0-9 to equal advance width), §4 decay
 //       rules applied for counting, pending counted independently of state,
 //       singleton timer + panel-counter lifecycle, 3-layer try/catch
 //       isolation, __ccsd* prefix): docs/STATES.md §7 + docs/DESIGN-injection.md.
 //     - Version history (v0.1.11 aggregation refactor → v0.1.12 isolation →
 //       v0.1.13 commandCenter → v0.1.14 SBI pivot → v0.1.15 4-SBI split →
-//       v0.1.16 emoji-ball restoration): CHANGELOG.md.
+//       v0.1.16 emoji-ball restoration → v0.1.17 single-SBI compact concat):
+//       CHANGELOG.md.
 // ---------------------------------------------------------------------------
 
 function buildIIFE(resDir: string): string {
@@ -1033,20 +1084,26 @@ function buildIIFE(resDir: string): string {
     // (also handles the non-ASCII chars in the project path correctly).
     const resLiteral = JSON.stringify(resDir);
     // SBI 4-light config table baked into the IIFE as a JSON-stringified array
-    // literal. Patch.ts SOURCE is ASCII-only (emoji as `\u{XXXX}` escapes);
-    // the baked IIFE bytes are NOT — JSON.stringify embeds literal emoji
-    // chars (astral surrogate pairs + BMP ⚪), not `\uXXXX` escapes, so the
-    // on-disk IIFE contains literal UTF-8 emoji bytes. VSCode loads as UTF-8
-    // and recovers the emoji at parse time. SBI_LIGHTS_CFG is the SINGLE
-    // source of truth (patch.ts); the IIFE's per-tick loop iterates
-    // CFG[k] for {key,em,pri}. Order matches aggregation output:
-    // done/running/pending/interrupted (left→right on the status bar).
+    // literal. v0.1.17 dropped the v0.1.15/v0.1.16 `pri` field (the 4 lights
+    // now render in ONE SBI; the per-light priority became dead data — see
+    // SBI_LIGHTS_CFG + SBI_PRIORITY JSDoc above). Each entry pins only the
+    // light's "on" emoji ball. Patch.ts SOURCE is ASCII-only (emoji as
+    // `\u{XXXX}` escapes); the baked IIFE bytes are NOT — JSON.stringify
+    // embeds literal emoji chars (all astral surrogate pairs since the
+    // v0.1.17 ⚪→🟤 pivot; previously SBI_DIM_EM was the lone BMP ⚪), not
+    // `\uXXXX` escapes, so the on-disk IIFE contains literal UTF-8 emoji
+    // bytes. VSCode loads as UTF-8 and recovers the emoji at parse time.
+    // SBI_LIGHTS_CFG is the SINGLE source of truth (patch.ts); the IIFE's
+    // per-tick loop iterates CFG[k] for {key,em}. Order matches aggregation
+    // output: done/running/pending/interrupted (left→right in concatenated
+    // text).
     const cfgLiteral = JSON.stringify(SBI_LIGHTS_CFG);
-    // v0.1.16 dim/zero emoji (⚪ U+26AA) baked as a JSON-stringified string
-    // literal — used by the per-tick loop for any light whose count is 0
-    // (gray outline ball + digit "0", keeping the slot width fixed). Same
-    // baking discipline as cfgLiteral: patch.ts SOURCE is ASCII-only, the
-    // baked IIFE contains literal UTF-8 emoji bytes (see cfgLiteral above).
+    // dim/zero emoji (🟤 U+1F7E4 since the v0.1.17 ⚪→🟤 pivot; was ⚪ U+26AA)
+    // baked as a JSON-stringified string literal — used by the per-tick loop
+    // for any light whose count is 0 (dim ball + digit "0", keeping the slot
+    // width fixed). Same baking discipline as cfgLiteral: patch.ts SOURCE is
+    // ASCII-only, the baked IIFE contains literal UTF-8 emoji bytes (see
+    // cfgLiteral above).
     const dimEmLiteral = JSON.stringify(SBI_DIM_EM);
     // State machine + notification + SBI aggregation mirror docs/STATES.md §1/§4/§4b/§7. Keep in sync.
     //
@@ -1059,7 +1116,7 @@ function buildIIFE(resDir: string): string {
         `(function(t){`,
         `if(t.__ccsdDotStarted||!t.panelTab)return;`,
         `t.__ccsdDotStarted=true;`,
-        `/*SBI panel counter: bumped per IIFE entry; the onDidDispose teardown decrements and disposes the 4 singleton SBIs on last-panel-out.*/`,
+        `/*SBI panel counter: bumped per IIFE entry; the onDidDispose teardown decrements and disposes the single v0.1.17 SBI on last-panel-out.*/`,
         `globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||0)+1;`,
         `var fs=require("fs"),pth=require("path"),vs=require("vscode"),os=require("os");`,
         `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");`,
@@ -1077,9 +1134,11 @@ function buildIIFE(resDir: string): string {
          inspect long after the fact.*/
         `var INTERRUPTED_RETENTION_MS=24*60*60*1000;`,
         // SBI 4-light config table — baked from SBI_LIGHTS_CFG via JSON.stringify.
-        // Each entry pins the light's "on" emoji ball + StatusBarItem.priority.
-        // See SBI_LIGHTS_CFG JSDoc above + docs/STATES.md §7. Indexes match
-        // counts[] below: k=0 done / k=1 running / k=2 pending / k=3 interrupted.
+        // v0.1.17 dropped the v0.1.15/v0.1.16 `pri` field (single SBI uses one
+        // SBI_PRIORITY const; per-light priority became dead data). Each entry
+        // now pins only the light's "on" emoji ball. See SBI_LIGHTS_CFG JSDoc
+        // above + docs/STATES.md §7. Indexes match counts[] below: k=0 done /
+        // k=1 running / k=2 pending / k=3 interrupted.
         `var CFG=${cfgLiteral};`,
         // Dim/zero emoji (shared across all 4 lights). Paired with digit "0"
         // the slot width stays `<ball><1-digit>` regardless of count (position
@@ -1099,18 +1158,25 @@ function buildIIFE(resDir: string): string {
         `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var escSnd=(""+snd).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var sndStr=escSnd?(' sound name "'+escSnd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var vsMsg=function(){if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);};try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr],function(err){if(err)vsMsg()})}catch(e){vsMsg()}}`,
         `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);}`,
         `}`,
-        // SBI click command — ONE runtime-registered command wired to all 4 SBIs.
+        // SBI click command — ONE runtime-registered command wired to the
+        // single v0.1.17 SBI (v0.1.14-v0.1.16 used to wire it to all 4 SBIs).
         // Idempotent across panels via __ccsdSbiCmdRegistered; registerCommand
         // throws on re-registration so the whole block is wrapped in try/catch.
-        // Handler reads __ccsdSbis[0].tooltip (all 4 carry the same breakdown).
-        `try{if(!globalThis.__ccsdSbiCmdRegistered){globalThis.__ccsdSbiCmdRegistered=true;try{vs.commands.registerCommand(${JSON.stringify(SBI_CLICK_CMD)},function(){try{if(globalThis.__ccsdSbis&&globalThis.__ccsdSbis[0])vs.window.showInformationMessage(globalThis.__ccsdSbis[0].tooltip||"cc-status-dot")}catch(e){}})}catch(e){}}}catch(e){}`,
-        // SBI 4-light creation (length-guarded, commit-atomic, per-iteration
-        // try/catch). The guard detects a partial-failure prior run
-        // (length<4 truthy array) and rebuilds from scratch; the local `arr`
-        // is committed to globalThis only when all 4 createStatusBarItem
-        // calls succeed, else the shown-but-uncommitted SBIs are disposed.
+        // Handler reads __ccsdSbi.tooltip (the single SBI carries the breakdown).
+        `try{if(!globalThis.__ccsdSbiCmdRegistered){globalThis.__ccsdSbiCmdRegistered=true;try{vs.commands.registerCommand(${JSON.stringify(SBI_CLICK_CMD)},function(){try{if(globalThis.__ccsdSbi)vs.window.showInformationMessage(globalThis.__ccsdSbi.tooltip||"cc-status-dot")}catch(e){}})}catch(e){}}}catch(e){}`,
+        // v0.1.17 SINGLE StatusBarItem creation. Replaces the v0.1.15/v0.1.16
+        // 4-SBI creation loop (4 independent SBIs at priority -9996..-9999
+        // looked loose because VSCode's statusbarpart.css hardcodes
+        // `margin:0 3px;padding:0 5px` per item → ~6-16px inter-SBI gap that
+        // NO public API can compress; the internal IStatusbarEntryLocation.compact
+        // flag is not reachable from extension code). v0.1.17 renders the 4
+        // lights inside ONE SBI as concatenated text `<ball><digit>`×4 → 0px
+        // inter-light gap (lights touch). Position-stability (digits never
+        // shift the row on count change) is guaranteed by VSCode's own
+        // statusbarpart.css `font-variant-numeric:tabular-nums`, which forces
+        // ASCII digits 0-9 to equal advance width regardless of font.
         // Wrapped in try/catch (isolation layer 1 of 3 — see docs/STATES.md §7.5).
-        `try{if(!globalThis.__ccsdSbis||globalThis.__ccsdSbis.length!==CFG.length){if(globalThis.__ccsdSbis){for(var j=0;j<globalThis.__ccsdSbis.length;j++){try{globalThis.__ccsdSbis[j].dispose()}catch(e){}};globalThis.__ccsdSbis=null;}var arr=[];for(var k=0;k<CFG.length;k++){try{var sbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,CFG[k].pri);sbi.name="CC "+CFG[k].key;sbi.text=DIM_EM+"0";sbi.tooltip="Claude Code: 0 done, 0 running, 0 pending, 0 interrupted";try{sbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};sbi.show();arr.push(sbi)}catch(e){}};if(arr.length===CFG.length){globalThis.__ccsdSbis=arr;globalThis.__ccsdSbiLastKey=null;}else{for(var f=0;f<arr.length;f++){try{arr[f].dispose()}catch(e){}};}}}catch(e){}`,
+        `try{if(!globalThis.__ccsdSbi){try{var sbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,${SBI_PRIORITY});sbi.name="CC Status";sbi.text=DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0";sbi.tooltip="Claude Code: 0 done, 0 running, 0 pending, 0 interrupted";try{sbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};sbi.show();globalThis.__ccsdSbi=sbi;globalThis.__ccsdSbiLastKey=null;}catch(e){}}}catch(e){}`,
         `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
         `try{`,
         `var ag={running:0,done:0,interrupted:0,idle:0,pending:0};`,
@@ -1163,11 +1229,19 @@ function buildIIFE(resDir: string): string {
         `var counts=[cd,cr,cp,ci];`,
         `/*tooltip carries the UNcapped breakdown so the user sees actual counts even when lights cap at N.*/`,
         `var tip="Claude Code: "+ag.done+" done, "+ag.running+" running, "+ag.pending+" pending, "+ag.interrupted+" interrupted";`,
-        // Per-tick SBI update loop: per-iteration try/catch (one disposed SBI
-        // throwing must not freeze later slots), lastKey memo short-circuit on
-        // the uncapped tuple (steady-state skips the mutate loop entirely). The
-        // key uses uncapped values so ag.done 4→5 still refreshes the tooltip.
-        `try{if(globalThis.__ccsdSbis){var key=ag.done+","+ag.running+","+ag.pending+","+ag.interrupted;if(key!==globalThis.__ccsdSbiLastKey){globalThis.__ccsdSbiLastKey=key;for(var k=0;k<globalThis.__ccsdSbis.length;k++){try{var sbi=globalThis.__ccsdSbis[k];var n=counts[k];sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n);sbi.tooltip=tip;sbi.show()}catch(e){}}}}}catch(e){}`,
+        // v0.1.17 per-tick SBI update: concatenate 4 (ball+digit) tokens into
+        // ONE text string assigned to the single SBI. Replaces the v0.1.16
+        // per-iteration try/catch loop over __ccsdSbis (no longer needed —
+        // there's only one SBI; a per-token failure would only corrupt a
+        // locally-scoped string, not a global StatusBarItem reference).
+        // Preserves the lastKey memo short-circuit keyed on the UNcapped
+        // aggregation tuple (steady-state IPC writes drop from ~40/s to 0).
+        // Per-token render rule (unchanged from v0.1.16):
+        //   txt += (n===0 ? DIM_EM : CFG[k].em) + (n>=4 ? "N" : ""+n)
+        // → "🟢3🟡1🟤0🟤0" (v0.1.17 compact, 0px gap; 🟤 since the ⚪→🟤 pivot)
+        //   was v0.1.16 "🟢3" / "🟡1" / "🟤0" / "🟤0" as 4 separate SBI texts
+        //   (v0.1.16–v0.1.17 pre-pivot used ⚪ here).
+        `try{if(globalThis.__ccsdSbi){var key=ag.done+","+ag.running+","+ag.pending+","+ag.interrupted;if(key!==globalThis.__ccsdSbiLastKey){globalThis.__ccsdSbiLastKey=key;var parts=[];for(var k=0;k<CFG.length;k++){var n=counts[k];parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n));}globalThis.__ccsdSbi.text=parts.join(" ");globalThis.__ccsdSbi.tooltip=tip;globalThis.__ccsdSbi.show();}}}catch(e){}`,
         `}catch(e){}`,
         `},${TICK_MS});}}catch(e){}`,
         `var timer=setInterval(function(){`,
@@ -1188,8 +1262,8 @@ function buildIIFE(resDir: string): string {
         `flashSeq++;`,
         `try{p.iconPath=vs.Uri.file(svg)}catch(e){}`,
         `},${TICK_MS});`,
-        `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose all 4 SBIs so the bottom bar can't freeze on a stale count.*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbis){for(var k=0;k<globalThis.__ccsdSbis.length;k++){try{globalThis.__ccsdSbis[k].dispose()}catch(e){}};globalThis.__ccsdSbis=null;globalThis.__ccsdSbiLastKey=null;}}})}catch(e){}`,
+        `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -1674,7 +1748,7 @@ function hookCommand(hookAbs: string): string {
     // stdin, so no positional arg is needed. `# ${HOOK_MARKER}` is a shell
     // comment — harmless at runtime, greppable for idempotent removal.
     //
-    // rather than baking the absolute node binary
+    // Historical rationale: rather than baking the absolute node binary
     // (process.execPath) into settings.json — which breaks on `nvm uninstall` /
     // `asdf uninstall nodejs` / `volta uninstall node` because the path
     // disappears before our silent-exit(0) fallback can fire — we install a
@@ -1833,7 +1907,7 @@ exit 0
  * (nvm / asdf / volta). Those directories disappear on `nvm uninstall`,
  * `asdf uninstall nodejs`, `volta uninstall node`, etc.
  *
- * this is now INFORMATIONAL, not fatal. The wrapper script
+ * Historical rationale: this is now INFORMATIONAL, not fatal. The wrapper script
  * at INSTALL_DIR/bin/cc-status-hook[.cmd] tries the baked path first, then
  * falls back to PATH lookup, common system locations, and version-manager
  * installs — so even when the baked node disappears, the wrapper self-heals
@@ -2119,7 +2193,7 @@ function installRuntimeFiles(): void {
                 // when bumping HOOK_VERSION); a hash mismatch is the intra-version
                 // equivalent (edited the hook body but forgot to re-stamp the banner
                 // hash). Both are surfaced loudly so the build ships self-consistent.
-                // Mirrors the IIFE's INJECT_VERSION+hash gate (closes the // prior asymmetry where only the reader side had a hash check).
+                // Mirrors the IIFE's INJECT_VERSION+hash gate (closes the prior asymmetry where only the reader side had a hash check).
                 const srcContent = fs.readFileSync(srcHook, "utf8");
                 const { banner: srcBanner } = splitHookBanner(srcContent);
                 const srcVer = parseHookBannerVersion(srcBanner);
@@ -2236,7 +2310,7 @@ function isHooksWired(): boolean {
  * Detect hook commands whose wrapper script is missing, or whose wrapper's
  * baked node binary (stored inside the wrapper) no longer exists on disk.
  *
- * changed the baked-node-binary architecture to a wrapper
+ * Historical rationale: the baked-node-binary architecture changed to a wrapper
  * script (INSTALL_DIR/bin/cc-status-hook[.cmd]). The wrapper internally tries
  * the install-time node path, then PATH lookup, then common system locations,
  * then version-manager installs — so even when the baked node path disappears
@@ -2502,15 +2576,39 @@ function run(argv: string[]): void {
         log("Reverting…");
         const { dir, version } = discoverExtension();
         log(`CC extension v${version}: ${dir}`);
-        restoreExtension(dir);
-        restoreWebview(dir);
-        restorePackageJson(dir);
-        unwireHooks();
-        // Remove our persistent runtime copy (resources + hook). STATE_DIR holds
-        // per-session USER DATA and is intentionally kept.
-        removeInstallDir();
+        // Per-step error isolation: each revert step runs in its own try/catch
+        // so a failure in one (e.g. .bak read failure, EACCES, disk full) does
+        // NOT skip the remaining steps. Without this, a step-1 throw would exit
+        // the process with extension.js restored but hooks still wired and
+        // INSTALL_DIR still present — a mixed state where the writer keeps
+        // spawning with no reader. Best-effort + per-step summary at the end.
+        const failures: string[] = [];
+        const steps: Array<[string, () => void]> = [
+            ["restoreExtension", () => restoreExtension(dir)],
+            ["restoreWebview", () => restoreWebview(dir)],
+            ["restorePackageJson", () => restorePackageJson(dir)],
+            ["unwireHooks", () => unwireHooks()],
+            // Remove our persistent runtime copy (resources + hook). STATE_DIR
+            // holds per-session USER DATA and is intentionally kept.
+            ["removeInstallDir", () => removeInstallDir()],
+        ];
+        for (const [name, fn] of steps) {
+            try {
+                fn();
+            } catch (e) {
+                failures.push(name);
+                log(
+                    `[WARN] revert step "${name}" failed: ${(e as Error).message || String(e)} — continuing with remaining steps`,
+                );
+            }
+        }
         log(`Per-session state dir left in place (user data): ${STATE_DIR}`);
         reportResidualBaks(dir);
+        if (failures.length > 0) {
+            log(
+                `[WARN] revert INCOMPLETE — these steps failed: ${failures.join(", ")}. Re-run \`npx vscode-claude-code-status-dot --revert\` to retry.`,
+            );
+        }
         reloadHint();
         return;
     }
@@ -2552,7 +2650,32 @@ function run(argv: string[]): void {
     // nvm/asdf/volta it can disappear later. Warned here so the user sees it
     // in the same install log as the "wrote N hook events" line that follows.
     warnIfVolatileNodePath();
-    wireHooks();
+    // Architecture fix: mirror --revert's per-step isolation onto install.
+    // wireHooks can throw (read-only settings.json, EACCES, disk full, corrupt
+    // JSONC, parseJsonc->fail). Without rollback, an exception here would leave
+    // extension.js patched (reader IIFE active) with NO writer wired — the SBI
+    // would render 🟤0🟡0🔵0🔴0 forever and no per-tab dots. The .bak written
+    // inside injectFresh() is the original unpatched CC bytes, so restoreExtension
+    // makes install atomic: either BOTH reader+writer land or neither does.
+    // Best-effort rollback (restoreExtension itself wrapped) — even if rollback
+    // fails the user is no worse off than today, and the explicit fail() below
+    // tells them to run `--revert` to clean up manually.
+    try {
+        wireHooks();
+    } catch (e) {
+        const msg = (e as Error).message || String(e);
+        log(`[WARN] wireHooks failed (${msg}) — rolling back extension.js patch for atomic install`);
+        try {
+            restoreExtension(dir);
+        } catch (rollbackErr) {
+            log(
+                `[WARN] extension.js rollback failed (${(rollbackErr as Error).message || String(rollbackErr)}) — extension.js still patched; run \`npx vscode-claude-code-status-dot --revert\` to clean up manually`,
+            );
+        }
+        fail(
+            `Failed to wire hooks: ${msg}. settings.json may be read-only, EACCES, disk full, or corrupt JSONC — resolve and re-run \`npx vscode-claude-code-status-dot\`.`,
+        );
+    }
     checkSvgs(RUNTIME_RES_DIR);
     reloadHint();
 }

@@ -52,7 +52,8 @@
  *       PostToolUse / Stop / StopFailure (the five user/turn-driven events)
  *       and PRESERVED by SubagentStart / SubagentStop (background events).
  *   §4  End-to-end: the user's literal example — 3 done / 1 running / 2
- *       pending / 0 interrupted → SBI.text "🟢3 🟡1 🔵2 ⚪". Plus the
+ *       pending / 0 interrupted → SBI.text "🟢3 🟡1 🔵2 🟤" (🟤 since the
+ *       v0.1.17 ⚪→🟤 pivot; pre-pivot the dim slot read ⚪). Plus the
  *       dim/colored light selection logic per count.
  *
  * Run:  node hooks/test-sbi-aggregation.mjs
@@ -79,14 +80,15 @@ const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running G
 const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
 
 // v0.1.16: the SBI surface renders each light as its own StatusBarItem with
-// text `<ball><digit>` (e.g. "🟢3", "⚪0"). The v0.1.15 colored-block treatment
+// text `<ball><digit>` (e.g. "🟢3", "🟤0" — 🟤 since the v0.1.17 ⚪→🟤 pivot;
+// pre-pivot this example read "⚪0"). The v0.1.15 colored-block treatment
 // (digit on themed backgroundColor + white text) was reverted to emoji balls
 // per user feedback, but the 4-SBI structure is KEPT (positions stay fixed
 // when counts change). This replica covers ONLY the DIGIT-capping part of
 // the v0.1.16 per-SBI text rule (n===0→"0", 1/2/3→digit, >=4→"N"); the
 // emoji-ball prepend (`<ball>` selection via DIM_EM vs CFG[k].em) is
 // exercised in test-iife.mjs IIFE.38. (v0.1.14 baked a SBI_LIGHT_EMOJI array
-// + SBI_DIM_EMOJI here to build the joined "🟢3 🟡1 🔵2 ⚪" string; both
+// + SBI_DIM_EMOJI here to build the joined "🟢3 🟡1 🔵2 🟤" string; both
 // were gone in v0.1.15; v0.1.16 brings emoji balls back via CFG[k].em +
 // DIM_EM in the IIFE but this replica stays digit-only since capping is
 // what these assertions lock.)
@@ -187,7 +189,7 @@ function cap(n) {
 //   `sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)`
 // — this function returns just the `(n>=4?"N":""+n)` part (or "0" for the
 // zero case so callers can compare a 4-array of digit-strings cleanly).
-// n===0 → "0" (paired with ⚪ in the IIFE); n=1/2/3 → digit (paired with
+// n===0 → "0" (paired with 🟤 in the IIFE since the v0.1.17 ⚪→🟤 pivot); n=1/2/3 → digit (paired with
 // the light's colored ball in the IIFE); n>=4 (capped to 4) → "N".
 // (v0.1.14 used a separate disp(em,n) that joined emoji+digit into one
 // StatusBarItem.text; v0.1.15 split into 4 SBIs with digit-in-colored-block;

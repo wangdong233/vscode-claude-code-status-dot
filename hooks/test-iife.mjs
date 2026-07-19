@@ -55,25 +55,34 @@ function check(name, cond, detail) {
   }
 }
 
-// Mirror patch.ts SBI_LIGHTS_CFG + SBI_DIM_EM — single source of truth is
-// patch.ts; this local copy must stay in sync. v0.1.16 replaced the v0.1.15
-// `bg` field (a ThemeColor id for a colored block background) with the `em`
-// field (the "on" emoji ball codepoint — a pre-colored Unicode circle that
-// carries its own green/yellow/blue/red fill, no theme dependency). The
-// shared dim/zero ball SBI_DIM_EM (⚪ U+26AA gray outline circle) replaces
-// any light's colored ball when its count is 0. Order matches the IIFE's
+// Mirror patch.ts SBI_LIGHTS_CFG + SBI_DIM_EM + SBI_PRIORITY — single source
+// of truth is patch.ts; this local copy must stay in sync. v0.1.16 replaced
+// the v0.1.15 `bg` field (a ThemeColor id for a colored block background)
+// with the `em` field (the "on" emoji ball codepoint — a pre-colored Unicode
+// circle that carries its own green/yellow/blue/red fill, no theme
+// dependency). The shared dim/zero ball SBI_DIM_EM (🟤 U+1F7E4 brown circle,
+// same Geometric Shapes Extended block as 🟢🟡 — chosen over the earlier ⚪
+// U+26AA to retire the cross-Unicode-block width gamble; see patch.ts
+// SBI_DIM_EM JSDoc + docs/STATES.md §7.5) replaces any light's colored ball
+// when its count is 0.
+// v0.1.17 DROPPED the v0.1.15/v0.1.16 `pri` field — the 4 lights now render
+// inside ONE StatusBarItem (concatenated text, 0px inter-light gap), so
+// per-light priority became dead data. The single SBI's priority lives in
+// its own SBI_PRIORITY const (-9996, leftmost-of-the-old-4 → preserves
+// screen position across the 4-SBI → 1-SBI pivot). Order matches the IIFE's
 // `var CFG=[...]` array: done(🟢) / running(🟡) / pending(🔵) /
 // interrupted(🔴). Used to assert the IIFE bakes the same config via
 // JSON.stringify in buildIIFE. Emoji written as \u{XXXX} escapes so the
 // test file mirrors patch.ts source form (ASCII-only); the parsed values
 // are the actual emoji chars.
 const SBI_LIGHTS_CFG = [
-  { key: 'done', em: '\u{1F7E2}', pri: -9996 }, // 🟢 leftmost
-  { key: 'running', em: '\u{1F7E1}', pri: -9997 }, // 🟡
-  { key: 'pending', em: '\u{1F535}', pri: -9998 }, // 🔵
-  { key: 'interrupted', em: '\u{1F534}', pri: -9999 }, // 🔴 rightmost
+  { key: 'done', em: '\u{1F7E2}' }, // 🟢 leftmost
+  { key: 'running', em: '\u{1F7E1}' }, // 🟡
+  { key: 'pending', em: '\u{1F535}' }, // 🔵
+  { key: 'interrupted', em: '\u{1F534}' }, // 🔴 rightmost
 ];
-const SBI_DIM_EM = '\u{26AA}'; // ⚪ — shared zero-count gray outline ball
+const SBI_DIM_EM = '\u{1F7E4}'; // 🟤 — shared zero-count dim ball (Geometric Shapes Extended, same block as 🟢🟡)
+const SBI_PRIORITY = -9996; // single v0.1.17 SBI's priority (Left, rightmost)
 
 // --- Obtain the IIFE string via --check-iife ---------------------------------
 function getIife() {
@@ -212,48 +221,49 @@ check(
   'IIFE.21b banner carries content-hash suffix',
   /\/\*cc-status-dot-injected:v\d+\.\d+\.\d+:[0-9a-f]{8}\*\//.test(iife),
 );
-// v0.1.16 banner specifically: locks the emoji-ball restoration version (a
-// regression that rolled back to v0.1.15 colored blocks would surface here
+// v0.1.17 banner specifically: locks the single-SBI compact-concat pivot
+// (a regression that rolled back to v0.1.16 4-SBI would surface here
 // before any SBI assertion fires).
-check('IIFE.21c banner carries v0.1.16 stamp', /\/\*cc-status-dot-injected:v0\.1\.16:/.test(iife));
+check('IIFE.21c banner carries v0.1.18 stamp', /\/\*cc-status-dot-injected:v0\.1\.18:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
 check('IIFE.23 no bare `seq` counter (M8 rename)', !/\bseq\s*%/.test(iife) && !/\bseq\+\+/.test(iife));
 
-// --- 11. SBI 4-light (v0.1.14): aggregation + text-mutation driver ----------
+// --- 11. SBI aggregation (v0.1.17: single SBI + compact concat text) --------
 // The v0.1.13 commandCenter 4-light (20 package.json contribs + setContext
-// driver) is GONE. v0.1.14 keeps ALL the design improvements (4 lights incl.
-// NEW 🔵 pending; 3-way stale-session GC; pending counted INDEPENDENTLY of
-// state) but moves the surface to a single runtime StatusBarItem at
-// StatusBarAlignment.Left with very negative priority (-9999 → rightmost
-// among Left items → closest to visible center). Text + tooltip are mutated
-// every 500ms by __ccsdSbiTimer; the SBI is disposed on last-panel-out.
+// driver) is GONE. v0.1.14 pivoted to a single runtime StatusBarItem;
+// v0.1.15 split into 4 SBIs for fixed per-light slots; v0.1.16 restored
+// emoji balls but kept the 4-SBI structure. v0.1.17 COLLAPSES back to a
+// single SBI rendering 4 lights as concatenated text `🟢N🟡N🔵N🔴N` (no
+// separator) — VSCode's statusbarpart.css `margin:0 3px;padding:0 5px`
+// per-SBI made the v0.1.16 4-SBI row look ~16px loose, uncontrollable
+// via public API. Position stability (digits never shift the row on count
+// change) comes from VSCode's statusbarpart.css `font-variant-numeric:
+// tabular-nums`, which forces ASCII digits 0-9 to equal advance width.
 //
-// The aggregation applies the SAME §4 reader rules as per-tab rendering
-// (done>5min→idle so IDLE sessions don't count toward green; running stale
-// >30min→idle to GC crashed sessions; interrupted >24h→idle to bound 🔴
-// growth). pending is counted INDEPENDENTLY of state — a session can be both
-// running AND pending (running turn paused on a permission prompt). The IIFE
-// retains the project-scoped __ccsd* prefix (NOT CC's __cc* namespace — see
+// ALL the v0.1.14+ aggregation design is preserved: 4 lights incl. NEW
+// 🔵 pending; 3-way stale-session GC; pending counted INDEPENDENTLY of
+// state; project-scoped __ccsd* prefix (NOT CC's __cc* namespace — see
 // the `cc-status-bar-injected` tombstone in restoreWebview()).
 
 // SBI text set at CREATION TIME (not only inside the timer tick).
-// Business-logic review round-2 (carried from v0.1.14, then v0.1.15, now
-// v0.1.16): the SBI was created with .tooltip set but .text NEVER set,
+// Business-logic review round-2 (carried from v0.1.14 → v0.1.15 → v0.1.16
+// → v0.1.17): the SBI was created with .tooltip set but .text NEVER set,
 // leaving it zero-width/invisible for the ~500ms until the first tick —
 // and silently permanent if the timer-setup try/catch swallowed a throw.
-// v0.1.16 creates 4 SBIs, each starting at the count=0 form: text
-// DIM_EM+"0" ("⚪0" — gray outline ball + "0") so the slot is born at
-// fixed width and the 4 slots are visible + aligned from the very first
-// paint. The first aggregation tick flips any non-zero light to its
-// colored ball (CFG[k].em + digit). Assert the literal `sbi.text=DIM_EM+"0"`
-// appears at the creation site so a regression that dropped the
-// creation-time assignment would re-open the invisibility window.
+// v0.1.17 creates ONE SBI starting at the all-zero form: text
+// DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0" (= "🟤0🟤0🟤0🟤0" since the
+// ⚪→🟤 pivot — four zero-slots concatenated, dim ball + "0" each) so the
+// slot is born at the full 4-light row width and visible from the very
+// first paint. The first aggregation tick rewrites text to the live concat
+// (e.g. "🟢3🟡1🟤0🟤0"). Assert the literal creation-time text appears at
+// the creation site so a regression that dropped the assignment would
+// re-open the invisibility window.
 check(
-  'IIFE.23b each SBI.text=DIM_EM+"0" set at creation (no 500ms invisibility window)',
-  iife.includes('sbi.text=DIM_EM+"0"'),
-  'expected creation-time sbi.text=DIM_EM+"0"',
+  'IIFE.23b SBI.text=DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0" set at creation (no 500ms invisibility window)',
+  iife.includes('sbi.text=DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"'),
+  'expected creation-time sbi.text=DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"',
 );
 check(
   'IIFE.23c NO creation-time sbi.color= assignment (v0.1.16 drops the v0.1.15 dim ThemeColor)',
@@ -268,61 +278,43 @@ check(
 check(
   'IIFE.23e NO deactivatedForeground ThemeColor (v0.1.15 dim color gone)',
   !/statusBarItem\.deactivatedForeground/.test(iife),
-  'v0.1.16 uses ⚪ emoji for dim, not statusBarItem.deactivatedForeground',
+  'v0.1.16+ uses a dim emoji ball (⚪ pre-pivot, 🟤 post-v0.1.17-pivot) for dim, not statusBarItem.deactivatedForeground',
 );
 
-// SBI 4-item creation — one window-scoped createStatusBarItem PER LIGHT,
-// idempotent across panels via the __ccsdSbis-array guard. v0.1.15 split the
-// v0.1.14 single SBI into 4 so each light's digit renders inside its own
-// colored block. The creation loop iterates CFG (the baked config table);
-// each iteration createStatusBarItem(Left, CFG[k].pri) and pushes into a
-// local `arr`. Priorities -9996..-9999 keep the 4 blocks bunched at the
-// rightmost end of Left (done leftmost, interrupted rightmost).
-//
-// Round-4 (v0.1.15) hardening: the guard is a LENGTH check, not a truthiness
-// check, so a prior partial-failure run (e.g. createStatusBarItem threw at
-// k=2 on a disposed host) that left a length<4 truthy array is detected and
-// rebuilt. The 4 creates are per-iteration try/catch wrapped and accumulated
-// in `arr`; the array is committed to globalThis ONLY when arr.length===
-// CFG.length (all-or-nothing). This closes the "permanently stuck at N<4
-// lights" silent degradation v0.1.14's single-SBI path could not have.
+// v0.1.17 SINGLE-SBI creation — collapses the v0.1.15/v0.1.16 4-SBI loop
+// (4 independent createStatusBarItem at priority -9996..-9999) into ONE
+// StatusBarItem at priority SBI_PRIORITY (-9996). The 4 lights now render
+// as concatenated text inside the single SBI's `.text` (0px inter-light
+// gap), NOT as 4 separate statusbar items. Why: VSCode's statusbarpart.css
+// hardcodes `margin:0 3px;padding:0 5px` per SBI (6-16px gap, uncontrollable
+// via public API — the internal IStatusbarEntryLocation.compact flag is
+// not reachable from extension code); 4 SBIs therefore always looked loose.
+// Single-SBI guard is idempotent across panels via `if(!globalThis.__ccsdSbi)`.
+// Per-failure try/catch wraps the whole create-call so a throw inside
+// createStatusBarItem / .command= / .show() is swallowed and the IIFE
+// continues to the per-tab tick + onDidDispose registration. No
+// commit-atomic / partial-failure-cleanup needed (only one resource).
 check(
-  'IIFE.24a length-guarded rebuild detects partial prior array + disposes it',
-  /if\s*\(\s*!globalThis\.__ccsdSbis\s*\|\|\s*globalThis\.__ccsdSbis\.length\s*!==\s*CFG\.length\s*\)\s*\{/.test(
-    iife,
-  ) &&
-    /if\s*\(\s*globalThis\.__ccsdSbis\s*\)\s*\{for\(var j=0;j<globalThis\.__ccsdSbis\.length;j\+\+\)\{try\{globalThis\.__ccsdSbis\[j\]\.dispose\s*\(\s*\)\}catch\(e\)\{\}\};globalThis\.__ccsdSbis\s*=\s*null/.test(
-      iife,
-    ),
+  'IIFE.24a single-SBI idempotent guard (if !globalThis.__ccsdSbi)',
+  /if\s*\(\s*!globalThis\.__ccsdSbi\s*\)\s*\{/.test(iife),
 );
 check(
-  'IIFE.24b per-iteration try/catch around createStatusBarItem + push into local arr',
-  /for\(var k=0;k<CFG\.length;k\+\+\)\{try\{var sbi=vs\.window\.createStatusBarItem\s*\(\s*vs\.StatusBarAlignment\.Left\s*,\s*CFG\[k\]\.pri\s*\)/.test(
+  'IIFE.24b single-SBI createStatusBarItem(Left, SBI_PRIORITY) with per-failure try/catch',
+  /try\s*\{\s*var\s+sbi\s*=\s*vs\.window\.createStatusBarItem\s*\(\s*vs\.StatusBarAlignment\.Left\s*,\s*-9996\s*\)/.test(
     iife,
   ),
 );
 check(
-  'IIFE.24c commit-atomic: arr committed to globalThis only when arr.length===CFG.length',
-  /if\s*\(\s*arr\.length\s*===\s*CFG\.length\s*\)\s*\{\s*globalThis\.__ccsdSbis\s*=\s*arr/.test(iife),
+  'IIFE.24c single-SBI stored to globalThis.__ccsdSbi (NOT __ccsdSbis array)',
+  /globalThis\.__ccsdSbi\s*=\s*sbi/.test(iife),
 );
-// Round-5 leak fix (v0.1.15): partial-failure cleanup. When the per-iteration
-// try/catch catches a throw mid-loop (e.g. createStatusBarItem throws at k=2 on
-// a disposed host), the previously successful iterations' SBIs (already
-// .show()n and pushed into local `arr`) are NOT reachable via globalThis —
-// without an explicit dispose they would leak as visible-orphan colored blocks
-// on the status bar forever (and every panel-retry would stack another partial
-// set). The fix adds an `else` branch on the commit-atomic `if` that walks
-// `arr` and disposes each shown SBI before discarding it. A regression that
-// dropped the else (or rearranged the loop to push AFTER show without a
-// cleanup path) would re-open the visible-orphan leak. The regex tolerates any
-// loop-counter identifier (the IIFE uses `f` to avoid the k/j shadow already
-// in scope) and requires the dispose call to be wrapped in its own try/catch
-// (mirror of the rebuild-dispose loop's pattern).
+// v0.1.17 SIMPLIFICATION: assert the v0.1.15/v0.1.16 4-SBI loop is GONE.
+// A regression that revived `var arr=[]` + per-iteration push would
+// silently re-introduce the loose 4-SBI row + resurrect the
+// commit-atomic / partial-failure-cleanup branches — surface it here.
 check(
-  'IIFE.24d partial-failure cleanup: shown-but-untracked SBIs disposed when arr.length!==CFG.length',
-  /else\s*\{\s*for\s*\(\s*var\s+\w+\s*=\s*0\s*;\s*\w+\s*<\s*arr\.length\s*;\s*\w+\+\+\s*\)\s*\{\s*try\s*\{\s*arr\s*\[\s*\w+\s*\]\.dispose\s*\(\s*\)\s*\}\s*catch\s*\(\s*e\s*\)\s*\{\s*\}\s*\}\s*;\s*\}/.test(
-    iife,
-  ),
+  'IIFE.24d NO v0.1.16 4-SBI creation loop (no var arr=[], no CFG[k].pri)',
+  !/var\s+arr\s*=\s*\[\s*\]/.test(iife) && !/CFG\[k\]\.pri/.test(iife),
 );
 // R3-5 (round 3, ported): assert no `globalThis.__cc<SOMETHING-WRONG>` leaks —
 // the only legitimate prefix is `__ccsd*` (lowercase s after __cc). CC's own
@@ -412,14 +404,16 @@ check(
     /if\s*\(\s*globalThis\.__ccsdPanelCount\s*<=\s*0\s*\)/.test(iife) &&
     /clearInterval\s*\(\s*globalThis\.__ccsdSbiTimer\s*\)/.test(iife),
 );
-// Last-panel-out teardown must DISPOSE all 4 SBIs — locks v0.1.15 "lights go
-// away when no CC panel survives" behavior. The onDidDispose callback loops
-// over __ccsdSbis and disposes each, then nulls the array. (was: single
-// __ccsdSbi.dispose in v0.1.14; was: 4 setContext resets in v0.1.13; was: SBI
-// hide in v0.1.11.)
+// Last-panel-out teardown must DISPOSE the single v0.1.17 SBI — locks
+// v0.1.17 "light goes away when no CC panel survives" behavior (same UX
+// as v0.1.15/v0.1.16 had via the 4-SBI loop). The onDidDispose callback
+// calls __ccsdSbi.dispose() wrapped in try/catch, then nulls the ref.
+// (was v0.1.15/v0.1.16: `for(k<__ccsdSbis.length) __ccsdSbis[k].dispose()`
+// loop; was v0.1.14: single __ccsdSbi.dispose — v0.1.17 returns to this
+// shape; was v0.1.13: 4 setContext resets; was v0.1.11: SBI hide.)
 check(
-  'IIFE.32 SBI last-panel-out disposes all 4 SBIs (loop + null reset)',
-  /for\(var k=0;k<globalThis\.__ccsdSbis\.length;k\+\+\)\{try\{globalThis\.__ccsdSbis\[k\]\.dispose\s*\(\s*\)\}catch\(e\)\{\}\};globalThis\.__ccsdSbis\s*=\s*null/.test(
+  'IIFE.32 SBI last-panel-out disposes the single v0.1.17 SBI (try/catch + null reset)',
+  /if\s*\(\s*globalThis\.__ccsdSbi\s*\)\s*\{\s*try\s*\{\s*globalThis\.__ccsdSbi\.dispose\s*\(\s*\)\s*\}\s*catch\s*\(\s*e\s*\)\s*\{\s*\}\s*;\s*globalThis\.__ccsdSbi\s*=\s*null/.test(
     iife,
   ),
 );
@@ -435,10 +429,8 @@ check(
 // per-panel tick. (4) The onDidDispose teardown registration remains wrapped
 // in try/catch (matches the per-tab tick's isolation pattern).
 check(
-  'IIFE.33 SBI creation wrapped in try/catch (v0.1.15 round-4 length-guarded form)',
-  /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdSbis\s*\|\|\s*globalThis\.__ccsdSbis\.length\s*!==\s*CFG\.length\s*\)/.test(
-    iife,
-  ),
+  'IIFE.33 SBI creation wrapped in try/catch (v0.1.17 single-SBI form)',
+  /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdSbi\s*\)/.test(iife),
 );
 check(
   'IIFE.34 SBI singleton-timer creation wrapped in try/catch',
@@ -499,25 +491,27 @@ check(
   ),
 );
 
-// --- 14. v0.1.16 per-SBI render (emoji ball + fixed-width digit) -----------
-// v0.1.16 reverted v0.1.15's digit-in-colored-block treatment back to emoji
-// balls (user feedback "色块效果不如圆点好看"), KEEPING the v0.1.15 4-SBI
-// structure (each light in its own fixed-width slot — positions never shift
-// when counts change). Each of the 4 SBIs gets its OWN text assigned from
-// counts[k] (the capped count for that light). The render rule:
-//   text = (n===0 ? DIM_EM : CFG[k].em) + (n>=4?"N":""+n)
-// so:
-//   n===0 → "⚪0" (gray outline ball + "0" — slot width matches non-zero)
-//   n>0   → "🟢3" / "🟡N" / etc. (colored ball + digit-or-"N")
-// NO backgroundColor, NO color field is set — the emoji ball carries its
-// own color, so the v0.1.15 lit/dim themed-block flip + cached ThemeColor
-// identifiers (__ccsdSbiLitBgs / __ccsdSbiDimClr) are GONE from executable
-// code (the only remaining mentions are in the historical comments
-// documenting what v0.1.15 used to do).
+// --- 14. v0.1.17 per-tick concat render (single SBI, compact text) ----------
+// v0.1.17 collapses the v0.1.15/v0.1.16 4-SBI loop back into a SINGLE SBI
+// whose text is a 4-token concatenation `🟢N🟡N🔵N🔴N` (0px inter-light
+// gap — the user's "4 圆点之间间隔不紧凑" feedback under v0.1.16 is fixed
+// by removing the 4-SBI row that VSCode's CSS forces ~6-16px gap between).
+// Position stability (digits never shift the row on count change) is
+// guaranteed by VSCode's statusbarpart.css `font-variant-numeric:tabular-
+// nums`, which forces ASCII digits 0-9 to equal advance width regardless
+// of font — the explicit "数字不位移" requirement is satisfied by this
+// CSS rule alone, independent of emoji rendering width.
+//
+// Per-token render rule (UNCHANGED from v0.1.16, just collected into txt):
+//   txt += (n===0 ? DIM_EM : CFG[k].em) + (n>=4 ? "N" : ""+n)
+// → "🟢3🟡1🟤0🟤0" (v0.1.17 compact, 0px gap; 🟤 since the ⚪→🟤 pivot,
+//   pre-pivot this example read "🟢3🟡1⚪0⚪0")
+//   was v0.1.16 4 separate SBI texts "🟢3" / "🟡1" / "🟤0" / "🟤0" with
+//   ~16px gap between each pair.
 check(
-  'IIFE.38 per-SBI text rule: (n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)',
-  iife.includes('sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)'),
-  'expected: sbi.text=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)',
+  'IIFE.38 per-tick concat: parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)) + parts.join(" ") (v0.1.18 space-separated)',
+  iife.includes('parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n))') && iife.includes('parts.join(" ")'),
+  'expected: parts.push(...) + parts.join(" ") for space-separated lights',
 );
 check(
   'IIFE.38b NO sbi.backgroundColor assignment in executable code (v0.1.16 drops themed block)',
@@ -556,47 +550,45 @@ check(
     '"Claude Code: "+ag.done+" done, "+ag.running+" running, "+ag.pending+" pending, "+ag.interrupted+" interrupted"',
   ),
 );
-// Per-tick update loop iterates globalThis.__ccsdSbis and mutates each item's
-// text + tooltip + show. v0.1.16 simplifications from v0.1.15:
-// (a) STILL has per-iteration try/catch (carried over from v0.1.15 round-4
-//     hardening — one disposed SBI froze ALL later slots for that tick and
-//     every future tick);
-// (b) STILL has the lastKey memo short-circuit keyed on the UNcapped
-//     aggregation tuple (steady-state IPC writes drop from ~40/s to 0);
-// (c) DROPS the cached ThemeColor reuse (`__ccsdSbiLitBgs` / `__ccsdSbiDimClr`)
-//     — no backgroundColor/color is set anymore, so there are no ThemeColors
-//     to cache. The ball emoji is read directly from CFG[k].em / DIM_EM.
-// A regression that dropped the per-iteration try/catch OR the short-circuit
-// would surface here; a regression that RE-ADDED the cached ThemeColor
-// identifiers would surface at IIFE.38c2 above.
+// v0.1.17 per-tick update: STILL has the lastKey memo short-circuit keyed
+// on the UNcapped aggregation tuple (steady-state IPC writes drop from
+// ~40/s to 0). DROPS the v0.1.15/v0.1.16 per-iteration try/catch loop
+// (no longer needed — there's only ONE SBI; a per-token failure would
+// only corrupt a locally-scoped `txt` string, not a global SBI reference).
+// A regression that dropped the lastKey short-circuit OR revived the
+// 4-SBI loop form would surface here.
 check(
-  'IIFE.40b per-tick update: lastKey short-circuit + per-iteration try/catch (v0.1.16 simplified)',
+  'IIFE.40b per-tick update: lastKey short-circuit + single-text concat (v0.1.17)',
   /var\s+key\s*=\s*ag\.done\s*\+\s*","\s*\+\s*ag\.running\s*\+\s*","\s*\+\s*ag\.pending\s*\+\s*","\s*\+\s*ag\.interrupted/.test(
     iife,
   ) &&
     /if\s*\(\s*key\s*!==\s*globalThis\.__ccsdSbiLastKey\s*\)/.test(iife) &&
-    /for\s*\(\s*var\s+k\s*=\s*0\s*;\s*k<globalThis\.__ccsdSbis\.length\s*;\s*k\+\+\s*\)\s*\{\s*try\s*\{\s*var\s+sbi\s*=\s*globalThis\.__ccsdSbis\[k\]\s*;\s*var\s+n\s*=\s*counts\[k\]\s*;\s*sbi\.text\s*=/.test(
-      iife,
-    ) &&
-    /sbi\.show\s*\(\s*\)\s*\}\s*catch\s*\(\s*e\s*\)\s*\{\s*\}/.test(iife) &&
-    /sbi\.tooltip\s*=\s*tip/.test(iife),
+    /var\s+parts\s*=\s*\[\]\s*;\s*for\s*\(\s*var\s+k\s*=\s*0\s*;\s*k<CFG\.length\s*;\s*k\+\+\s*\)/.test(iife) &&
+    /globalThis\.__ccsdSbi\.text\s*=\s*parts\.join\(\s*" "\s*\)/.test(iife) &&
+    /globalThis\.__ccsdSbi\.tooltip\s*=\s*tip/.test(iife) &&
+    /globalThis\.__ccsdSbi\.show\s*\(\s*\)/.test(iife),
 );
 
-// --- 15. SBI config baking (v0.1.16: em field; replaces v0.1.15 bg field) ---
-// The 4-light config (key/em/pri per light) is baked into the IIFE as a
+// --- 15. SBI config baking (v0.1.17: {key,em}; pri dropped, SBI_PRIORITY const) ---
+// The 4-light config (key/em per light) is baked into the IIFE as a
 // JSON-stringified array literal `var CFG=[...]` from SBI_LIGHTS_CFG
-// (patch.ts source). Locking the exact content matters: a permutation would
-// silently swap two lights' emoji/positions, and a wrong codepoint would
-// make a light render with the wrong colored ball.
+// (patch.ts source). v0.1.17 dropped the v0.1.15/v0.1.16 `pri` field —
+// the 4 lights now render inside ONE SBI, so per-light priority became
+// dead data. The single SBI's priority is baked as a separate numeric
+// literal at the createStatusBarItem call site (SBI_PRIORITY = -9996).
+// Locking the exact CFG content matters: a permutation would silently
+// swap two lights' emoji/order, and a wrong codepoint would make a light
+// render with the wrong colored ball.
 check(
-  'IIFE.41 SBI CFG array baked from SBI_LIGHTS_CFG (4 lights, em/pri per entry)',
+  'IIFE.41 SBI CFG array baked from SBI_LIGHTS_CFG (4 lights, key/em per entry — v0.1.17 drops pri)',
   iife.includes('var CFG=' + JSON.stringify(SBI_LIGHTS_CFG) + ';'),
 );
 // DIM_EM baked as a sibling string literal — locks the shared zero-count
-// gray ball. JSON.stringify emits the ⚪ literal (BMP codepoint U+26AA,
-// single ⚪ escape), which VSCode parses back to ⚪ at load time.
+// dim ball. JSON.stringify emits the 🟤 literal (astral codepoint U+1F7E4
+// since the v0.1.17 ⚪→🟤 pivot; was the lone BMP ⚪ U+26AA pre-pivot),
+// which VSCode parses back to 🟤 at load time.
 check(
-  'IIFE.41a SBI DIM_EM baked from SBI_DIM_EM (shared zero-count gray ball)',
+  'IIFE.41a SBI DIM_EM baked from SBI_DIM_EM (shared zero-count dim ball 🟤)',
   iife.includes('var DIM_EM=' + JSON.stringify(SBI_DIM_EM) + ';'),
 );
 // Lock the 4 on-color emoji codepoints explicitly so a wrong codepoint (e.g.
@@ -619,9 +611,21 @@ check(
   'IIFE.41e CFG em[3] interrupted = 🔴 U+1F534 (red large circle)',
   iife.includes('"em":"' + SBI_LIGHTS_CFG[3].em + '"'),
 );
-// Lock the 4 priorities (done leftmost / interrupted rightmost).
-check('IIFE.41f CFG pri done=-9996 (leftmost)', iife.includes('"pri":-9996'));
-check('IIFE.41g CFG pri interrupted=-9999 (rightmost)', iife.includes('"pri":-9999'));
+// v0.1.17 SBI_PRIORITY baked as the literal -9996 at the createStatusBarItem
+// call site (replaces the v0.1.15/v0.1.16 per-light pri field). Locks the
+// leftmost-of-the-old-4 priority so the single SBI lands at the same screen
+// position as the v0.1.16 done-slot did.
+check(
+  'IIFE.41f single-SBI priority literal -9996 at createStatusBarItem call',
+  /vs\.window\.createStatusBarItem\s*\(\s*vs\.StatusBarAlignment\.Left\s*,\s*-9996\s*\)/.test(iife),
+);
+// v0.1.17 CFG MUST NOT carry a per-light pri field — a regression that
+// revived it would indicate a partial rollback to v0.1.16 4-SBI structure.
+check(
+  'IIFE.41g NO CFG "pri" field (v0.1.17 single-SBI, per-light priority gone)',
+  !/"pri"\s*:/.test(iife),
+  'v0.1.17 CFG must use {key,em} only — pri dropped when 4 SBI → 1 SBI',
+);
 // v0.1.15 ThemeColor bg field MUST be gone — a regression that revived it
 // would indicate a partial rollback to the colored-block treatment. The
 // `bg` key should not appear anywhere in CFG.
@@ -655,7 +659,7 @@ check(
   /vs\.commands\.registerCommand\s*\(\s*"ccStatusDot\.sbiClick"/.test(iife),
 );
 check(
-  'IIFE.44 SBI.command wired to ccStatusDot.sbiClick on each sbi in creation loop',
+  'IIFE.44 SBI.command wired to ccStatusDot.sbiClick on the single v0.1.17 SBI',
   /sbi\.command\s*=\s*"ccStatusDot\.sbiClick"/.test(iife),
 );
 

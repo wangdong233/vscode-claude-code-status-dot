@@ -25,7 +25,7 @@
 - 🔔 **完成/中断通知**——macOS 走系统通知（屏幕右上角下拉，带声音，无按钮，几秒自动消失），前台后台都弹，不用一直盯着
 - ⚙️ **workflow 跑期间保持 running**——后台 subagent/cron 在飞时不假绿，`Stop` 权威裁定
 - 📂 **Open Editors 同步**——左上角"打开的编辑器"视图里的 CC tab 也带状态点
-- 📊 **底部 SBI 4 圆点（emoji 球+数字，位置固定）**——状态栏左侧（`StatusBarAlignment.Left` + 4 块 priority `-9996..-9999`，靠近可见中心）显示 4 个**带数字的圆点**并排（v0.1.16 恢复 v0.1.14 的 emoji 球样式，保留 v0.1.15 的 4 SBI 独立结构让位置固定）：🟢完成 / 🟡运行 / 🔵待输入 / 🔴中断。每灯 text 是 `<球><数字>`（球自带色，**移除了 v0.1.15 的彩色背景块 + 白字**），计数封顶 0/1/2/3/N（>=4 显示 N）；count>0 → 球亮（🟢/🟡/🔵/🔴 自带彩色 + 数字紧跟），count=0 → 灰球 ⚪ + "0"（占位同非0，**位置不位移**——这是 4 SBI 相对 v0.1.14 单 SBI 的核心优势：v0.1.14 的 `🟢N 🟡N 🔵N 🔴N` 拼接会因为数字宽度变化整行左右蹿，4 SBI 各自固定球+1数字宽度的 slot 永远不动）。🔵 = 待用户输入（permission/question/elicit，writer 新增 Notification hook case）。完成超 5 分钟算 idle 不计绿。v0.1.16 用 **4 个独立运行时 StatusBarItem + emoji 球**（无需 patch CC package.json，无需 ThemeColor 块，IIFE 每 500ms 直接 mutate 每 slot 的 text）——emoji 球自带颜色，渲染路径比 v0.1.15 更简单（无 backgroundColor、无 color 缓存、无 lit/dim 翻转）。
+- 📊 **底部 SBI 4 圆点紧凑拼接（v0.1.17 单 SBI，0 间距，数字不位移）**——状态栏左侧（`StatusBarAlignment.Left` + 单 SBI priority `-9996`，靠近可见中心）显示**一行紧贴的 4 个圆点**（v0.1.17 把 v0.1.16 的 4 个独立 SBI 合并回单 SBI + 4 段拼接 text `🟢3🟡1🟤0🟤0`——根因：VSCode `statusbarpart.css` 给每个 SBI 硬编码 `margin:0 3px;padding:0 5px`，相邻 SBI 约 6-16px 间距，**公开 API 无法控制**；4 SBI 路径下"间隔松散"是框架硬限制，必须收回到单 SBI 才能紧凑）：🟢完成 / 🟡运行 / 🔵待输入 / 🔴中断。每灯 token 是 `<球><数字>`（球自带色），4 段直接拼接无分隔符（**0 像素间距**，整行宽度从 ~120px 压到 ~70px）；计数封顶 0/1/2/3/N（>=4 显示 N）；count>0 → 球亮（🟢/🟡/🔵/🔴 自带彩色 + 数字紧跟），count=0 → dim 球 🟤 + "0"（v0.1.17 ⚪→🟤 pivot：🟤 与 🟢🟡 同属 Geometric Shapes Extended 块，跨字体等宽）。🔵 = 待用户输入（permission/question/elicit，writer 新增 Notification hook case）。完成超 5 分钟算 idle 不计绿。**"数字不位移"由 VSCode CSS `font-variant-numeric:tabular-nums` 强制保证**（statusbarpart.css 给所有状态栏 item 应用 tabular-nums，ASCII 数字 0-9 在任何字体下都等宽）——独立于 emoji 字体渲染。v0.1.17 用 **1 个运行时 StatusBarItem + 拼接 text**（无需 patch CC package.json，无需 ThemeColor 块，IIFE 每 500ms 直接 mutate SBI 的 text）。
 - ↩️ **零副作用一键还原**——`--revert` 从 `.bak` 完整恢复 extension.js、外科手术式移除 hooks、保留你的用户数据
 
 > ⚠️ **诚实声明**：本项目是一个 **patch（补丁），不是独立扩展**——VSCode 不允许第三方扩展修改另一个扩展的 webview tab 图标，唯一可行路径是 patch CC 自己的 `extension.js`。代价：CC 自动更新会覆盖，需重跑命令。
@@ -238,8 +238,8 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 - **minified anchor 脆性**：patch 依赖 CC 代码里两段精确字符串，版本漂移时 patcher 报 "Anchor mismatch" 拒绝写入（扩展不会被破坏）。
 - **VSCode 完全关闭时不通知**：IIFE 跑在扩展宿主进程，VSCode 关闭则不运行 → 不通知。
 - **系统通知点击不跳 tab**：osascript 无 click callback，通知仅提醒，回 VSCode 靠 tab 绿/红点定位。
-- **SBI priority 区间无所有权**（v0.1.16）：底部 4 圆点占用 `StatusBarAlignment.Left` 的 priority 区间 `-9996..-9999`（4 单位相邻），VSCode StatusBarItem API 无扩展级命名空间/所有权机制——其它扩展若声明同区间 priority，可能在 4 slot 之间插入分隔，把 done/running/pending/interrupted 视觉上劈开（这是 4 SBI 相对单 SBI 的核心架构权衡：治愈了"数字宽度变化整行位移"，却引入"行被外部分隔"的新失败模式，且碰撞窗口扩大 4 倍；主流场景下不会触发，STATES.md §7.5 已诚实声明此限制）。
-- **emoji 字体栈依赖**（v0.1.16）：底部 SBI 圆点是 emoji 字形（🟢🟡🔵🔴⚪），依赖系统 emoji 字体栈——macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ 主流 Linux（Noto Color Emoji）正常显示彩色；Win7 / 部分 headless Linux / 无 emoji 字体的远程 SSH 环境可能渲染为黑白字形或豆腐块。v0.1.15 的 `ThemeColor` 路径跨平台稳定，v0.1.16 切回 emoji 球是有意取舍（用户审美偏好 > 跨平台一致）。
+- **SBI priority 区间无所有权**（v0.1.17，**碰撞窗口从 4 单位缩到 1 单位**）：底部 SBI 占用 `StatusBarAlignment.Left` 的 priority `-9996`（单点，v0.1.17 从 v0.1.16 的 `-9996..-9999` 4 单位区间缩到 1 单位），VSCode StatusBarItem API 无扩展级命名空间/所有权机制——其它扩展若声明同 priority，可能把我们的 SBI 挤到角落。**v0.1.17 单 SBI 架构消除了 v0.1.16 的"行被外部分隔"失败模式**（v0.1.16 的 4 个独立 SBI 可能被其它扩展的 SBI 插入 done 与 interrupted 之间劈开；v0.1.17 整行是一个 SBI，外部插入只能插到整行两侧，不会拆开 4 灯）；碰撞概率也降低到 1/4。主流场景下不会触发，STATES.md §7.5 已诚实声明此限制。
+- **emoji 字体栈依赖**（v0.1.17 沿用 v0.1.16）：底部 SBI 圆点是 emoji 字形（🟢🟡🔵🔴🟤，v0.1.17 ⚪→🟤 pivot 后），依赖系统 emoji 字体栈——macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ 主流 Linux（Noto Color Emoji）正常显示彩色；Win7 / 部分 headless Linux / 无 emoji 字体的远程 SSH 环境可能渲染为黑白字形或豆腐块。v0.1.15 的 `ThemeColor` 路径跨平台稳定，v0.1.16+切回 emoji 球是有意取舍（用户审美偏好 > 跨平台一致）。
 
 ---
 

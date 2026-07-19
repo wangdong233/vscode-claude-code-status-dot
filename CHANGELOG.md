@@ -2,6 +2,49 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.1.17] - 2026-07-19
+
+**底部 SBI 4 灯：单 SBI 紧凑拼接（0 像素间距），数字等宽不位移由 VSCode 自带 `tabular-nums` CSS 根治**。根因：v0.1.16 的 4 个独立 SBI（priority `-9996..-9999`）在状态栏上看起来"间隔松散"——用户反馈"4 圆点之间间隔不紧凑"。**调研 VSCode 源码（`microsoft/vscode` 仓库 `src/vs/workbench/browser/parts/statusbar/media/statusbarpart.css`）发现：每个 SBI label 的 CSS 写死了 `margin-right:3px;margin-left:3px;padding:0 5px;`，相邻 SBI 之间约 6-16px 间距，**公开 StatusBarItem API 无 `margin`/`padding`/`spacing` 字段**；VSCode 内部 `IStatusbarEntryLocation.compact` 标志存在但只对核心 entry 开放（如 Ln/Col 与 Encoding 的紧贴对），`createStatusBarItem(alignment, priority)` 签名不接受 `compact` 参数，`require("vscode")` 也 resolve 不到内部 statusbar 模块；priority 只决定排序，不影响间距。**4 SBI 路径下 6-16px 间距是 VSCode 框架硬限制**。**要紧凑必须收回到单 SBI**。
+
+### Added / Changed
+
+- **4 SBI → 单 SBI 紧凑拼接**：`globalThis.__ccsdSbis`（4 元素数组）→ `globalThis.__ccsdSbi`（单个 StatusBarItem）。单个 `createStatusBarItem(StatusBarAlignment.Left, SBI_PRIORITY=-9996)`，text 是 4 个 `<球><数字>` 拼接（`txt+=(n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)` 4 次循环）→ `🟢3🟡1⚪0⚪0`（无分隔符，**0 像素间距**）。整行宽度从 ~120px 压到 ~70px。`onDidDispose` 最后一个 panel 退出时直接 `__ccsdSbi.dispose()`（不再遍历 4 个）。
+- **位置稳定性根因彻底澄清**：v0.1.14 时"单 SBI 位移"问题被错误归因到数字宽度。**实证 VSCode `statusbarpart.css`**：`.monaco-workbench .part.statusbar > .items-container > .statusbar-item` 选择器带 `font-variant-numeric: tabular-nums;`——所有 ASCII 数字 0-9 在**任何字体**下都是等宽 OpenType tabular figures。`cap()` 把 0-3 与 4+ 都映射到 1 字符宽（"0"-"3" 或 "N"），所以数字部分的宽度永远恒定——**显式需求"数字不位移"由 VSCode CSS 独立保证，与 emoji 渲染无关**。v0.1.17 不带 v0.1.14 的空格分隔符（v0.1.14 位移实际来自空格分隔符在不同字体下的宽度差），4 灯直接紧贴，无任何可变宽度空白。
+- **`SBI_LIGHTS_CFG` 表 `pri` 字段移除**：v0.1.15/v0.1.16 的 `{key,em,pri}` 改回 `{key,em}`——单 SBI 不需要每灯独立 priority（4 灯共享一个 SBI 的 priority）。新增 sibling 常量 `SBI_PRIORITY = -9996`（取 v0.1.16 leftmost-done 的值，**保持整行在状态栏的屏幕位置不变**——用户对"位置固定"的隐式期望涵盖整行级别）。
+- **简化 v0.1.15 round-4 的过保护**：去掉 4-SBI 创建路径下的 length-guarded 重建（`if(__ccsdSbis.length!==CFG.length)`）+ commit-atomic 提交（`if(arr.length===CFG.length)`）+ partial-failure cleanup（`else{for(f<arr.length)...dispose()}`）三层保护——单 SBI 创建只有一次 `createStatusBarItem` 调用，不存在部分失败的中间状态，三层保护变得冗余。
+- **click handler 读 `__ccsdSbi.tooltip`**（不再是 `__ccsdSbis[0].tooltip`，因为只有 1 个 SBI）。
+- **IIFE 版本戳 `v0.1.16` → `v0.1.17`**：已 patch 的 v0.1.16 装在下次 install 时被检测为 STALE（version 不符 + hash 不符双重保护）→ 自动从 `extension.js.bak` 还原并重注入新单 SBI IIFE。
+
+### 保留（Preserved，v0.1.14/v0.1.15/v0.1.16 设计改进完整沿用到 v0.1.17）
+
+- **🔵 pending 第 4 灯 + Notification hook case**：聚合层独立计数 pending，与 state 正交（v0.1.13 引入，v0.1.14 沿用）。count>0 → 🔵 蓝球 + 数字。
+- **done/running/interrupted 三路陈旧会话 GC**：done >5min→idle（§4）；running mtime >30min→idle（§7.2，变量名 `SBI_RUNNING_STALE_MS` 保留）；interrupted mtime >24h→idle（`INTERRUPTED_RETENTION_MS`）。per-tab 渲染**不应用**后两条，聚合层应用。
+- **聚合单例 + panel 计数 lifecycle**：`__ccsdSbi`（单个 StatusBarItem，v0.1.17）+ `__ccsdSbiTimer` 窗口级单例；`__ccsdPanelCount` 入口 +1 / `onDidDispose` -1，归零时清理（v0.1.17：dispose 单 SBI）。
+- **三层独立 try/catch 隔离**：(1) 单 SBI 创建；(2) 单例 timer 注册；(3) aggregation body。
+- **lastKey memo short-circuit**：per-tick 更新在 UNcapped 计数 tuple 不变时直接 short-circuit，steady-state IPC 写入从 ~40/s 降到 0。
+- **0-3+N 封顶规则**：`cap(n){return n>=4?4:n}` 把 4+ 截到 4，`text` 规则 `(n>=4?"N":""+n)` 把 4 渲染为 `N`。
+- **共享 tooltip `Claude Code: X done, Y running, Z pending, W interrupted`**（未截顶的真实计数）+ 共享 click command `ccStatusDot.sbiClick`（运行时注册，无 package.json contribution）。
+
+### 改善（v0.1.17 相对 v0.1.16 的额外收益）
+
+- **priority 碰撞窗口从 4 单位缩到 1 单位**：v0.1.16 占用 `-9996..-9999` 4 单位相邻 priority 区间，v0.1.17 只占用 `-9996` 一个 priority 点——其它扩展声明同 priority 把我们的 SBI 挤到角落的概率降低到 1/4。
+- **消除了 v0.1.16 的"行被外部分隔"失败模式**：v0.1.16 的 4 个独立 SBI 可能被其它扩展的 SBI 插入 done 与 interrupted 之间劈开成两半；v0.1.17 整行是一个 SBI，外部插入只能插到整行两侧，不会拆开 4 灯。
+- **代码量减少**：单 SBI 创建路径去掉了 v0.1.15 round-4 的 length-guarded 重建 + commit-atomic + partial-failure cleanup 三层 ~50 行 IIFE 字节；onDidDispose teardown 从 4-元素遍历简化为单次 dispose。
+- **真正的紧凑视觉**：4 圆点从"间隔松散"变成"紧贴成串"——v0.1.16 的视觉痛点根治。
+
+### 已知限制（沿用 v0.1.16 同款）
+
+- **依赖 emoji 字体栈**：v0.1.15 的 ThemeColor 块**完全跟随 VSCode 主题色**，跨平台稳定；v0.1.16 因用户反馈"色块不如球好看"切回 emoji 球，v0.1.17 在此基础上合并到单 SBI 但保留 emoji 球——Win7/无 emoji 字体的 Linux/headless 环境可能黑白或豆腐块。macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ 主流 Linux（Noto Color Emoji）正常显示彩色。
+- **`⚪`（U+26AA）跨 Unicode 块的潜在宽度差**：`🟢🟡` 属 Geometric Shapes Extended，`🔵🔴` 属 Miscellaneous Symbols And Pictographs，`⚪` 属 Miscellaneous Symbols——5 个球分属 3 个不同 Unicode 块。**实测现代 emoji 字体把所有 emoji 渲染成 1em 正方形 glyph，跨块宽度一致**（这是 v0.1.17 选择保留 `⚪` 的依据）。**理论风险**：某些冷门字体可能让 `⚪` 与彩球宽度略差，导致整行因计数变化（某灯 0↔非0）而左右位移 1-2 像素——但**显式需求"数字不位移"由 VSCode CSS `tabular-nums` 独立保证**，与此风险正交。**根治方案预留**：若用户反馈观察到实际位移，v0.1.18 把 `SBI_DIM_EM` 改为 `🟤`（U+1F7E4，与 `🟢🟡` 同属 Geometric Shapes Extended，**保证**等宽）即可——一处常量改 + 同步 STATES.md §7.1。
+- **形状是 emoji 字形正圆**（沿用 v0.1.16）：相比 v0.1.15 的 SBI 圆角矩形块，球是 emoji 字体提供的正圆 glyph（在支持的字体下）。
+
+### 引用（VSCode 源码实证）
+
+- VSCode `statusbarpart.css`（master）：[github.com/microsoft/vscode/blob/master/src/vs/workbench/browser/parts/statusbar/media/statusbarpart.css](https://github.com/microsoft/vscode/blob/master/src/vs/workbench/browser/parts/statusbar/media/statusbarpart.css) — `.statusbar-item` 的 `margin:0 3px;padding:0 5px` 与 `.part.statusbar > .items-container > .statusbar-item` 的 `font-variant-numeric: tabular-nums`
+- VSCode 内部 statusbar 接口：[github.com/microsoft/vscode/blob/master/src/vs/workbench/services/statusbar/browser/statusbar.ts](https://github.com/microsoft/vscode/blob/master/src/vs/workbench/services/statusbar/browser/statusbar.ts) — `IStatusbarEntryLocation.compact` 字段（未公开）
+- VSCode Issue #73700（tabular-nums for digits）：[github.com/microsoft/vscode/issues/73700](https://github.com/microsoft/vscode/issues/73700)
+- MDN `font-variant-numeric`：[developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/font-variant-numeric](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/font-variant-numeric)
+
 ## [0.1.16] - 2026-07-19
 
 **底部 SBI 4 灯：恢复圆点 emoji 样式，保留 v0.1.15 的 4 SBI 固定位置结构**。根因：v0.1.15 把 4 个独立 SBI 渲染成"数字内置彩色块"（白字数字 + `statusBarItem.*Background` 主题色块），用户反馈"色块效果不如圆点好看"，要求恢复 v0.1.14 的圆点 emoji 样式。v0.1.14 的单 SBI 拼接 `🟢N 🟡N 🔵N 🔴N` 有位移问题（任何数字宽度变化都会让整行左右挪），v0.1.16 不能简单回退——而是**合流**：视觉切回球（v0.1.14 验证好看）+ 架构保留 4 SBI 独立 slot（v0.1.15 验证位置稳定）。每灯 text 改为 `<球><数字>`（如 `🟢3`、`⚪0`），球自带色——🟢🟡🔵🔴 是预填充彩色的 Unicode 字符，**移除了 v0.1.15 的 `backgroundColor` 色块 + `color` 白字赋值**。

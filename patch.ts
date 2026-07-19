@@ -125,7 +125,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.2.0";
+const INJECT_VERSION = "v0.2.1";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -266,7 +266,7 @@ const HOOK_EVENTS = [
 // SBI 4-light definitions (visual rationale: see docs/STATES.md §7 + CHANGELOG.md)
 // ---------------------------------------------------------------------------
 
-/** v0.2.0 — companion VS Code extension (NOT published to Marketplace; shipped
+/** v0.2.1 — companion VS Code extension (NOT published to Marketplace; shipped
  *  inside this npm package as dist/cc-status-dot-companion-<ver>.vsix and
  *  installed into the user's VS Code via `code --install-extension` at install
  *  time). The companion watches CC auto-updates and re-applies this patcher
@@ -366,7 +366,7 @@ const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
  *  0-9 render at equal width regardless of font, so count 0→1→2→3→N keeps the
  *  row byte-stable as long as the surrounding emoji are equal-width too.
  *
- *  SBI_DIM_EM is ⚪ (U+26AA, Miscellaneous Symbols) — v0.2.0 reverted the
+ *  SBI_DIM_EM is ⚪ (U+26AA, Miscellaneous Symbols) — v0.2.1 reverted the
  *  v0.1.17 ⚪→🟤 pivot because the user prefers gray over brown (commit
  *  55e18b4). The 5 balls therefore span 3 Unicode blocks again
  *  (🟢🟡 Geometric Shapes Extended / 🔴🔵 Miscellaneous Symbols And
@@ -376,7 +376,7 @@ const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
  *  1em square regardless of block, so the risk is latent rather than
  *  observable on mainstream fonts. The v0.1.17 ⚪→🟤 pivot's "guarantee
  *  equal width by Unicode-block allocation" argument is no longer in effect;
- *  see docs/STATES.md §7.5 for the v0.1.17 → v0.2.0 trail (pivot then
+ *  see docs/STATES.md §7.5 for the v0.1.17 → v0.2.1 trail (pivot then
  *  revert).
  *
  *  Emoji escapes: patch.ts SOURCE stays ASCII-only (`\u{XXXX}`); the baked
@@ -413,11 +413,11 @@ const SBI_PRIORITY = -9996;
  *
  *  History: ⚪ (U+26AA, BMP) — v0.1.17 pivoted to 🟤 (U+1F7E4, Geometric
  *  Shapes Extended, same block as 🟢🟡) to retire a theoretical cross-block
- *  width gamble; v0.2.0 reverted to ⚪ (commit 55e18b4) because the user
+ *  width gamble; v0.2.1 reverted to ⚪ (commit 55e18b4) because the user
  *  prefers gray over brown. The cross-block width argument is now latent
  *  rather than enforced (modern emoji fonts render every emoji at 1em square
  *  regardless of block, so the practical risk is zero on mainstream fonts).
- *  See docs/STATES.md §7.5 for the full v0.1.17 → v0.2.0 trail. */
+ *  See docs/STATES.md §7.5 for the full v0.1.17 → v0.2.1 trail. */
 const SBI_DIM_EM = "\u{26AA}"; // ⚪ (white/gray medium circle; user prefers gray over brown)
 
 /** The SBI click-command id. Registered at runtime via
@@ -1155,7 +1155,7 @@ function buildIIFE(resDir: string): string {
     // Order matches aggregation output: done/running/pending/interrupted
     // (left→right in concatenated text).
     const cfgLiteral = JSON.stringify(SBI_LIGHTS_CFG);
-    // dim/zero emoji (⚪ U+26AA since v0.2.0, which reverted the v0.1.17 ⚪→🟤
+    // dim/zero emoji (⚪ U+26AA since v0.2.1, which reverted the v0.1.17 ⚪→🟤
     // pivot — see SBI_DIM_EM JSDoc) baked as a JSON-stringified string
     // literal — used by the per-tick loop for any light whose count is 0
     // (dim ball + digit "0", keeping the slot width fixed). Same baking
@@ -1299,7 +1299,7 @@ function buildIIFE(resDir: string): string {
         // IPC writes drop from ~40/s to 0).
         // Per-token render rule (unchanged from v0.1.16):
         //   txt += (n===0 ? DIM_EM : CFG[k].em) + (n>=4 ? "N" : ""+n)
-        // → "🟢3 🟡1 ⚪0 ⚪0" (v0.1.18 space-separated; ⚪ since v0.2.0
+        // → "🟢3 🟡1 ⚪0 ⚪0" (v0.1.18 space-separated; ⚪ since v0.2.1
         //   reverted the ⚪→🟤 pivot back to gray)
         //   was v0.1.16 "🟢3" / "🟡1" / "⚪0" / "⚪0" as 4 separate SBI texts.
         `try{if(globalThis.__ccsdSbi){var key=ag.done+","+ag.running+","+ag.pending+","+ag.interrupted;if(key!==globalThis.__ccsdSbiLastKey){globalThis.__ccsdSbiLastKey=key;var parts=[];for(var k=0;k<CFG.length;k++){var n=counts[k];parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n));}globalThis.__ccsdSbi.text=parts.join(" ");globalThis.__ccsdSbi.tooltip=tip;globalThis.__ccsdSbi.show();}}}catch(e){}`,
@@ -2185,7 +2185,7 @@ function unwireHooks(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Companion VS Code extension (v0.2.0)
+// Companion VS Code extension (v0.2.1)
 // ---------------------------------------------------------------------------
 // The companion is a tiny .vsix that watches CC auto-updates and re-applies
 // this patcher automatically. It is NOT published to the Marketplace — it ships
@@ -2225,7 +2225,7 @@ const VSCODE_CLIS = ["code", "code-insiders", "vscode-insiders", "cursor", "codi
  *  `--list-extensions`) because it's the cheapest invocable command and exists
  *  on every VS Code-family fork.
  *
- *  v0.2.0 — known-install-path fallback: macOS users who never ran "Shell
+ *  v0.2.1 — known-install-path fallback: macOS users who never ran "Shell
  *  Command: Install 'code' command in PATH" have `code` only inside the .app
  *  bundle (e.g. /Applications/Visual Studio Code.app/Contents/Resources/app/
  *  bin/code). Windows installs similarly land in %ProgramFiles%\Microsoft VS
@@ -2370,7 +2370,7 @@ function knownVscodeCliCandidates(cli: string): string[] {
  *  re-install (user re-runs npx) refreshes the bits instead of being skipped
  *  silently.
  *
- *  v0.2.0 — downgrade guard: BEFORE the `--force` we ask the CLI what version
+ *  v0.2.1 — downgrade guard: BEFORE the `--force` we ask the CLI what version
  *  of the companion it already has installed (`--list-extensions --show-
  *  versions` prints `publisher.name@x.y.z`). If the installed version is
  *  STRICTLY GREATER than the .vsix we're about to install, we SKIP that CLI
@@ -2451,7 +2451,7 @@ function locateCompanionVsix(): string | null {
  *  cadence from the patcher's internals.
  *
  *  Architecture rationale (review finding: "INSTALL_DIR/patch.js snapshot +
- *  SEARCH_DIRS hand-mirrored"): the v0.2.0 companion mirrored INSTALL_DIR /
+ *  SEARCH_DIRS hand-mirrored"): the v0.2.1 companion mirrored INSTALL_DIR /
  *  INJECT_MARKER / INJECT_VERSION / SEARCH_DIRS as TypeScript consts with a
  *  "must match patch.ts:LINE" comment but no compile-time check. A future
  *  patch.ts that added a new VS Code flavor to SEARCH_DIRS would silently
@@ -2612,7 +2612,7 @@ function installCompanion(): void {
 
 /** Uninstall the companion extension from every detected VS Code-family CLI.
  *  Best-effort: failures are warned, never fatal (the .vsix may already be gone
- *  or the CLI may be locked). v0.2.0: uses resolveVscodeCli so the uninstall
+ *  or the CLI may be locked). v0.2.1: uses resolveVscodeCli so the uninstall
  *  works even when `code` is not on PATH (macOS well-known install paths). */
 function uninstallCompanion(): void {
     log("uninstalling companion extension from detected VS Code-family CLIs…");
@@ -2637,7 +2637,7 @@ function uninstallCompanion(): void {
         }
     }
     if (!anyDetected) {
-        // v0.2.0: surface this as a warn (not log) so the user notices the
+        // v0.2.1: surface this as a warn (not log) so the user notices the
         // companion .vsix is left behind — the previous bare log line was
         // easy to miss in scrollback. The next companion startup (post-fix)
         // would then warn "patcher not found" because removeInstallDir()
@@ -2661,7 +2661,7 @@ function uninstallCompanion(): void {
 /** Surface companion install health in --status. Reports: vsix presence in the
  *  package, each detected CLI's install state + version (queried via
  *  `code --list-extensions --show-versions`), and the INSTALL_DIR/patch.js copy.
- *  v0.2.0: surfaces installed-vs-packaged version drift per CLI so a user
+ *  v0.2.1: surfaces installed-vs-packaged version drift per CLI so a user
  *  running an older companion can see "installed 0.1.0 (packaged 0.2.0) —
  *  re-run npx to upgrade" instead of a bare "INSTALLED" with no signal. */
 function reportCompanionStatus(): void {
@@ -2674,7 +2674,7 @@ function reportCompanionStatus(): void {
     );
     // v0.2.1: also surface the companion-config.json + last-repatch.json files
     // the patcher writes for the companion to read. A missing config means
-    // the companion will fall back to its hardcoded constants (v0.2.0
+    // the companion will fall back to its hardcoded constants (v0.2.1
     // behavior); a missing repatch flag means cross-window reload signaling
     // is inactive. Both are non-fatal but worth surfacing so a user
     // diagnosing "why doesn't the companion pick up my new patcher version?"
@@ -3158,7 +3158,7 @@ function printHelp(): void {
 }
 
 function reloadHint(): void {
-    // v0.2.0: cross-platform shortcut hint. Cmd+Shift+P on macOS, Ctrl+Shift+P
+    // v0.2.1: cross-platform shortcut hint. Cmd+Shift+P on macOS, Ctrl+Shift+P
     // everywhere else (Win/Linux). Older builds printed a Mac-only hint that
     // Win/Linux users saw verbatim — accurate shortcut matters because this is
     // the only on-screen instruction the user gets after install/revert.
@@ -3354,7 +3354,7 @@ function run(argv: string[]): void {
         return;
     }
     if (args.includes("--patch-only")) {
-        // v0.2.0: companion-only entry. Runs ONLY discoverExtension +
+        // v0.2.1: companion-only entry. Runs ONLY discoverExtension +
         // patchExtension. Deliberately skips installRuntimeFiles / wireHooks /
         // installNodeWrapper / installCompanion — the companion re-execs this
         // at every VS Code startup and we must NOT re-run installNodeWrapper
@@ -3414,7 +3414,7 @@ function run(argv: string[]): void {
             ["restoreWebview", () => restoreWebview(dir)],
             ["restorePackageJson", () => restorePackageJson(dir)],
             ["unwireHooks", () => unwireHooks()],
-            // v0.2.0: also uninstall the companion .vsix from every detected
+            // v0.2.1: also uninstall the companion .vsix from every detected
             // VS Code-family CLI. Best-effort — failures are warned, never
             // fatal (an already-uninstalled extension is the desired state).
             ["uninstallCompanion", () => uninstallCompanion()],
@@ -3507,7 +3507,7 @@ function run(argv: string[]): void {
         );
     }
     checkSvgs(RUNTIME_RES_DIR);
-    // v0.2.0: also install the companion .vsix into every detected VS Code-
+    // v0.2.1: also install the companion .vsix into every detected VS Code-
     // family CLI. Best-effort — failure here does NOT roll back the patch
     // (the IIFE patch is the critical surface; the companion is a convenience
     // that auto-re-applies this patch after a CC auto-update). installCompanion

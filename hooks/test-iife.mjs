@@ -81,7 +81,7 @@ const SBI_LIGHTS_CFG = [
   { key: 'pending', em: '\u{1F535}' }, // 🔵
   { key: 'interrupted', em: '\u{1F534}' }, // 🔴 rightmost
 ];
-const SBI_DIM_EM = '\u{1F7E4}'; // 🟤 — shared zero-count dim ball (Geometric Shapes Extended, same block as 🟢🟡)
+const SBI_DIM_EM = '\u{26AA}'; // ⚪ — shared zero-count dim ball (user prefers gray over brown)
 const SBI_PRIORITY = -9996; // single v0.1.17 SBI's priority (Left, rightmost)
 
 // --- Obtain the IIFE string via --check-iife ---------------------------------
@@ -224,7 +224,7 @@ check(
 // v0.1.17 banner specifically: locks the single-SBI compact-concat pivot
 // (a regression that rolled back to v0.1.16 4-SBI would surface here
 // before any SBI assertion fires).
-check('IIFE.21c banner carries v0.1.18 stamp', /\/\*cc-status-dot-injected:v0\.1\.18:/.test(iife));
+check('IIFE.21c banner carries v0.1.19 stamp', /\/\*cc-status-dot-injected:v0\.1\.19:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));

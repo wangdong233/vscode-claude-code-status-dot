@@ -125,7 +125,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.1.18";
+const INJECT_VERSION = "v0.1.19";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -336,7 +336,7 @@ const SBI_PRIORITY = -9996;
  *  stays in the colored-ball block so width parity is enforced by Unicode
  *  allocation, not by per-font rendering luck. (See docs/STATES.md §7.5 for
  *  the v0.1.17 ⚪→🟤 pivot rationale.) */
-const SBI_DIM_EM = "\u{1F7E4}"; // 🟤
+const SBI_DIM_EM = "\u{26AA}"; // ⚪ (white/gray medium circle; user prefers gray over brown)
 
 /** The SBI click-command id. Registered at runtime via
  *  vs.commands.registerCommand (no package.json contribution needed for

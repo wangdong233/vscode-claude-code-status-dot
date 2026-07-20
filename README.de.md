@@ -35,6 +35,12 @@
 
 **Systembenachrichtigung + Ton bei Session-Fertigstellung** (im Vordergrund wie im Hintergrund)
 
+<br>
+
+<img src="docs/images/token-sbi-config.png" alt="Token-SBI unten rechts + QuickPick-Konfigurationspanel beim Klick">
+
+**Token-Echtzeit-Zähler unten rechts + Konfigurationspanel beim Klick** —— der Token-SBI zeigt den Verbrauch der aktuell aktiven Session plus optionale `$`-Schätzung; **klick drauf** wechselt Statistikfenster / Anzeigemodus / Benachrichtigung / Ton, oder kopiert die Token-Anzahl / setzt die Statistik zurück / öffnet die Einstellungen (das Panel folgt der VSCode-Oberflächensprache)
+
 <!-- Platzhalter für Screenshot des unteren Vier-Lichter-Blocks: empfohlen wird ein Screenshot des gesamten Statusleisten-Blocks unten, der 🟢done 🟡running 🔵pending 🔴interrupted + Ziffern visualisiert. -->
 
 </div>
@@ -247,6 +253,11 @@ Beide Wege sind gleichwertig und idempotent. IIFE und Hooks referenzieren absolu
 ---
 
 ## ⚙️ Konfiguration (optional)
+
+**Zwei Wege, die Konfiguration zu ändern**:
+
+1. **Auf den Token-SBI unten rechts klicken** → öffnet das QuickPick-Konfigurationspanel (siehe Screenshot oben unter »🖼️ Auf einen Blick verstanden«) —— grafisch Statistikfenster / Anzeigemodus / Benachrichtigung / Ton wechseln, oder Token-Anzahl kopieren / Statistik zurücksetzen / Zustandsverzeichnis öffnen / Einstellungen öffnen. Nach der Änderung wird automatisch in `settings.json` geschrieben; das Panel folgt der VSCode-Oberflächensprache (zh/en/ja/de/es/fr/pt/ru, unbekannte Sprachen fallback auf en).
+2. **`settings.json` direkt bearbeiten** (Tabelle unten) —— geeignet für Batch-Konfiguration oder Versionierung.
 
 In VSCodes `settings.json` eintragen (ohne Angabe gelten die Standardwerte):
 

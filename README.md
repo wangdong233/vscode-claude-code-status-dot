@@ -35,6 +35,12 @@
 
 **会话完成时弹出的系统通知 + 提示音**（前台后台都弹）
 
+<br>
+
+<img src="docs/images/token-sbi-config.png" alt="右下角 token SBI 与点击弹出的 QuickPick 配置面板">
+
+**右下角 token 实时计数 + 点击弹出的配置面板**——token SBI 显示当前激活会话的用量与可选 $ 估算，**点击它**切换统计窗口 / 显示模式 / 通知 / 声音，或复制 token 数 / 重置统计 / 打开设置（面板跟随 VSCode 界面语言）
+
 <!-- 底部 4 灯聚合截图占位：建议补一张窗口底部状态栏的整体块截图，展示 🟢done 🟡running 🔵pending 🔴interrupted + 数字的视觉效果。 -->
 
 </div>
@@ -247,6 +253,11 @@ npx tsx patch.ts
 ---
 
 ## ⚙️ 配置（可选）
+
+**两种改配置的方式**：
+
+1. **点击右下角 token SBI** → 弹出 QuickPick 配置面板（见上方"🖼️ 看一眼就懂"截图）——图形化切换统计窗口 / 显示模式 / 通知 / 声音，或复制 token 数 / 重置统计 / 打开状态目录 / 打开设置。改完自动写进 `settings.json`，面板跟随 VSCode 界面语言（中/英/日/德/西/法/葡/俄，未知 fallback en）。
+2. **直接编辑 `settings.json`**（下方表格）——适合批量配置或版本控制。
 
 写进 VSCode 的 `settings.json`（不配就用默认值）：
 

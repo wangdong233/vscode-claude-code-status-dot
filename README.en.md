@@ -35,6 +35,12 @@ When you've got several Claude Code sessions going in parallel — one coding, o
 
 *A native macOS notification drops the moment a turn ends — foreground or background, with sound, no buttons, auto-dismisses.*
 
+<br>
+
+<img src="docs/images/token-sbi-config.png" width="640" alt="Right-side token SBI and the QuickPick config panel that pops up when you click it">
+
+**Right-side real-time token count + the config panel that pops up when you click it** — the token SBI shows the active session's usage and (optional) $ estimate. **Click it** to switch the stats window / display mode / notifications / sound, or copy the token count / reset stats / open settings (the panel follows VSCode's UI language).
+
 <!-- SCREENSHOT-TODO: bottom status bar 4-light aggregate is a new visual not yet captured. Suggested shot: VSCode window with 2+ CC sessions running, bottom-left status bar showing the 4-light row (🟢done · 🟡running · 🔵pending · 🔴interrupted + per-light counts). Drop the file at docs/images/bottom-bar-aggregate.png and reference it here. -->
 
 </div>
@@ -248,6 +254,11 @@ Both paths (npx and source) are equivalent and idempotent. The injected IIFE and
 ---
 
 ## ⚙️ Configuration (optional)
+
+**Two ways to change config**:
+
+1. **Click the right-side token SBI** → a QuickPick config panel pops up (see the screenshot in "Stop tab-switching. Start seeing." above) — graphically switch the stats window / display mode / notifications / sound, or copy the token count / reset stats / open the state dir / open settings. Changes are written to `settings.json` automatically. The panel follows VSCode's UI language (zh/en/ja/de/es/fr/pt/ru, unknown falls back to en).
+2. **Edit `settings.json` directly** (table below) — for batch config or version control.
 
 Add to VSCode's `settings.json` (skip to keep defaults):
 

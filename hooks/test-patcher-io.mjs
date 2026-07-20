@@ -4,14 +4,14 @@
  *
  * Coverage gap this closes (e2e review HIGH finding): the patcher's I/O
  * surface — stripJsonc / parseJsonc / surgicalSetTopLevelKey /
- * surgicalRemoveTopLevelKey / cmpSemver / cmpVer / cmpVerStr — had ZERO
- * automated regression coverage before this file. The npm `test` script ran
- * only writer-state, baked-IIFE-bytes, and aggregation-replica suites; the
- * JSONC editor's actual behavior was untested. A direct consequence: the
- * trailing-comma regex string-boundary bug in stripJsonc (a `,}` substring
- * inside a user settings.json string was silently stripped at parse time,
- * then persisted back to disk via both the surgical-splice and round-trip
- * write paths) shipped uncaught.
+ * surgicalRemoveTopLevelKey / cmpVerStr — had ZERO automated regression
+ * coverage before this file. The npm `test` script ran only writer-state,
+ * baked-IIFE-bytes, and aggregation-replica suites; the JSONC editor's
+ * actual behavior was untested. A direct consequence: the trailing-comma
+ * regex string-boundary bug in stripJsonc (a `,}` substring inside a user
+ * settings.json string was silently stripped at parse time, then persisted
+ * back to disk via both the surgical-splice and round-trip write paths)
+ * shipped uncaught.
  *
  * Approach: invokes `dist/patch.js --self-test-io` (or `npx tsx patch.ts
  * --self-test-io` as a dev fallback), which runs the module-private
@@ -124,10 +124,10 @@ check(
   hasCommaBraceStringFixture ? '' : 'expected a "preserves ,} inside string" row in pass state',
 );
 
-// Sanity: corpus covers cmpSemver equal + a>b + a<b (the canonical comparator
+// Sanity: corpus covers cmpVerStr equal + a>b + a<b (the canonical comparator
 // is now the single source of truth — its behavior must be locked).
-const cmpRows = rows.filter((r) => /^cmp(Semver|Ver|VerStr)/.test(r.name));
-check('corpus covers cmpSemver/cmpVer/cmpVerStr (>=3 rows)', cmpRows.length >= 3, 'found ' + cmpRows.length);
+const cmpRows = rows.filter((r) => /^cmpVerStr/.test(r.name));
+check('corpus covers cmpVerStr (>=3 rows)', cmpRows.length >= 3, 'found ' + cmpRows.length);
 
 console.log('');
 if (fail === 0) {

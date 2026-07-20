@@ -75,9 +75,17 @@ const CC_STATUS = path.join(__dirname, 'cc-status.js');
 // patch.ts MUST be mirrored here — same DRY caveat as test-iife.mjs. The
 // IIFE's regex assertions catch IIFE-side drift; this file catches semantic
 // drift by re-running the rules.
+// v0.2.6 round-1: SBI_RUNNING_STALE_MS now keys off `since` (the *→running
+// transition timestamp), NOT mtime — same defensive form as the done>5min
+// and interrupted>24h rules. SINCE_STALE_MS is the per-tab decay threshold
+// (15min) but is NOT used by the SBI aggregation path (SBI uses the more
+// conservative 30min SBI_RUNNING_STALE_MS). Mirrored here for parity; the
+// per-tab tick is NOT replicated in this file (covered by test-iife.mjs
+// IIFE.46c regex).
 const DONE_TO_IDLE_MS = 5 * 60 * 1000; // 5 min — §4 done→idle
-const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC
+const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC (since-based, v0.2.6)
 const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
+const SINCE_STALE_MS = 15 * 60 * 1000; // 15 min — per-tab running decay (v0.2.6)
 
 // v0.1.16: the SBI surface renders each light as its own StatusBarItem with
 // text `<ball><digit>` (e.g. "🟢3", "🟤0" — 🟤 since the v0.1.17 ⚪→🟤 pivot;
@@ -110,7 +118,7 @@ function check(name, cond, detail) {
 // SAME decay/bucket rules the IIFE does. `now` is injectable so time-based
 // decay tests are deterministic (no real-time waiting). Returns the raw
 // uncapped counts; callers apply cap() + sbiBlockText() to get the per-SBI texts.
-function aggregate(home, now = Date.now()) {
+function aggregate(home, now = Date.now(), pendingSet = null) {
   const DIR = path.join(home, '.claude', 'cc-tab-status');
   const ag = { running: 0, done: 0, interrupted: 0, idle: 0, pending: 0 };
   let files = [];
@@ -126,29 +134,35 @@ function aggregate(home, now = Date.now()) {
       const j = JSON.parse(fs.readFileSync(fp, 'utf8'));
       let st = j.state;
       const since = j.since;
+      // v0.2.6 round-1: the per-file stat was removed — the SBI decay no
+      // longer reads mtime (switched to since-based; see comment below).
+      // The IIFE still computes __mt for its cache-key short-circuit
+      // (mtimeMs+size === cached values) but the replica has no cache, so
+      // there is no reason to stat here. SINCE_STALE_MS / mtime is still
+      // computed by the §5.5 regression below via fs.utimesSync to verify
+      // the OLD mtime scenario does not cause false decay (decay should
+      // depend on since, not mtime).
       // §4 done>5min → idle (ACTIVE done only counts toward 🟢)
       if (st === 'done' && since && now - since > DONE_TO_IDLE_MS) {
         st = 'idle';
       }
-      // §7.2 stale-running mtime>30min → idle (crashed CC never sends SessionEnd)
+      // §7.2 stale-running (v0.2.6: since-based, not mtime-based). since is
+      // the *→running transition time. cc-status.js Stop preserveSince path
+      // (line 390-401) keeps cur.since on Stop heartbeats but writeJsonAtomic
+      // refreshes mtime — so under CC's drifted inflight>0 Stop payload (the
+      // stuck-yellow bug) mtime stays fresh forever and the 30min clock never
+      // elapsed. since-decay fires correctly because since is preserved
+      // across the same path. Mirrors done>5min one branch up.
       else if (st === 'running') {
-        let mt = 0;
-        try {
-          mt = fs.statSync(fp).mtimeMs;
-        } catch {
-          /* keep mt=0 — won't decay */
-        }
-        if (mt && now - mt > SBI_RUNNING_STALE_MS) st = 'idle';
+        if (since && now - since > SBI_RUNNING_STALE_MS) st = 'idle';
       }
-      // v0.1.13/v0.1.14 interrupted mtime>24h → idle (bounds 🔴 accumulation)
-      else if (st === 'interrupted') {
-        let mt = 0;
-        try {
-          mt = fs.statSync(fp).mtimeMs;
-        } catch {
-          /* keep mt=0 */
-        }
-        if (mt && now - mt > INTERRUPTED_RETENTION_MS) st = 'idle';
+      // v0.1.13/v0.1.14 interrupted>24h → idle, keyed on SINCE (the terminal
+      // timestamp). v0.2.4 follow-up (round-2 data-logic fix): previously
+      // keyed on mtime, but orphan SubagentStop / Notification writes on an
+      // interrupted parent refresh mtime while preserving since — under orphan
+      // activity the 24h clock never elapsed. Mirrors the done>5min rule.
+      else if (st === 'interrupted' && since && now - since > INTERRUPTED_RETENTION_MS) {
+        st = 'idle';
       }
       if (st === 'running') ag.running++;
       else if (st === 'done') ag.done++;
@@ -170,7 +184,16 @@ function aggregate(home, now = Date.now()) {
       // to idle above is NOT counted toward 🔵 (kills the stale-blue-light stick).
       // ORDER MATTERS: this check MUST run after the three decay branches above
       // (test-iife.mjs IIFE.29b locks the same ordering at the source level).
-      if (j.pending === true && st !== 'idle') ag.pending++;
+      //
+      // v0.2.5 (problem 1 fix): OR two sources — file-pending (Notification
+      // hook → cc-status.js atomic write, async but cross-window) OR
+      // per-window globalThis.__ccsdPendingSet (rename_tab IPC → synchronous,
+      // source-of-truth, but only covers THIS window's panels). The set is
+      // passed in via the optional pendingSet parameter (mirror of the
+      // globalThis the IIFE reads). See aggregate() signature below.
+      const sidFromName = f.slice(0, -5); // strip ".json"
+      const inSet = !!(pendingSet && pendingSet[sidFromName] === true);
+      if ((j.pending === true || inSet) && st !== 'idle') ag.pending++;
     } catch {
       /* per-file JSON error — skip */
     }
@@ -367,40 +390,57 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   );
 }
 
-// §1.6  stale-running mtime>30min → idle (crashed CC process GC)
+// §1.6  stale-running since>30min → idle (crashed CC process GC)
+// v0.2.6 round-1: decay now keys off `since` (the *→running transition time),
+// NOT mtime — the prior mtime-based rule was defeated by cc-status.js:390-401
+// Stop preserveSince path (inflight>0 keeps cur.since but writeJsonAtomic
+// refreshes mtime on every Stop heartbeat; CC re-fires Stop on drifted inflight
+// payloads so mtime stays fresh forever and the 30min clock never elapsed).
+// Mirrors §1.7 interrupted-decay which already keys off since. The §1.6a-decouple
+// case below isolates the since-old/mtime-fresh inversion (the actual
+// stuck-yellow bug scenario); §5.6 covers the same inversion end-to-end.
 {
   const home = newTempHome();
-  writeStatus(
-    home,
-    'crashed',
-    { state: 'running', since: Date.now(), activeSubagents: 0, pending: false },
-    { ageMs: 31 * 60 * 1000 },
-  );
+  writeStatus(home, 'crashed', {
+    state: 'running',
+    since: Date.now() - 31 * 60 * 1000, // OLD since (decay key under new rule)
+    activeSubagents: 0,
+    pending: false,
+  });
   writeStatus(home, 'live', { state: 'running', since: Date.now(), activeSubagents: 0, pending: false });
   const ag = aggregate(home);
   check(
-    '§1.6a  running mtime>30min decays to idle',
+    '§1.6a  running since>30min decays to idle',
     ag.idle === 1 && ag.running === 1,
     'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
   );
 }
 
-// §1.6a-decouple  R3 e2e-review fix: prove the running branch keys on MTIME
-// (not since). Set since=31min-ago (OLD) but mtime=fresh (NOW). If a refactor
-// incorrectly switched the branch to read since, this session would decay to
-// idle — the assertion below would fail. Locks the mtime-not-since invariant
-// the §7.2 doc comment warns about. Mirrors §1.3's existing since/decoupling.
+// §1.6a-decouple  v0.2.6 round-1 fix: prove the running branch now keys on
+// SINCE (not mtime) — Stop-preserveSince-safe. Set mtime=31min-ago (OLD) but
+// since=fresh (NOW). Under the new since-based rule this session STAYS running
+// (since is fresh). Under the prior mtime-based rule it would have decayed to
+// idle (mtime is old) — the assertion below locks the inversion. This case is
+// the EXACT inverse of the stuck-yellow bug scenario (since=OLD + mtime=FRESH
+// → decay, covered by §5.6); here we invert the inputs to lock the new key:
+// mtime OLD, since FRESH → no decay (the old mtime-based rule WOULD have
+// decayed). Mirrors §1.7-decouple's pattern for interrupted.
 {
   const home = newTempHome();
-  writeStatus(home, 'old-since-fresh-mtime', {
-    state: 'running',
-    since: Date.now() - 31 * 60 * 1000, // OLD since
-    activeSubagents: 0,
-    pending: false,
-  }); // NO ageMs → mtime is fresh (NOW)
+  writeStatus(
+    home,
+    'fresh-since-old-mtime',
+    {
+      state: 'running',
+      since: Date.now(), // FRESH since (decay key under new rule)
+      activeSubagents: 0,
+      pending: false,
+    },
+    { ageMs: 31 * 60 * 1000 }, // OLD mtime (would have triggered decay under old rule)
+  );
   const ag = aggregate(home);
   check(
-    '§1.6a-decouple  since=OLD, mtime=FRESH → STAYS running (mtime is the decay key, not since)',
+    '§1.6a-decouple  since=FRESH, mtime=OLD → STAYS running (since is the decay key, not mtime)',
     ag.running === 1 && ag.idle === 0,
     'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
   );
@@ -409,12 +449,12 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
 // §1.6b  stale running WITH pending=true: both running and pending drop (stale-blue GC)
 {
   const home = newTempHome();
-  writeStatus(
-    home,
-    'crashed-pending',
-    { state: 'running', since: Date.now(), activeSubagents: 0, pending: true },
-    { ageMs: 31 * 60 * 1000 },
-  );
+  writeStatus(home, 'crashed-pending', {
+    state: 'running',
+    since: Date.now() - 31 * 60 * 1000, // OLD since (decay key under new rule)
+    activeSubagents: 0,
+    pending: true,
+  });
   const ag = aggregate(home);
   check(
     '§1.6b  stale-running+pending → idle; pending NOT counted (the false-stick fix)',
@@ -423,12 +463,14 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   );
 }
 
-// §1.7  interrupted>24h mtime → idle (bounds 🔴 growth from abandoned sessions)
-// R3 e2e-review fix: the prior version set BOTH since and mtime to 25h-ago,
-// so the test could not distinguish whether the interrupted branch keys on
-// mtime or since. Now decoupled: since=fresh (NOW), mtime=25h-ago. If a
-// refactor switched the branch to read since, this test would fail (since is
-// fresh, no decay). Mirrors §1.6a-decouple above.
+// §1.7  interrupted>24h since → idle (bounds 🔴 growth from abandoned sessions)
+// v0.2.4 follow-up (round-2 data-logic fix): the decay now keys on SINCE
+// (the terminal timestamp), not mtime. The prior version of this test set
+// BOTH since and mtime to 25h-ago, so it could not distinguish which key
+// the branch read. Now decoupled: since=25h-ago (OLD), mtime=fresh (NOW).
+// Under the new since-based rule this session decays to idle (since is old);
+// under the old mtime-based rule it would have stayed interrupted (mtime is
+// fresh) — the assertion below locks the new behavior.
 {
   const home = newTempHome();
   writeStatus(
@@ -436,12 +478,11 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
     'old-int',
     {
       state: 'interrupted',
-      since: Date.now(), // FRESH since (decoupled from mtime)
+      since: Date.now() - 25 * 60 * 60 * 1000, // OLD since (decay key under new rule)
       error: 'rate_limit',
       activeSubagents: 0,
       pending: false,
-    },
-    { ageMs: 25 * 60 * 60 * 1000 }, // mtime = 25h ago
+    }, // NO ageMs → mtime is fresh (NOW), proving the branch no longer reads mtime
   );
   writeStatus(home, 'fresh-int', {
     state: 'interrupted',
@@ -452,32 +493,40 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   });
   const ag = aggregate(home);
   check(
-    '§1.7  interrupted mtime>24h decays to idle; fresh interrupted stays',
+    '§1.7  interrupted since>24h decays to idle; fresh interrupted stays',
     ag.interrupted === 1 && ag.idle === 1,
     'ag.interrupted=' + ag.interrupted + ' ag.idle=' + ag.idle,
   );
 }
 
-// §1.7-decouple  R3 e2e-review fix: prove the interrupted branch keys on
-// MTIME (not since). Set since=25h-ago (OLD) but mtime=fresh (NOW). If a
-// refactor incorrectly switched the branch to read since, this session would
-// decay to idle — the assertion below would fail.
+// §1.7-decouple  v0.2.4 round-2 data-logic fix: prove the interrupted branch
+// now keys on SINCE (not mtime) — orphan-write-safe. Set mtime=25h-ago (OLD)
+// but since=fresh (NOW). Under the new since-based rule this session STAYS
+// interrupted (since is fresh). Under the old mtime-based rule it would have
+// decayed to idle (mtime is old) — the assertion below locks the inversion.
+// This case is the EXACT orphan-activity scenario the fix targets: a parent
+// that crashed mid-subagent-workflow (StopFailure wrote interrupted with
+// since=T0) is later touched by a SubagentStop/Notification that preserves
+// since=T0 but refreshes mtime; under the old rule the 24h clock kept
+// resetting. Here we invert the inputs to lock the new key: mtime OLD,
+// since FRESH → no decay (the old rule WOULD have decayed).
 {
   const home = newTempHome();
   writeStatus(
     home,
-    'old-since-fresh-mtime-int',
+    'old-mtime-fresh-since-int',
     {
       state: 'interrupted',
-      since: Date.now() - 25 * 60 * 60 * 1000, // OLD since
+      since: Date.now(), // FRESH since (decay key under new rule)
       error: 'rate_limit',
       activeSubagents: 0,
       pending: false,
-    }, // NO ageMs → mtime is fresh (NOW)
+    },
+    { ageMs: 25 * 60 * 60 * 1000 }, // mtime = 25h AGO (proves branch no longer reads mtime)
   );
   const ag = aggregate(home);
   check(
-    '§1.7-decouple  since=OLD, mtime=FRESH → STAYS interrupted (mtime is the decay key, not since)',
+    '§1.7-decouple  mtime=OLD, since=FRESH → STAYS interrupted (since is the decay key, not mtime)',
     ag.interrupted === 1 && ag.idle === 0,
     'ag.interrupted=' + ag.interrupted + ' ag.idle=' + ag.idle,
   );
@@ -819,6 +868,222 @@ console.log('\n=== §4  End-to-end (user scenario: 3 done / 1 running / 2 pendin
     JSON.stringify(texts) === '["0","0","0","0"]',
     'texts=' + JSON.stringify(texts),
   );
+}
+
+// ===========================================================================
+// v0.2.5 problem 1: pending aggregation ORs TWO sources (file + globalThis set)
+//
+// Pre-fix: the bottom 🔵 pending count read ONLY <sid>.json.pending (written
+// async by cc-status.js Notification hook → atomic write → next 500ms tick).
+// The per-tab __ccsdPending flag was set synchronously by Anchor B from
+// rename_tab.hasPendingPermissions — a strictly fresher signal. Fast-approve
+// scenarios (<500ms between Notification and PreToolUse clear) saw the per-tab
+// blue dot light up but the bottom count stay 0 (the async file write hadn't
+// landed before PreToolUse cleared pending).
+//
+// Post-fix: the aggregation ORs the file-pending flag with a window-scoped
+// globalThis.__ccsdPendingSet maintained by Anchor B. The set covers THIS
+// window's panels (rename_tab IPC); the file branch covers cross-window
+// scenarios (Notification write is global). decay (st!=="idle") still applies
+// AFTER the OR so 30min/5min/24h GC rules are not bypassed.
+// ===========================================================================
+{
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sid = 'aaa-set-only-1111111111';
+  // running session, file pending EXPLICITLY false (PreToolUse already cleared)
+  // but globalThis set has the sid (Anchor B caught rename_tab.hasPending=true)
+  fs.writeFileSync(
+    path.join(stateDir(home), sid + '.json'),
+    JSON.stringify({ state: 'running', since: Date.now() - 1000, pending: false }),
+  );
+  const pendingSet = Object.create(null);
+  pendingSet[sid] = true;
+  const ag = aggregate(home, Date.now(), pendingSet);
+  check(
+    '§5.1  set-only branch counts pending (file=false, set has sid) → 1',
+    ag.pending === 1,
+    'ag.pending=' + ag.pending,
+  );
+}
+{
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sid = 'bbb-file-only-2222222222';
+  // running session, file pending=true, set EMPTY (cross-window: rename_tab
+  // for a panel in W1 cannot update W2's globalThis — file branch covers this)
+  fs.writeFileSync(
+    path.join(stateDir(home), sid + '.json'),
+    JSON.stringify({ state: 'running', since: Date.now() - 1000, pending: true }),
+  );
+  const ag = aggregate(home, Date.now(), Object.create(null));
+  check(
+    '§5.2  file-only branch counts pending (cross-window fallback) → 1',
+    ag.pending === 1,
+    'ag.pending=' + ag.pending,
+  );
+}
+{
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sid = 'ccc-both-sources-33333333';
+  // running session, BOTH file pending=true AND set has sid → MUST count 1 (not 2)
+  fs.writeFileSync(
+    path.join(stateDir(home), sid + '.json'),
+    JSON.stringify({ state: 'running', since: Date.now() - 1000, pending: true }),
+  );
+  const pendingSet = Object.create(null);
+  pendingSet[sid] = true;
+  const ag = aggregate(home, Date.now(), pendingSet);
+  check('§5.3  both sources → counts 1 (OR dedup, not 2)', ag.pending === 1, 'ag.pending=' + ag.pending);
+}
+{
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sid = 'ddd-neither-4444444444';
+  // running session, NEITHER source has pending → 0
+  fs.writeFileSync(
+    path.join(stateDir(home), sid + '.json'),
+    JSON.stringify({ state: 'running', since: Date.now() - 1000, pending: false }),
+  );
+  const ag = aggregate(home, Date.now(), Object.create(null));
+  check('§5.4  neither source → 0', ag.pending === 0, 'ag.pending=' + ag.pending);
+}
+{
+  // decay still applies: set has sid + running since>30min → idle (decay
+  // upgrades st to idle) → pending NOT counted, even though the set has sid.
+  // Locks the "OR is gated by st!=='idle'" invariant — the OR must NOT
+  // bypass the existing decay chain (running-stale is a crashed/drifted
+  // session whose pending flag is meaningless).
+  // v0.2.6: comment updated — decay now keys off `since`, not mtime. Test
+  // still passes because BOTH since (60min ago) AND mtime (31min ago) are
+  // stale; the new v0.2.6 §5.6 case below isolates the since-old/mtime-fresh
+  // path (the actual stuck-yellow bug scenario).
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sid = 'eee-stale-running-55555555';
+  const filePath = path.join(stateDir(home), sid + '.json');
+  fs.writeFileSync(filePath, JSON.stringify({ state: 'running', since: Date.now() - 60 * 60 * 1000, pending: false }));
+  // Backdate mtime to >30min ago to trigger running-stale decay.
+  const stale = new Date(Date.now() - (SBI_RUNNING_STALE_MS + 60000));
+  fs.utimesSync(filePath, stale, stale);
+  const pendingSet = Object.create(null);
+  pendingSet[sid] = true;
+  const ag = aggregate(home, Date.now(), pendingSet);
+  check(
+    '§5.5  decay bypassed-NOT: set has sid + stale-running (since AND mtime old) → 0 (OR gated by st!==idle)',
+    ag.pending === 0,
+    'ag.pending=' + ag.pending,
+  );
+  check(
+    '§5.5b stale-running (since AND mtime old) → idle, not counted as 🟡',
+    ag.running === 0 && ag.idle === 1,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // v0.2.6 round-1 stuck-yellow regression (the ACTUAL user-reported bug):
+  // CC Stop payload inflight=1 drift + cc-status.js:390-401 preserveSince path
+  // → state="running" + activeSubagents=1 written to file, mtime FRESH (writer
+  // just wrote), but since OLD (preserveSince kept cur.since from the
+  // original *→running transition 2h ago). Under the PRIOR mtime-based decay
+  // this session would never decay (mtime always fresh from the Stop write),
+  // sticking 🟡 at 1 in the SBI aggregate AND rendering yellow on the per-tab
+  // icon (the visible symptom). v0.2.6 fix: decay keys off since instead, so
+  // this drifted scenario now correctly decays to idle. Lock the regression
+  // so a future revert (mtime-based decay) would surface here.
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sid = 'fff-stuck-yellow-666666666';
+  const filePath = path.join(stateDir(home), sid + '.json');
+  // Simulate the drift: since=2h ago (preserveSince kept it), but mtime=now
+  // (writer just wrote via Stop heartbeat).
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      state: 'running',
+      since: Date.now() - 2 * 60 * 60 * 1000, // 2h ago
+      activeSubagents: 1,
+      pending: false,
+    }),
+  );
+  // mtime is already fresh (just written). DO NOT backdate it — that's the
+  // whole point: the bug scenario has fresh mtime + old since.
+  const ag = aggregate(home, Date.now(), Object.create(null));
+  check(
+    '§5.6 v0.2.6 stuck-yellow regression: running with since>30min + mtime fresh → idle (since-decay fires, mtime-decay would not)',
+    ag.running === 0 && ag.idle === 1,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // v0.2.6 counter-regression: a REAL active running session (since=2min ago,
+  // mtime=now) must NOT decay — the fix is specifically about OLD since, not
+  // fresh since. Locks the false-positive guard: a too-aggressive threshold
+  // or a regression dropping the `now - since > THRESH` comparison would
+  // falsely idle legitimate running sessions.
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sid = 'ggg-real-running-777777777';
+  fs.writeFileSync(
+    path.join(stateDir(home), sid + '.json'),
+    JSON.stringify({ state: 'running', since: Date.now() - 2 * 60 * 1000, pending: false }),
+  );
+  const ag = aggregate(home, Date.now(), Object.create(null));
+  check(
+    '§5.7 real running (since=2min) → still running (NOT decayed)',
+    ag.running === 1 && ag.idle === 0,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // v0.2.6 since=0 corrupt-file defensive guard: decay does NOT fire when
+  // since=0 (the `since && ...` falsy guard). Matches the IIFE defensive
+  // form. A corrupt/hand-edited file with since=0 should not be falsely
+  // decayed; it stays running until the next hook event writes a valid since.
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sid = 'hhh-corrupt-since-0-88888888';
+  fs.writeFileSync(
+    path.join(stateDir(home), sid + '.json'),
+    JSON.stringify({ state: 'running', since: 0, pending: false }),
+  );
+  const ag = aggregate(home, Date.now(), Object.create(null));
+  check(
+    '§5.8 since=0 corrupt file → NOT decayed (falsy guard)',
+    ag.running === 1 && ag.idle === 0,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // Multi-sid accumulation: 3 sessions in set + 2 sessions in file + 1 in both.
+  // Expected pending = 5 (3 set-only + 2 file-only + 0 from "both" since the
+  // 6th's sid is in both but counts once). Locks the multi-source OR over N
+  // files, not just one.
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sids = [
+    'multi-set-1-aaaaaaaa',
+    'multi-set-2-bbbbbbbb',
+    'multi-set-3-cccccccc',
+    'multi-file-1-dddddddd',
+    'multi-file-2-eeeeeeee',
+    'multi-both-1-ffffffff',
+  ];
+  const pendingSet = Object.create(null);
+  pendingSet[sids[0]] = true;
+  pendingSet[sids[1]] = true;
+  pendingSet[sids[2]] = true;
+  pendingSet[sids[5]] = true;
+  for (let i = 0; i < sids.length; i++) {
+    const filePending = i >= 3 && i <= 5; // last 3 in file
+    fs.writeFileSync(
+      path.join(stateDir(home), sids[i] + '.json'),
+      JSON.stringify({ state: 'running', since: Date.now() - 1000, pending: filePending }),
+    );
+  }
+  const ag = aggregate(home, Date.now(), pendingSet);
+  check('§5.6  multi-sid OR (3 set + 2 file-only + 1 both) → 6 pending', ag.pending === 6, 'ag.pending=' + ag.pending);
 }
 
 // ===========================================================================

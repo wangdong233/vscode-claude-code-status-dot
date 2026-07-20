@@ -2,6 +2,146 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.2.6] - 2026-07-20
+
+**回复内容驱动的蓝灯（blue-via-content）+ 卡黄修复 + 关键词精度收紧**。v0.2.5 之前蓝灯只来自 Notification/permission；v0.2.6 把 Claude 最后一条 Stop 回复的语义匹配也纳入 pending 来源（"等你测试反馈"/"let me know" 等明确待用户决策/反馈时亮蓝）。同时修复 v0.2.5 round-1 引入的两个正确性缺口：per-tab tick pending 检查未应用 decay 导致旧 done+pending 永假蓝，以及关键词表 3 个 HIGH 中文子串假阳性（"你定"/"看你的"/"告诉我"）。
+
+### Added — blue-via-content（pending 第三通道）
+
+- **writer 侧**（`hooks/cc-status.js`）：Stop case 读 `payload.last_assistant_message`，经 `lastMessageRequestsUserInput(msg)` 判断后写 `pending:true`。判断逻辑：(1) strip 代码块（```fenced``` / `inline` / ~~~alt-fence~~~）；(2) 命中 `AWAIT_USER_PHRASES`（38 条中英 idiom：`等你` / `你决定` / `请确认` / `let me know` / `your call` / `please confirm` 等）→ true；(3) fallback：末行 ≤60 字符独立问句且含用户代词（你/您/you）或动作动词（继续/确认/选/决定/proceed/confirm/choose 等）→ true；(4) `stop_hook_active=true` 跳过（CC 防死循环门）。设计哲学 **SPECIFICITY > RECALL**：假蓝比假绿更糟，故只列无歧义 idiom。
+- **reader 侧**（`patch.ts` buildIIFE §H）：per-tab tick 优先级链 `__ccsdPending yield`（CC 原生蓝）→ `pend && st!=="idle"`（新 blue-via-content 渲染 `claude-logo-pending.svg` #58A6FF）→ state if-chain（running 黄 / done 绿 / interrupted 红 / idle 灰）。
+- **SVG 资源**：新增 `resources/claude-logo-pending.svg`（与 `done.svg` 几何完全一致，仅 badge-circle fill `#3FB950→#58A6FF` + `<title>` 文本）。`OUR_SVGS` 5 项（4 + pending）。
+- **聚合层**：底部 🔵 SBI 通过既有的 `j.pending===true || __ps[sid]` OR 链自动覆盖新通道，无新增代码。
+
+### Fixed
+
+- **HIGH reader-logic（per-tab tick decay 前置）**：v0.2.6 round-1 把 `done>5min→idle` / `running-stale-15min→idle` 的 decay 放在了 SVG 选择分支内（pending 检查之后），导致 `st` 在 `pend && st!=="idle"` 检查处仍是 RAW 值（writer 永不写 `state:'idle'`），守卫变 dead code，`done+pending` 会话永久假蓝。round-2 把 decay 链提到 pending 检查之前（镜像 SBI tick 的 decay 顺序），用 per-tab 常量（`DONE_TO_IDLE_MS` / `SINCE_STALE_MS`，**不**引用 `SBI_RUNNING_STALE_MS` / `INTERRUPTED_RETENTION_MS`，保留 IIFE.46b 的命名分歧锁）。
+- **HIGH keyword-accuracy（中文子串假阳性）**：移除裸 `'你定'`（命中 `你定义的函数` / `你定制` / `你定位` / `你定期`）、`'看你的'`（命中 `我看你的代码`，CC 代码审查里高频）、`'告诉我'`（命中 `文档告诉我` / `你昨天告诉我`，第三人称 / 过去式）。改用后缀锚定形式：`你来定` / `由你定` / `你定夺` / `你定一下` / `告诉我你的` / `告诉我你决定` / `告诉我你选`。补充同义委派：`你说呢` / `你说吧` / `听你的`（与既入表的 `你看呢` 语义同构）。
+- **MEDIUM keyword-accuracy（英文 / fallback）**：移除裸 `'wait for you'`（已是 `'waiting for you'` 的子串，纯冗余；且命中 `wait for your input file`）；`'your input'` 收紧为 `'your input on'`（裸形式命中 `your input handler` / `your input validation`，CC 改代码回复里高频）；fallback `?` 结尾规则加语义锚（必须含用户代词或动作动词），排除修辞性 / 信息性短问句（`Why?` / `什么意思?` / `效果如何?` / `How does this work?` / `What did the refactor break?` / `为什么这样设计?`）。补充 EN 决策习语：`what do you think` / `over to you` / `your move` / `your take` / `would you like` / `want me to` / `wait for you to`。
+- **卡黄（stuck-yellow）round-1 修复（保留）**：`patch.ts` 新增 `SINCE_STALE_MS=15*60*1000` 常量（独立于 `SBI_RUNNING_STALE_MS=30min`），per-tab running 分支在 `since>SINCE_STALE_MS` 时渲染 idle.svg 而非 running.svg，捕捉 CC 上游 `Stop inflight=1` 漂移 + `preserveSince` 导致的永黄场景（luceo 实测卡黄 2h）。
+- **聚合 decay key 对齐**：聚合层 running decay 从 mtime 改为 since（与 per-tab 一致），根因同上 —— `Stop preserveSince` 路径刷 mtime 不刷 since，mtime-decay 永不触发。
+
+### Changed
+
+- `INJECT_VERSION` v0.2.5 → v0.2.6（IIFE body 变：decay 前置 + pending 渲染分支 + SINCE_STALE_MS 常量 + `var now=Date.now()` 提前 + SVG 选择分支保留 round-1 decay 注释 / `claude-logo-pending.svg` 资源引用）。
+- `HOOK_VERSION` 保持 v0.2.0（hook contract 未变；cc-status.js body 变 = AWAIT_USER_PHRASES 重列 + `lastMessageRequestsUserInput` helper + Stop case 读 `last_assistant_message` + `~~~` fence strip + fallback 语义锚 + banner hash 重盖 `a94cb290→ebb27508`）。
+- `companion/MIN_PATCHER_VERSION` 与 `injectVersion()` fallback 同步到 0.2.6 / v0.2.6。
+
+### Added — 测试
+
+- 断言 **654 → 682**（+28）：
+  - **hooks/test-cc-status.js §AA.1-21**（v0.2.6 round-1，已在 round-1 入库）：writer 侧 pending 行为全锁——`等你测试反馈`/`你决定`/`请确认`/`let me know`/`please confirm`/`your call` 命中 → pending:true；短问句 fallback；中性完成 / 技术"等待加载"/ LLM 自述 / 缺字段 / 非字符串 / `stop_hook_active=true` / 代码块 `letMeKnow()` 标识符剥离 → pending:false；stuck-running（luceo）+`等你` → state=running AND pending=true；跨事件清零（UserPromptSubmit 清 pending）；StopFailure 不走 Stop pending 路径。
+  - **hooks/test-cc-status.js §AB.1-7**（+24，v0.2.6 round-2）：keyword-accuracy 双向回归锁——3 个 HIGH 假阳性向量（`你定` / `看你的` / `告诉我` 的技术词命中）+ 3 个 MEDIUM 假阳性向量（`wait for your X` / `your input handler` / 修辞性短问句）现在全部 pending:false；同时 7 个新精准条目（`你来定` / `听你的` / `你说呢` / `告诉我你的` / `what do you think` / `over to you` / `wait for you to`）保持 pending:true（防过收紧回归）。
+  - **hooks/test-iife.mjs IIFE.12d-g**（+4，v0.2.6 round-2）：per-tab tick decay 前置的位置锁——decay 链必须在 pend 检查之前、`__ccsdPending` yield 之后、`var now=Date.now()` 之后。
+  - **hooks/test-iife.mjs IIFE.46c/d + IIFE.110-117**（v0.2.6 round-1，已在 round-1 入库）：per-tab running decay 用 `SINCE_STALE_MS`（since-based，15min）；`claude-logo-pending.svg` 资源断言——文件存在 / `<title>` 文本 / badge fill `#58A6FF` / logo path d= 与 done.svg 一致 / mask 几何一致 / `OUR_SVGS` 含 pending 5 项。
+
+### 已知限制
+
+- **关键词覆盖 ZH+EN only**：8 个 README 多语（zh/en/ja/de/es/fr/pt/ru），但 `AWAIT_USER_PHRASES` 只列中英 idiom。若用户用日韩西法德俄语与 CC 对话，蓝灯可能不亮（待后续扩展，至少补日文 `教えて`/`決めて` 与西法德 `dime`/`decide`/`sag mir` 等）。
+- **`interrupted+pending` 仍渲染蓝（round-2 LOW 未修）**：StopFailure 路径已清 pending，故实际罕见；若文件被手编为该组合，per-tab 会显示蓝（覆盖中断红闪）。SBI 聚合层会经 24h decay 正常归零。
+- **`state:'unknown'+pending` 仍渲染蓝（round-2 LOW 未修）**：per-tab tick 缺 SBI 的 unknown-state catch-all；罕见（需文件被手编或未来 writer 新增 state 名）。
+
+## [0.2.5] - 2026-07-20
+
+**蓝灯统一 / token 实时增量 / workflow 子代理可见 / 默认窗口改 all**。v0.2.4 用户反馈 3 个问题：(1) 权限弹窗时底部蓝灯不计（per-tab 已亮、聚合读文件 pending 滞后）；(2) CC 流式生成时右下角 token 凝固（hook 只在 5 个事件点触发，流式期间无信号）；(3a) workflow/subagent 跑期间 token 不可见（SubagentStop 才归并）；(3b) 选 "all" 仍清零是 per-session scope，但默认 1h 滚动窗口让用户误以为是 bug。v0.2.5 全部修复并新增 19 项断言（527 → 553）。
+
+### Fixed
+
+- **问题 1（蓝灯统一项目方案）**：底部 4 灯聚合的 pending 计数现在 **OR 两源**——`<sid>.json.pending`（Notification hook 异步写盘，跨窗口覆盖）+ `globalThis.__ccsdPendingSet`（Anchor B 从 `rename_tab.hasPendingPermissions` 同步刷新，本窗口覆盖）。Anchor B 维护 set（per-panel `__ccsdPending` flag 的全局镜像），onDidDispose 清理。底部聚合读 set 时用 `files[i].slice(0,-5)` 去掉 `.json` 后缀恢复 sid 作为 set key。decay（`st!=="idle"`）在 OR 之后仍生效，30min/5min/24h GC 不被绕过。**保留 per-tab yield 给 CC 原生蓝点**（调研 R1：去掉 yield 会与 CC 原生蓝点 500ms 周期闪烁）。
+- **问题 2（token SBI 实时）**：IIFE 内联 `computeLiveDelta(tj, sid)` helper，读 `<sid>.offset` sidecar 的 offset，增量读 jsonl 文件 `[offset..size]` 字节区间（512KB 硬上限），按 assistant 行的 `message.usage` 累加 delta。显示 = `sumTok(window) + delta`（零双计：IIFE 只读 hook 尚未消费的字节）。skip 条件：`!tj.tokens` / `tj.state!=='running'` / `sidecar.offset<=0` / `jsonl.size<=offset` / 半行（无 trailing `\n`）。cwd→projects 路径 escape = `/[^a-zA-Z0-9._-]/g`（实测匹配 CC 当前 escape，含中文路径）。`tokenLiveDeltaEnabled` 配置开关（默认开）。
+- **问题 3a（workflow / 子代理 token 可见）**：新增 `scanSubagentTranscripts(parentSid, payload, ctx)` hook helper，在每个 TOK_EVENT（PostToolUse / Stop / UserPromptSubmit / PreToolUse / SubagentStop）扫描 `<parentDir>/<sid>/subagents/*.jsonl`，对每个文件调用 `readTranscriptIncremental(sid, fullPath, 'sub:'+basename)`。per-source offset 隔离使其与 SubagentStop 路径幂等（同 source key 共享 cursor）。**不扫顶层 `agent-*.jsonl`**（CC 2.0.77 旧版布局，文件内 isSidechain:true 全跳过，无实际增益；且会误读测试 fixture / 第三方工具所 plant 的 *.jsonl）。SubagentStart payload 不带 `agent_transcript_path`（CC 上游契约），无法在 SubagentStart hook 实时——目录扫描是唯一路径。workflow type token 若 CC 不写专属 transcript 仍 invisible（CC 上游限制）。
+- **问题 3b（窗口语义）**：默认统计窗口从 `1h` 改为 `all`（累积，符合"状态栏持续显示本会话总量"心智）。QuickPick + §G tick 同时改默认。`all` 是 per-session 累积（CC 重启清零，by design）；5min/10min/1h/24h/3d/7d/30d 是 rolling（旧数据滑出，by design）。tooltip 已通过 `ttWindowTpl` 显示当前窗口，用户可自行切换。无 bug 需修。
+
+### Changed
+
+- `INJECT_VERSION` v0.2.4 → v0.2.5（IIFE body 变：aggregation OR / onDidDispose set 清理 / `computeLiveDelta` helper / §G tick 增量累加 / 默认窗口改 all / 新增 `ttLiveDeltaTpl` i18n key）。
+- `HOOK_VERSION` v0.1.15 → v0.2.0（hook contract 变：新增 `scanSubagentTranscripts` helper + 调用点；banner hash 重盖）。
+- `companion/MIN_PATCHER_VERSION` 与 `injectVersion()` fallback 同步到 0.2.5 / v0.2.5。
+- `stripIifeInPlace` 正则 widening：Anchor B segment 接受可选 `try{...}catch(_){}` 块（v0.2.5 set sync 引入），保留向后兼容（pre-v0.2.5 仍能剥离）。
+
+### Added
+
+- `ttLiveDeltaTpl` i18n key × 8 语言（zh/en/ja/de/es/fr/pt/ru）：tooltip 在 dSum>0 时追加 `$(pulse) +{fmt} tok live (pending settlement)` 一行，让用户看到实时增量与已结算基线的区分。
+- `computeLiveDelta` IIFE helper（约 40 行）：只读 jsonl 尾部、零状态、零写盘、严格 invariant、524288 字节硬上限。
+- `scanSubagentTranscripts` hook helper（约 70 行）：nested `<sid>/subagents/` 目录扫描 + per-source offset 隔离。
+- 测试断言：527 → **553**（+26）：
+  - IIFE.80-92（+13）：`computeLiveDelta` 签名 / 5 个 skip invariant / cache_creation 双形式镜像 / 512KB 硬上限 / 半行 guard / cwd escape rule / §G tick 集成 3 处 / `tokenLiveDeltaEnabled` 配置 / 默认窗口 `all` × 2 处 / `ttLiveDeltaTpl` key。
+  - IIFE.29c-29d（+2）：Anchor B 维护 set + onDidDispose 清理。
+  - test-sbi-aggregation §5.1-5.6（+6）：set-only / file-only / both / neither / decay 仍生效 / 多 sid 累积。
+  - test-cc-status §Z.1-5（+5）：scanSubagentTranscripts 在 PostToolUse 即可见 + sidecar 多 cursor + 幂等 + 增量 + 缺目录 no-op。
+
+## [0.2.4] - 2026-07-20
+
+**右下角 token / $ cost SBI + QuickPick 配置面板**。v0.2.3 之前项目只显示会话状态（5 态点 + 4 灯聚合），用户对"我这个会话烧了多少 token / 多少钱"的痛点依赖 CC `/cost` 命令——但 `/cost` 不能跨会话累计、不能持续可见、不能设阈值。v0.2.4 用 CC transcript jsonl（每条 assistant 行的 `message.usage` 100% 携带 token）作为唯一权威源，通过 writer hook 增量读（byte-offset sidecar，33MB 大文件 < 100ms）把派生 token 总量 + 6 时间窗口 + USD 估算写到现有 `<sid>.json`（向后兼容），IIFE 在右下角新增第二个 SBI 显示。
+
+### Added
+
+- **右下角 token SBI**（`StatusBarAlignment.Right`，priority `-9995`）：显示当前激活 CC panel 的 token 用量 + 可选 USD 估算。与左下角 4 灯 SBI 分占状态栏两侧（左 = 会话状态，右 = 用量成本）。3 种显示模式：`token` / `cost` / `both`（默认）。
+- **6 时间窗口**：5min / 10min / 1h（默认）/ 24h / 3d / all，QuickPick 即时切换。窗口仅切显示，buckets 始终全量维护。
+- **USD cost 估算**：`~/.claude/cc-status-dot/token-rates.json` 热更定价表（无需重 patch，writer 按 mtime 缓存重读）。Anthropic 官方价（Sonnet / Opus / Haiku）已预置；GLM 等未匹配 model `_default: null` → 自动隐藏 `$`，只显 token。
+- **QuickPick 配置面板**（点击 token SBI 触发）：window 切换 / display 模式 / token SBI 可见性 / notify / notifyWhenFocused / sound 选择 + 当次会话 total / 今日 / 7 日 / 30 日累计 $ + turn-running 计时 + 快速命令（Copy token count / Reset session stats / Open state dir / Open Settings）。
+- **限额告警**：`ccStatusDot.warnThresholdUsd`（默认 0 禁用）→ cost 跨阈触发一次通知，cost 跌破后再跨越重新触发。
+- **turn 计时器**：tooltip 显示当前轮（state=running 时）已跑多久。
+- **`<sid>.json` 加 `tokens` 字段**（向后兼容）：`{total, windows:{5min,10min,1h,24h,3d,7d,30d,all}, cost, cost_5min, cost_1h, cost_24h, cost_7d, cost_30d, last_ts, last_model, turn_count}`。老 reader 忽略该字段。
+- **`<sid>.offset` 字节偏移 sidecar**：`{offset, lastTs, lastSize, totals, buckets[], perTurn[]}`。增量读核心——只读自上次 fire 以来新增的字节，33MB jsonl 也能 < 100ms。
+- **`payload.cwd` 透传到 `status.cwd`**：IIFE tooltip 显示当前 project path，多 project 并行时一眼分辨。
+- **companion/package.json contributes.configuration schema**：8 项配置全部声明 type/default/enum/description，VSCode Settings UI 现在能搜到 + autocomplete + 显示描述（修复 v0.2.3 之前的"配置无 schema"体验债）。
+
+### Changed
+
+- `INJECT_VERSION` `v0.2.3` → `v0.2.4`；`HOOK_VERSION` `v0.1.14` → `v0.1.15`（writer schema 变更：tokens/cwd 字段并入 + offset sidecar + 5 事件 token 触发）。
+- `package.json` / `companion/package.json` / `MIN_PATCHER_VERSION` 0.2.3 → 0.2.4。
+- writer hook 触发 token 增量读的 5 个事件：`PostToolUse`（主 heartbeat）/ `PreToolUse`（副 heartbeat）/ `Stop`（终态校准）/ `UserPromptSubmit`（R2 兜底）/ `SubagentStop`（读 `agent_transcript_path` 归父 sid）。
+- writer GC（UserPromptSubmit 10min throttle）扩展：也扫 `.offset` 文件，与 `.json` 同步 prune（24h mtime + interrupted-preserve 例外）。
+- writer `SessionEnd` DELETE 分支：同步 unlink `<sid>.offset`（之前只删 `<sid>.json`）。
+- ANCHOR_A `replA` 多一段 `globalThis.__ccsdActiveSid=e.request.sessionId`，让窗口级 active-sid 跟踪在每个 update_session_state fire 时刷新；`stripIifeInPlace` 的 segA 正则放宽为 optional 容纳新旧两种形式（前向 + 后向兼容）。
+
+### Token stats 数据流（v0.2.4 新增）
+
+```
+CC jsonl (SoT)
+  └─ message.usage (per assistant line)
+       │
+       ▼ (writer hook 增量读)
+  ~/.claude/cc-tab-status/<sid>.offset  (派生缓存：offset/totals/buckets/perTurn)
+       │
+       ▼ (writer 每事件 fire 后写)
+  ~/.claude/cc-tab-status/<sid>.json .tokens  (主状态文件新字段，向后兼容)
+       │
+       ▼ (IIFE 500ms tick 共享 __ccsdSbiTimer 读)
+  右下角 token SBI  ($(clock) 12.3k tok · $0.42)
+```
+
+### Bug 缓解（来自 CC 官方 issue）
+
+- **#41310 早火 transcript 不存在**：writer `fs.statSync` 失败 → return null 静默跳过。
+- **#9188 `claude --continue` 陈旧 sid+path**：`mtimeMs < lastTs - 60s && size 无增长` → 跳过本轮不归零。
+- **R2 Stop transcript 未 flush**：跨事件触发增量读（PostToolUse + Stop + 下次 UserPromptSubmit 兜底）。
+- **cache_creation 双形式**：`u.cache_creation?.ephemeral_5m_input_tokens || 0` + `u.cache_creation?.ephemeral_1h_input_tokens || 0` + `u.cache_creation_input_tokens || 0`，glm-5.2（标量）与 Anthropic（对象）都兼容。
+- **sidechain 双计防御**：父 transcript 的 sidechain 行跳过；subagent token 通过 `SubagentStop + agent_transcript_path` 单独归并。
+- **`<synthetic>` model 行过滤**：CC 内部合成行不计费。
+- **首火大文件预热**：offset=0 且 size > 256KB → 只读尾部 256KB，避免 33MB 文件首火阻塞 ~1s。
+- **size shrank → reset offset 0**：CC compacted transcript 时全量重读。
+- **buckets 折叠**：> 1000 条时按 5min 桶折叠（保留浮点累计，仅展示四舍五入）。
+- **perTurn FIFO 上限**：400 条（足够 tooltip 显示 + 趋势分析；超了老的滚出）。
+
+### 文档
+
+- 新增 [`docs/STATES.md` §8](docs/STATES.md)：token 统计 SBI 字段契约 + 数据流 + 与 §7 4 灯 SBI 共存核对表。
+- 更新 [`docs/USAGE.md` §3.6](docs/USAGE.md)：操作步骤（显示模式 / 时间窗口 / tooltip / 配置项 / 自定义定价 / QuickPick 操作 / 数据源与持久化）。
+- 更新 [`README.md`](README.md) + 8 语言版：加 token SBI 卖点（§4.5）+ 配置项扩展。
+
+### 升级
+
+旧版（0.2.3 及更早）已 install 的用户重跑 `npx vscode-claude-code-status-dot@latest`：
+
+1. `patchExtension` 检测 stamped version `v0.2.3` 与 `INJECT_VERSION v0.2.4` 不符 → 从 `extension.js.bak` 还原 → 重注入 v0.2.4 IIFE（含 token SBI）。
+2. `installRuntimeFiles` 复制新 hook（v0.1.15）+ 新 `token-rates.json`。
+3. companion 检测 `MIN_PATCHER_VERSION 0.2.4 > config.patcherVersion` → 提示用户重跑（已有 stale-detect 机制）。
+4. Reload Window → token SBI 出现右下角。
+
+无破坏性变更——所有现有 5 态点 / 4 灯 SBI / notify / permission yield / companion 自愈保持原样。
+
 ## [0.1.17] - 2026-07-19
 
 **底部 SBI 4 灯：单 SBI 紧凑拼接（0 像素间距），数字等宽不位移由 VSCode 自带 `tabular-nums` CSS 根治**。根因：v0.1.16 的 4 个独立 SBI（priority `-9996..-9999`）在状态栏上看起来"间隔松散"——用户反馈"4 圆点之间间隔不紧凑"。**调研 VSCode 源码（`microsoft/vscode` 仓库 `src/vs/workbench/browser/parts/statusbar/media/statusbarpart.css`）发现：每个 SBI label 的 CSS 写死了 `margin-right:3px;margin-left:3px;padding:0 5px;`，相邻 SBI 之间约 6-16px 间距，**公开 StatusBarItem API 无 `margin`/`padding`/`spacing` 字段**；VSCode 内部 `IStatusbarEntryLocation.compact` 标志存在但只对核心 entry 开放（如 Ln/Col 与 Encoding 的紧贴对），`createStatusBarItem(alignment, priority)` 签名不接受 `compact` 参数，`require("vscode")` 也 resolve 不到内部 statusbar 模块；priority 只决定排序，不影响间距。**4 SBI 路径下 6-16px 间距是 VSCode 框架硬限制**。**要紧凑必须收回到单 SBI**。
@@ -149,17 +289,9 @@
 - **SBI 位置受状态栏拥挤度影响**：极负 priority 让 SBI 在 Left 项里最靠右、最接近可见中心，但若用户装了大量其它 Left 项 SBI 仍可能被挤到角落——这是 StatusBarItem API 限制（无真正的"居中"槽位）。
 - **click command 需 IIFE 注册**：reload 后若用户未打开 CC panel，`ccStatusDot.sbiClick` 未注册，此时点 SBI 不响应（VSCode 静默 no-op）。但 SBI 本身也未创建（IIFE 仅由 panel 打开触发），所以一致性 OK。
 
-## [Unreleased]
+## [0.1.4] - 2026-07-17 — archival note
 
-修复「完成/中断通知不生效」。根因：`notifyWhenFocused` 默认 `false`，导致用户在 VSCode 前台（最常见场景）时**所有**通知被抑制——hook 正确写了 `done`/`interrupted`（`~/.claude/cc-tab-status/<sid>.json`），但 IIFE 在前台一律不弹。
-
-### 变更（Changed）
-
-- **`notifyWhenFocused` 默认值 `false` → `true`**（patch.ts `buildIIFE` 内 `c.get("notifyWhenFocused",true)`）。前台时也会弹 VSCode 消息，完成/中断不再静默。"聚焦于 VSCode 窗口"≠"盯着 CC tab"，原默认让通知在最常见场景下永远不触发，等同于功能失效。想恢复"前台不打扰"的用户把 `ccStatusDot.notifyWhenFocused` 设回 `false` 即可（`notify` 总开关仍在）。
-- **通知触发逻辑由 `prevSt` 状态转换改为 `since` 时间戳去重**（注入 IIFE）。原 `prevSt` 逻辑要求 500ms 轮询**采样到** `running` 再转到 `done`/`interrupted` 才触发——若一轮跑得太快（两次轮询之间已完成 running→done）或 reload 落在旧 `done` 上，转换永远观测不到，通知丢失。新逻辑：首次轮询用当前终态的 `since` 做种子（避免 reload 对陈旧状态误报），之后每个**新的终态 `since`** 触发一次（`done` 的 `since` 在 `Stop` 时刷新、`Stop` 前 heartbeat 写的是 `running` 不影响）。覆盖快速完成、reload、连续多轮等全部路径，且不重复弹。
-- **IIFE 版本戳 `v0.1.4` → `v0.1.5`**：已 patch 的旧装在下次 `npx vscode-claude-code-status-dot` 时会被检测为 STALE 并自动重注入新 IIFE（无需先 `--revert`）。
-
-### 修复（Fixed）
+> 历史记录：v0.1.4 时代「完成/中断通知不生效」修复（`notifyWhenFocused` 默认 false→true + 通知触发改为 `since` 时间戳去重 + macOS `osascript` 引号/反斜杠转义）。这些修复已合入 v0.1.5+ baseline 并由后续版本继承；此条目保留为档案，不再单独维护。
 
 - **macOS `osascript` 系统通知被特殊字符静默打断**：`__ccTitle`（注入到通知文案）若含 `"` 或 `\`，原代码把 `msg` 直接拼进 AppleScript 字符串字面量 → `osascript` 语法错 → 被 `try/catch` 吞掉，系统通知不弹（VSCode 消息仍弹，但前台被抑制时则全军覆没）。改为先用 `replace(/["\\]/g, c => "\\"+c)` 转义再拼。已用 `osascript -e` 实跑含引号/反斜杠标题验证通过。
 

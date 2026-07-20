@@ -9,7 +9,7 @@
 
 **一眼看清所有 Claude Code 会话在干嘛 —— 不用逐个 tab 切过去看**
 
-🟡 运行中 · 🟢 完成 · 🔵 待你输入 · 🔴 中断快闪 —— **tab 五态点（灰 idle / 黄 running / 绿 done / 红 interrupted / 蓝 permission）+ 底部 4 灯聚合（🟢🟡🔵🔴，无灰——idle 不计底部）+ 完成/中断通知 + CC 更新自动恢复**
+🟡 运行中 · 🟢 完成 · 🔵 待你输入（CC 弹授权，或 CC 回复"等你确认 / let me know"）· 🔴 中断快闪 —— **tab 五态点 + 底部 4 灯聚合（🟢🟡🔵🔴，无灰——idle 不计底部）+ 完成/中断通知 + CC 更新自愈 + 右下角 token 实时刷新 / $ cost 估算（workflow 子代理 token 也算进来）+ QuickPick 配置面板跟随 VSCode 语言（中/英/日/德/西/法/葡/俄）**
 
 **简体中文** | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
@@ -85,7 +85,39 @@ CC 跑完或被限速中断时弹**系统通知**——前台后台都弹：
 
 ### 4. 🔵 pending：CC 等你输入时立刻让你知道
 
-CC 弹**权限授权**、question、elicit 这种"等你输入"的场景，底部 🔵 灯 +1。tab 上 reader 让出图标给 CC 原生蓝点（**不覆盖**），底部状态栏还能独立计 pending——一眼知道有几个会话卡在等你。
+底部 🔵 灯 +1、tab 变蓝，**两类触发**：
+
+**(a) CC 弹授权框**（permission / question / elicit）—— tab 上 reader 让出图标给 CC 原生蓝点（**不覆盖**），底部状态栏独立计 pending。一眼知道有几个会话卡在等你授权。
+
+**(b) CC 回复里明确"等你决策/反馈"**——比如 CC 跑完最后一句说 `等你测试反馈`、`你决定要不要继续`、`let me know`、`your call`、`please confirm`、`Should I proceed?` 等，tab 自动转蓝（覆盖原 running-黄 / done-绿）。**你不用盯着 tab 猜"它到底跑完了还是等我说啥"**——这是用户反馈最多、最高频的痛点（CC 假报完成实则等输入），现在 tab 直接告诉你。
+
+**怎么区分中性完成 vs 待你回复**：
+
+- 中性完成（`已完成`、`Done.`、`所有测试通过`）→ tab 保持 🟢 绿
+- 待你决策/反馈（中文含 `等你`/`你决定`/`请确认`/`告诉我`/`听你的`，英文含 `let me know`/`your call`/`please confirm`/`what do you think`/`over to you` 等，或末行简短问句如 `需要继续吗？`/`Should I proceed?`）→ tab 转 🔵 蓝
+
+**不会误触发**：代码块里 `letMeKnow()` 这类标识符会先剥离再判断；`Why?`/`什么意思?`/`效果如何?` 这类修辞性/信息性问句也不触发（避免 CC 自问自答时假蓝）。
+
+### 4.5. 🪙 右下角 token / $ cost
+
+状态栏**右下角**第二个 SBI 显示当前激活 CC panel 的 token 用量与可选 USD 估算：
+
+```
+$(clock) 12.3k tok · $0.42
+```
+
+- **CC 流式输出时 token 实时增长**——不等回复结束，每 tick 读 transcript 尾部增量；tooltip 静态不闪。性能敏感机器可关 `tokenLiveDeltaEnabled`
+- **默认窗口 `all`（累积，不清零）**——可选 5min / 10min / 1h / 24h / 3d / 7d / 30d / all。`all` 是全程累积（会话级单调增长，跟账本一样只增不减）；`5min..30d` 是滚动窗口（旧 turn 到期滑出，看起来像"清零"，适合看"最近多久花了多少"）
+- **workflow 子代理 token 也算进来**——后台 spawn 的 subagent / teammate 跑出的 token 归并到父会话统计（你为它们付的费不会"隐形"）
+- $ 估算走 `token-rates.json` 热更定价表（Anthropic 官方价已预置；GLM 等未知模型自动隐藏 $，只显 token）
+- tooltip 显示当前会话 total / 24h / 7 日 / 30 日累计 $ + model + project + 本轮已跑多久
+- 点击 SBI 弹 QuickPick 配置面板：窗口切换 / 显示模式（token / cost / both）/ 通知开关 / 声音选择 / 复制 token 数 / 重置统计 / 打开状态目录 / 打开设置
+- **QuickPick 面板 + tooltip 跟随 VSCode 界面语言**（zh/en/ja/de/es/fr/pt/ru，未知语言 fallback en）——VSCode 中文 → 面板中文；配置值（5min/all/token/cost/both/声音名）跨语言统一不译
+- 限额告警：`ccStatusDot.warnThresholdUsd` 跨阈触发一次通知（默认禁用）
+
+**数据源**：CC transcript jsonl 是唯一权威源（每条 assistant 行的 `message.usage`），writer hook 增量读（byte-offset sidecar，33MB 大文件也能 < 100ms）。CC `/resume` 复用同一 sid → 统计天然延续；开新会话 → 从 0 起。
+
+详见 [USAGE.md §3.6](docs/USAGE.md) 与 [STATES.md §8](docs/STATES.md)。
 
 ### 5. companion 自愈：CC 更新覆盖后自动恢复
 
@@ -116,10 +148,10 @@ CC 自动更新会把 patch 整体覆盖掉。**v0.2.0 起**，`npx` 装的时�
 | 颜色 | 含义 | 触发 |
 |---|---|---|
 | 🟡 黄色 `#CCA700`（**静态**，无动画） | 运行中 | 发 prompt、工具调用前后（心跳）、subagent spawn |
-| 🟢 绿色 `#3FB950`（静态） | 本轮完成 | CC 触发 `Stop`（**超 5 分钟自动转灰**） |
+| 🟢 绿色 `#3FB950`（静态） | 本轮完成（不待用户） | CC 触发 `Stop` 且最后回复是中性完成（`已完成`/`Done.`）；**超 5 分钟自动转灰** |
 | 🔴 红色 `#F85149`（快闪） | 中断 / 出错 | CC 触发 `StopFailure`（限速、过载等） |
 | ⚪ 灰色 `#808080`（静态） | 空闲 | 初始 / 完成超 5 分钟 / 无状态文件 |
-| 🔵 蓝色（CC 原生） | CC 弹权限授权 | reader 让出图标，CC 原生蓝点显示（**不覆盖**）；底部状态栏另独立计 pending |
+| 🔵 蓝色 `#58A6FF`（静态） | 待用户输入（两类触发） | (a) **CC 弹授权框**：reader 让出图标给 CC 原生蓝点（**不覆盖**）；(b) **CC 最后回复含"待你决策"语义**（`等你`/`你决定`/`请确认`/`let me know`/`your call` 等）→ reader 渲染蓝色 `claude-logo-pending.svg`（覆盖 running-黄 / done-绿）。底部 🔵 灯两类都计数 |
 
 > running 静态黄点（无动画）；interrupted 红色快闪告警。完整状态契约（事件 / SVG / IPC / 通知）见 [`docs/STATES.md`](docs/STATES.md)。
 
@@ -140,9 +172,9 @@ CC 自动更新会把 patch 整体覆盖掉。**v0.2.0 起**，`npx` 装的时�
 
 **4 灯位置固定，数字变化不位移**——VSCode 状态栏 CSS `font-variant-numeric:tabular-nums` 给所有 item 强制数字等宽，ASCII 0-9 在任何字体下都不抖。
 
-🔵 pending 是独立维度（与 state 解耦）：CC 弹权限授权 / question / elicit 等"待用户输入"场景，writer 接 CC `Notification` hook 落盘 pending 标记，reader 独立计数。权限授权时 tab 图标让位给 CC 原生蓝点（不覆盖），底部状态栏仍独立计 pending。
+🔵 pending 是独立维度（与 state 解耦），**两类触发都计数**：(a) CC 弹权限授权 / question / elicit（`Notification` hook 写 `pending:true`）；(b) CC 回复含"待你决策"语义（`Stop` hook 读最后一条回复命中 `等你`/`let me know`/`your call` 等关键词时写 `pending:true`）。**底部聚合双源计数**——CC 实时 pending flag（本窗口同步）+ 落盘 `<sid>.json.pending`（跨窗口异步），权限框一弹出就亮，不漏计。tab 图标在 (a) 让位给 CC 原生蓝点（不覆盖），在 (b) 直接渲染蓝点（覆盖黄/绿）。
 
-**3 段 GC** 防止计数漂移：done 超 5 分钟 → idle（绿减 1）/ running 文件 mtime 超 30 分钟 → idle（崩溃会话回收）/ interrupted 文件 mtime 超 24 小时 → idle；pending 基于 st 字段 GC（崩溃 pending 回 idle，同时减黄 + 减蓝）。
+**3 段 GC** 防止计数漂移：done 超 5 分钟 → idle（绿减 1）/ running 状态超 30 分钟未更新 → idle（崩溃会话回收）/ interrupted 超 24 小时 → idle；pending 基于 st 字段 GC（崩溃 pending 回 idle，同时减黄 + 减蓝）。
 
 整块通过 **1 个运行时 StatusBarItem + 拼接 text**（IIFE 每 500ms 直接 mutate SBI 的 text），无需 patch CC `package.json`，无需 ThemeColor 块。
 
@@ -222,7 +254,14 @@ npx tsx patch.ts
 {
   "ccStatusDot.notify": true,
   "ccStatusDot.notifyWhenFocused": true,
-  "ccStatusDot.notifySound": "Glass"
+  "ccStatusDot.notifySound": "Glass",
+
+  "ccStatusDot.tokenStatsWindow": "all",
+  "ccStatusDot.tokenDisplayMode": "both",
+  "ccStatusDot.tokenSbiVisible": true,
+  "ccStatusDot.tokenLiveDeltaEnabled": true,
+  "ccStatusDot.showCost": true,
+  "ccStatusDot.warnThresholdUsd": 0
 }
 ```
 
@@ -231,6 +270,22 @@ npx tsx patch.ts
 | `ccStatusDot.notify` | `true` | 通知总开关 |
 | `ccStatusDot.notifyWhenFocused` | `true` | 前台时也弹通知（macOS 系统通知 / Windows/Linux VSCode 消息）；设 `false` 仅后台时通知 |
 | `ccStatusDot.notifySound` | `"Glass"` | macOS 系统通知声音（done 与中断共用；`""` 静音；可选 Basso/Ping/Hero 等） |
+| `ccStatusDot.tokenStatsWindow` | `"all"` | 右下角 token SBI 的时间窗口。`all` = 累积（整个会话，不清零，默认）；`5min/10min/1h/24h/3d/7d/30d` = 滚动窗口（旧 turn 到期自动滑出，会显得"清零"） |
+| `ccStatusDot.tokenDisplayMode` | `"both"` | token SBI 显示模式：`token` 仅 token / `cost` 仅 $ / `both` 两者 |
+| `ccStatusDot.tokenSbiVisible` | `true` | 显示 / 隐藏 token SBI |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | 流式输出期间 IIFE 每 tick 读 transcript 尾部增量，让 token 在 hook 触发之间也能实时更新；性能敏感机器可设 `false` 关闭 |
+| `ccStatusDot.showCost` | `true` | 显示 $（未知 model 自动隐藏，需 `token-rates.json` 有匹配条目） |
+| `ccStatusDot.warnThresholdUsd` | `0` | cost 跨阈通知（0 = 禁用；正数 = USD 阈值，每次跨越触发一次通知） |
+
+> **自定义模型定价**：`~/.claude/cc-status-dot/token-rates.json` 是热更定价表，默认覆盖 Anthropic 官方价；GLM 等未匹配 model 自动隐藏 `$`。加一条 glob 即可显示 `$`：
+
+```jsonc
+{
+  "_default": null,
+  "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
+  "glm-*":           { "in": 0.5, "out": 1.5 }
+}
+```
 
 ---
 

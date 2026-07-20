@@ -65,6 +65,25 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { fileURLToPath } from "url";
+// v0.2.4 round-2 (ARCH-1 first slice): pure helpers extracted to src/ modules.
+// The IIFE body in buildIIFE stays in patch.ts (must be a single self-contained
+// string for injection into CC's extension.js — see buildIIFE commentary).
+// Subsequent slices (vscode-cli / companion-install / hooks-wire / install /
+// status / cli) can ship one per round; this round lands the three pure-logic
+// slices that have NO I/O or closure dependencies.
+//
+// v0.2.4 round-3 (architecture LOW cleanup): dropped unused re-exports.
+// After the ARCH-1 extraction patch.ts only calls the HIGH-level wrappers
+// (stripJsonc / surgicalSetTopLevelKey / surgicalRemoveTopLevelKey / cmpVerStr);
+// the LOW-level helpers (skipWsAndComments / scanJsonValueEnd / findTopLevelKey
+// / KeyRange) are now used ONLY inside their src/ modules and no longer need
+// re-exposure at the patch.ts import surface. Removing them keeps `npx tsc
+// --noUnusedLocals` clean (the project tsconfig doesn't enforce it today, but
+// a future tightening would otherwise flag TS6133 on these 4 symbols — they
+// appear only in comments here).
+import { cmpVerStr } from "./src/semver.js";
+import { stripJsonc } from "./src/jsonc.js";
+import { surgicalSetTopLevelKey, surgicalRemoveTopLevelKey } from "./src/surgical-json.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -125,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.2.3";
+const INJECT_VERSION = "v0.2.6";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -154,7 +173,7 @@ const HOOK_MARKER = "cc-status-dot-managed";
  *  INSTALL_DIR/hooks/cc-status.js) saw silent feature loss with no warning.
  *  MUST be kept in lockstep with the banner at the top of
  *  hooks/cc-status.js. */
-const HOOK_VERSION = "v0.1.14";
+const HOOK_VERSION = "v0.2.0";
 const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
 
 /** CC extension version against which the anchor strings (ANCHOR_A / ANCHOR_B)
@@ -199,6 +218,155 @@ const TICK_MS = 500;
 /** Per-session state directory read by the injected timer. */
 const STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status");
 
+// --- v0.2.4: writer↔reader contract constants (single source of truth) -----
+// These mirror the writer's same-named consts in hooks/cc-status.js. The
+// writer is a standalone .js (no import from this ESM patcher), so each side
+// holds a copy — hooks/test-contract-sync.mjs pins the literal values so
+// drift fails CI. Any contract change touches BOTH files in lockstep.
+
+/** Token-stats window keys + insertion order. The writer (TOK_WIN_KEYS in
+ *  cc-status.js) derives TOK_WINDOWS from this same array; the reader IIFE
+ *  bakes the array (via JSON.stringify) into both the QuickPick detail string
+ *  and the picker list. Pre-v0.2.4 each of the 5 sites (writer TOK_WINDOWS,
+ *  writer docstring, IIFE detail string, IIFE picker list, test corpus)
+ *  hard-coded the sequence independently — a 6th-window add (e.g. '15min')
+ *  would have required hunting 5 sites. Now the IIFE sites derive from this
+ *  const; the writer derives from its own copy; the test corpus is the
+ *  cross-file pin. */
+const TOK_WIN_KEYS = ["5min", "10min", "1h", "24h", "3d", "7d", "30d", "all"] as const;
+
+/** Token-stats window key → millisecond span. Mirrors the writer's TOK_WINDOWS
+ *  in hooks/cc-status.js (line 503) — the writer is the source of truth for
+ *  the bucket cutoff (deriveTokensField iterates TOK_WINDOWS via Object.keys,
+ *  cc-status.js:754-756). The IIFE needs the SAME ms values so its live-delta
+ *  reader (computeLiveDelta) can apply an IDENTICAL time-window filter to the
+ *  bytes it reads from the parent transcript — otherwise the IIFE's rolling-
+ *  window dSum includes bytes OUTSIDE the window the hook used for its bucket
+ *  sum, double-counting against a long streaming turn that spans past the
+ *  rolling window edge (v0.2.5 round-3 MEDIUM fix). "all" maps to Infinity
+ *  (cumulative — no filtering), mirroring the hook's `ms === Infinity ?
+ *  -Infinity : now - ms` cutoff rule. Not referenced from TS code (only baked
+ *  into the IIFE); hooks/test-contract-sync.mjs pins the values against the
+ *  writer's TOK_WINDOWS so a future tuning edit (e.g. 15min) touching only
+ *  one side fails CI. */
+const TOK_WIN_MS: Record<(typeof TOK_WIN_KEYS)[number], number> = {
+    "5min": 5 * 60 * 1000,
+    "10min": 10 * 60 * 1000,
+    "1h": 60 * 60 * 1000,
+    "24h": 24 * 60 * 60 * 1000,
+    "3d": 3 * 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+    "30d": 30 * 24 * 60 * 60 * 1000,
+    all: Infinity,
+};
+
+/** Extension for the per-source byte-offset sidecar (writer↔reader contract).
+ *  The writer (TOK_OFFSET_EXT in cc-status.js) writes JSON to this file; the
+ *  IIFE reader never reads it (only the writer does). v0.2.4 round-3
+ *  (business-logic MEDIUM fix): the QuickPick "Reset session stats" handler
+ *  NO LONGER deletes `<sid>.offset` — deleting it zeroed ctx.buckets on the
+ *  next fire, so the forceFull subagent-preservation filter (`b.src &&
+ *  b.src !== 'main'`) operated on an empty array and already-merged subagent
+ *  tokens (SubagentStop fires once per subagent, no replay) were permanently
+ *  lost. Reset now writes only `<sid>.forcereread; the offset sidecar stays
+ *  intact so the preservation filter has subagent buckets to keep.
+ *
+ *  This const is kept as a CONTRACT-SURFACE declaration: hooks/test-contract-
+ *  sync.mjs pins its value against the writer's TOK_OFFSET_EXT via source
+ *  regex extraction, so any future rename on the writer side would otherwise
+ *  silently desync the reader's GC pruning (which derives the .offset
+ *  basename from this const). It is therefore intentionally NOT referenced
+ *  from TS code right now — if a future feature (e.g. an "Open state dir"
+ *  deep-link to the sidecar) re-references it, point the use here; if
+ *  `noUnusedLocals` is later tightened, prefer `export`-ing this const over
+ *  deleting it (the test relies on the source-text match).
+ *
+ *  v0.2.5 round-3 (MEDIUM): the IIFE's computeLiveDelta references this
+ *  extension via a JSON.stringify'd literal baked into the IIFE bytes
+ *  (tokOffsetExtLiteral below, mirroring tokForceRereadExtLiteral). The
+ *  earlier round-3 comment said "no longer bake tokOffsetExtLiteral" — that
+ *  was correct at the time because the QuickPick reset had stopped touching
+ *  .offset, but it ignored that computeLiveDelta still hard-coded ".offset"
+ *  as a raw string, breaking the single-source-of-truth discipline the
+ *  other contract strings (tokForceRereadExtLiteral, tokWinKeysLiteral)
+ *  enforce. We re-bake now so a future rename of TOK_OFFSET_EXT touches the
+ *  IIFE bytes automatically (the cross-file contract test catches a writer
+ *  rename; this catches the IIFE drift on the reader side). */
+const TOK_OFFSET_EXT = ".offset";
+
+/** Extension for the "force full re-read next fire" marker (writer↔reader
+ *  contract). The QuickPick reset handler writes a `<sid>.forcereread` marker;
+ *  the writer's TOK_EVENTS branch consumes it on the next fire. The writer
+ *  also GCs stale markers under the same name. Naming it here + baking into
+ *  the IIFE makes a future rename touch both sides at once. */
+const TOK_FORCEREREAD_EXT = ".forcereread";
+
+/** Interrupted-state retention threshold (writer↔reader contract, §7.5).
+ *  Crashed/killed CC sessions whose writer wrote state=interrupted never send
+ *  SessionEnd, so without a retention heuristic the 🔴 light would grow
+ *  monotonically. The reader (IIFE) decays interrupted files older than this
+ *  to idle for COUNTING (file is NOT deleted — diagnostic value preserved).
+ *  The writer GC reclaims interrupted files from disk at the SAME threshold
+ *  (§7.5 contract: GC threshold === reader decay threshold — if they
+ *  diverge, the reader would idle-mark files the writer hasn't reclaimed, or
+ *  the writer would reclaim files the reader still counts).
+ *
+ *  v0.2.4 round-2 (ARCH-6): hoisted to a NAMED top-level const so the IIFE
+ *  baked literal below derives from it via template substitution (mirrors
+ *  the existing TOK_WIN_KEYS / TOK_OFFSET_EXT pattern). Both files still
+ *  hold the literal value, but patch.ts's copy is now the one authoritative
+ *  source for the IIFE; hooks/test-contract-sync.mjs pins the cross-file
+ *  equality so a future tuning edit (e.g. 48h) that touches only one side
+ *  fails CI. 24h >> SBI_RUNNING_STALE_MS (30min) because interrupted is a
+ *  terminal state the user may want to inspect long after the fact. */
+const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+/** Done-state to idle decay threshold (writer↔reader contract, §4).
+ *  Reader-side: a `done` session older than this decays to idle for COUNTING
+ *  (the green 🟢 light only reflects ACTIVELY-done sessions; a session done
+ *  10min ago no longer counts toward 🟢). The value is pinned via the same
+ *  cross-file contract as INTERRUPTED_RETENTION_MS — hooks/test-contract-sync.mjs
+ *  asserts equality. 5min is the published §4 reader rule; the writer does
+ *  not have its own decay threshold for done (it just writes state=done and
+ *  lets the reader apply the rule). */
+const DONE_TO_IDLE_MS = 5 * 60 * 1000;
+
+/** Stale-running heuristic threshold (writer↔reader contract, §7.2).
+ *  Reader-side: SBI aggregation decay — a `running` file whose `since` is older
+ *  than this decays to idle for COUNTING (the 🟡 light only reflects sessions
+ *  that transitioned to running within this window). v0.2.6 round-1 fix: keys
+ *  off `since` (the *→running transition timestamp), NOT mtime — the prior
+ *  mtime-based rule was defeated by cc-status.js Stop preserveSince path
+ *  (Stop inflight>0 keeps state="running" + cur.since but writeJsonAtomic
+ *  refreshes mtime on every Stop heartbeat; CC re-fires Stop on inflight
+ *  workflows, so mtime stays fresh forever and the 30min clock never elapsed).
+ *  30min chosen because PreToolUse fires every ~30s during active tool use,
+ *  so a 30min `since` gap is unambiguous evidence of a dead/drifted session.
+ *  Pinned via hooks/test-contract-sync.mjs. */
+const SBI_RUNNING_STALE_MS = 30 * 60 * 1000;
+
+/** Per-tab stale-running decay threshold (v0.2.6 reader-side §4 rule).
+ *  Reader-side: per-tab tick decay — a `running` tab whose `since` is older
+ *  than this renders idle (gray) instead of running (yellow), surfacing
+ *  "this session hasn't actually been running for N min" to the user.
+ *  v0.2.6 fix for stuck-yellow bug (CC Stop payload inflight=1 drift +
+ *  preserveSince + per-tab running branch had zero decay → tab永黄). Distinct
+ *  from SBI_RUNNING_STALE_MS (30min, SBI-only) for two reasons:
+ *    (1) per-tab is USER-VISIBLE — a more aggressive threshold (15min vs 30)
+ *        surfaces drift sooner at the per-tab UI where the user actually
+ *        looks; the SBI aggregate count tolerates a wider window since the
+ *        user reads it at-a-glance.
+ *    (2) Keeping the names distinct preserves test-iife.mjs IIFE.46b's
+ *        invariant "per-tab tick body does NOT reference SBI_RUNNING_STALE_MS"
+ *        (the SBI vs per-tab decay-profile divergence lock). Introducing a
+ *        NEW constant name for per-tab use keeps the cross-decay boundary
+ *        explicit and grep-able.
+ *  Same since-based defensive form as the done>5min rule (since && now-since
+ *  > THRESH && since < now — guards against since=0 corrupt files AND future
+ *  timestamps). NOT pinned by test-contract-sync.mjs (reader-only; no
+ *  writer-side equivalent to sync against). */
+const SINCE_STALE_MS = 15 * 60 * 1000;
+
 /** Persistent runtime install dir. A copy of resources/*.svg + hooks/cc-status.js
  *  lives here so the patched extension and the CC hook keep working even if the
  *  source project dir is removed or the npx cache is purged. The injected IIFE
@@ -223,7 +391,13 @@ const RUNTIME_RES_DIR = path.join(INSTALL_DIR, "resources");
  *  only interrupted animates (flashSeq%2 on/off fast-flash between error.svg and
  *  CC's default). installRuntimeFiles auto-sweeps the stale v0.1.3
  *  `claude-logo-running-{0..7}.svg` frames on upgrade. */
-const OUR_SVGS = ["claude-logo-idle.svg", "claude-logo-running.svg", "claude-logo-done.svg", "claude-logo-error.svg"];
+const OUR_SVGS = [
+    "claude-logo-idle.svg",
+    "claude-logo-running.svg",
+    "claude-logo-done.svg",
+    "claude-logo-error.svg",
+    "claude-logo-pending.svg",
+];
 
 /** Extension directories to search, highest version wins. */
 const SEARCH_DIRS = [
@@ -371,7 +545,7 @@ const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
  *  55e18b4). The 5 balls therefore span 3 Unicode blocks again
  *  (🟢🟡 Geometric Shapes Extended / 🔴🔵 Miscellaneous Symbols And
  *  Pictographs / ⚪ Miscellaneous Symbols). Theoretical cross-block width
- *  risk is the trade-off for the gray visual —实测 modern emoji fonts (Apple
+ *  risk is the trade-off for the gray visual — empirically (实测), modern emoji fonts (Apple
  *  Color Emoji / Noto Color Emoji / Segoe UI Emoji) render every emoji at
  *  1em square regardless of block, so the risk is latent rather than
  *  observable on mainstream fonts. The v0.1.17 ⚪→🟤 pivot's "guarantee
@@ -400,7 +574,7 @@ const SBI_LIGHTS_CFG: ReadonlyArray<{ key: string; em: string }> = [
  *  SBI_LIGHTS_CFG. -9996 keeps the SBI rightmost among Left items (closest
  *  to the visible center), matching the v0.1.16 leftmost-done priority so
  *  the SBI's screen position is preserved across the 4-SBI → 1-SBI pivot
- *  (the user's "位置固定" requirement covers BOTH per-light slot position
+ *  (the user's "位置固定" (fixed-position) requirement covers BOTH per-light slot position
  *  AND whole-bar position — this const holds the latter). */
 const SBI_PRIORITY = -9996;
 
@@ -429,6 +603,732 @@ const SBI_DIM_EM = "\u{26AA}"; // ⚪ (white/gray medium circle; user prefers gr
  *  Renaming the command touches this const once; the IIFE bytes + the test
  *  assertions both follow. */
 const SBI_CLICK_CMD = "ccStatusDot.sbiClick";
+
+// ---------------------------------------------------------------------------
+// v0.2.4: Token stats SBI (right-side, second SBI beside the 4-light aggregate)
+// ---------------------------------------------------------------------------
+
+/** Priority for the v0.2.4 token-stats StatusBarItem. Positioned at
+ *  StatusBarAlignment.Right with priority -9995 so it sits as the rightmost
+ *  Right-aligned item (closest to the visible center on the right half).
+ *  Distinct side from the 4-light SBI (Left, -9996) so the two never collide
+ *  regardless of how many other extensions contribute SBIs.
+ *
+ *  Rationale for Right side (vs another Left item beside the 4-light SBI):
+ *  the 4-light SBI is the dominant "session overview" affordance and lives at
+ *  Left -9996 (rightmost-of-Left); placing the token SBI on the Right gives
+ *  the user a natural "left = sessions, right = cost" mental model and avoids
+ *  visual contention at the same anchor. */
+const TOK_SBI_PRIORITY = -9995;
+
+/** Click-command id for the token SBI. Triggers the QuickPick config panel
+ *  (window selector / display mode / notify toggle / sound / fast commands).
+ *  Single source of truth — baked into the IIFE at the registerCommand site
+ *  AND assigned to the token SBI's `.command` field. Mirrors SBI_CLICK_CMD's
+ *  pattern. */
+const TOK_CLICK_CMD = "ccStatusDot.tokClick";
+
+// ---------------------------------------------------------------------------
+// v0.2.4 (intra-version): QuickPick + token SBI tooltip i18n
+// ---------------------------------------------------------------------------
+// 8-language dictionary for every user-facing string in the QuickPick config
+// panel (showTokQuickPick), the token SBI tooltip (§G tick), the threshold
+// alert (dispatchNotify call), and the token-panel error fallback. The IIFE
+// detects VSCode's UI language via `vs.env.language` (e.g. "zh-cn", "pt-br",
+// "en", "ja"), lowercases it, and takes the primary subtag as LANG. Unknown
+// languages fall back to English via the t() helper's `e[LANG]||e.en||k` chain.
+//
+// TERMINOLOGY (kept consistent across languages + with the 8 READMEs):
+//   token  → token(zh, loanword — matches zh README which keeps it untranslated) /
+//            トークン(ja) / Token(de/es/fr/pt/ru)
+//   window → 窗口(zh) / ウィンドウ(ja) / Fenster(de) / ventana(es) /
+//            fenêtre(fr) / janela(pt) / окно(ru)
+//   cost   → 费用(zh) / コスト(ja) / Kosten(de) / coste(es) /
+//             coût(fr) / custo(pt) / стоимость(ru)
+//   session→ 会话(zh) / セッション(ja) / Sitzung(de) / sesión(es) /
+//             session(fr) / sessão(pt) / сессия(ru)
+//
+// NOT TRANSLATED (config values + SBI text units, consistent across locales):
+//   - window KEYS: 5min/10min/1h/24h/3d/7d/30d/all
+//   - display mode VALUES: token / cost / both
+//   - sound names: Basso/Bell/Blow/.../Tink (macOS system sound identifiers)
+//   - SBI text symbols: $(clock)/$(pulse)/$(eye)/emoji/numbers/units tok/$
+//   - settings keys: ccStatusDot.*
+//
+// Placeholder convention: complex strings use {name} tokens resolved at call
+// sites via .replace("{name}", value). This lets each language reorder the
+// phrase naturally (e.g. ja "X トークンを...コピー" vs en "Token count copied: X")
+// without string concatenation gymnastics. For counted nouns, the count is
+// placed as a suffix after a colon so plural agreement is not load-bearing
+// (see fbCopiedTpl) — English avoids "1 tokens", Russian avoids the
+// 1-token / 2-tokensa / 5-tokensov count agreement.
+//
+// Source convention (mirrors SBI_LIGHTS_CFG): patch.ts SOURCE uses \u{XXXX}
+// escapes for non-ASCII where readable (em dash —, middot ·); CJK characters
+// appear literally in the source for translation-review readability. Both
+// survive JSON.stringify unchanged into the baked IIFE bytes (VSCode parses
+// the IIFE as UTF-8). The 8-language completeness is asserted in
+// hooks/test-iife.mjs (IIFE.68-IIFE.71 series).
+const I18N_LANGS = ["zh", "en", "ja", "de", "es", "fr", "pt", "ru"] as const;
+type I18NLang = (typeof I18N_LANGS)[number];
+type I18NEntry = Record<I18NLang, string>;
+const I18N_DICT: Record<string, I18NEntry> = {
+    // === QuickPick main panel (showTokQuickPick) ===
+    qpPlaceHolder: {
+        zh: "cc-status-dot — token 统计与配置",
+        en: "cc-status-dot — token stats & config",
+        ja: "cc-status-dot — トークン統計と設定",
+        de: "cc-status-dot — Token-Statistiken & Konfiguration",
+        es: "cc-status-dot — estadísticas de tokens y configuración",
+        fr: "cc-status-dot — statistiques de tokens et configuration",
+        pt: "cc-status-dot — estatísticas de tokens e configuração",
+        ru: "cc-status-dot — статистика токенов и настройки",
+    },
+    qpStatsWindowLabel: {
+        zh: "统计窗口：",
+        en: "Statistics window: ",
+        ja: "統計ウィンドウ：",
+        de: "Statistik-Fenster: ",
+        es: "Ventana de estadísticas: ",
+        fr: "Fenêtre de statistiques : ",
+        pt: "Janela de estatísticas: ",
+        ru: "Окно статистики: ",
+    },
+    qpStatsWindowDetail: {
+        // Singular form matches qpStatsWindowLabel ("Statistics window: ")
+        // — both describe the same singular window the user is about to pick.
+        // v0.2.5 round-2 (MEDIUM, window labeling): distinguish 'all'
+        // (cumulative, never resets) from the rolling windows (5min..30d,
+        // which slide old turns out and can look like a "reset"). This was
+        // the exact user confusion point ("不是移动窗口设计吧?持续用会清零")
+        // that problem 3b addressed — the prior detail label branded the
+        // WHOLE list as "(rolling)" including 'all', which INVERTED the
+        // clarification and reinforced the "all also clears" misconception.
+        zh: "统计窗口：5min..30d 滚动（旧 turn 滑出，看起来像清零）/ all 累积（整会话不清零，默认）",
+        en: "Statistics window: 5min..30d rolling (old turns slide out, can look like a reset) / all cumulative (whole session, never resets, default)",
+        ja: "統計ウィンドウ：5min..30d ローリング（古い turn は滑り落ちる、「リセット」に見えることがある）/ all 累積（セッション全体、リセットなし、デフォルト）",
+        de: "Statistik-Fenster: 5min..30d gleitend (alte Turns fallen heraus, sieht wie ein „Reset“ aus) / all kumulativ (ganze Sitzung, kein Reset, Standard)",
+        es: "Ventana de estadísticas: 5min..30d móvil (los turnos antiguos se deslizan fuera, puede parecer un «reset») / all acumulativo (toda la sesión, sin reset, por defecto)",
+        fr: "Fenêtre de statistiques : 5min..30d glissante (les anciens turns sortent de la fenêtre, peut ressembler à un « reset ») / all cumulatif (toute la session, jamais remis à zéro, par défaut)",
+        pt: "Janela de estatísticas: 5min..30d móvel (turns antigos saem da janela, pode parecer um «reset») / all cumulativo (sessão inteira, nunca zera, padrão)",
+        ru: "Окно статистики: 5min..30d скользящее (старые turn'ы уходят, выглядит как «сброс») / all накопительный (вся сессия, без сброса, по умолчанию)",
+    },
+    qpDisplayLabel: {
+        zh: "显示：",
+        en: "Display: ",
+        ja: "表示：",
+        de: "Anzeige: ",
+        es: "Mostrar: ",
+        fr: "Affichage : ",
+        pt: "Exibição: ",
+        ru: "Отображение: ",
+    },
+    qpDisplayDetail: {
+        // option VALUES (token/cost/both) are not translated — identical across locales
+        zh: "token / cost / both",
+        en: "token / cost / both",
+        ja: "token / cost / both",
+        de: "token / cost / both",
+        es: "token / cost / both",
+        fr: "token / cost / both",
+        pt: "token / cost / both",
+        ru: "token / cost / both",
+    },
+    qpSbiVisibleLabel: {
+        // "Indicator" (not the internal "SBI" abbreviation for VS Code's
+        // StatusBarItem API) — end users do not know what an SBI is.
+        zh: "token 指示器可见：",
+        en: "Token indicator visible: ",
+        ja: "トークン インジケーター 表示：",
+        de: "Token-Indikator sichtbar: ",
+        es: "Indicador de tokens visible: ",
+        fr: "Indicateur de tokens visible : ",
+        pt: "Indicador de tokens visível: ",
+        ru: "Индикатор токенов виден: ",
+    },
+    qpOn: {
+        zh: "开",
+        en: "on",
+        ja: "オン",
+        de: "an",
+        es: "activado",
+        fr: "activé",
+        pt: "ativo",
+        ru: "вкл",
+    },
+    qpOff: {
+        zh: "关",
+        en: "off",
+        ja: "オフ",
+        de: "aus",
+        es: "desactivado",
+        fr: "désactivé",
+        pt: "desativado",
+        ru: "выкл",
+    },
+    qpNotifyCompletion: {
+        zh: "完成时通知",
+        en: "Notify on completion",
+        ja: "完了時に通知",
+        de: "Bei Abschluss benachrichtigen",
+        es: "Notificar al finalizar",
+        fr: "Notifier à l'achèvement",
+        pt: "Notificar ao concluir",
+        ru: "Уведомлять при завершении",
+    },
+    qpNotifyFocused: {
+        zh: "聚焦时也通知",
+        en: "Also notify when focused",
+        ja: "フォーカス時も通知",
+        de: "Auch im fokussierten Zustand benachrichtigen",
+        es: "Notificar también cuando tiene el foco",
+        fr: "Notifier même lorsque la fenêtre est au premier plan",
+        pt: "Notificar também quando em foco",
+        ru: "Уведомлять даже при активном окне",
+    },
+    qpSoundLabel: {
+        zh: "声音：",
+        en: "Sound: ",
+        ja: "サウンド：",
+        de: "Ton: ",
+        es: "Sonido: ",
+        fr: "Son : ",
+        pt: "Som: ",
+        ru: "Звук: ",
+    },
+    qpSessionTotalPrefix: {
+        zh: "会话总计：",
+        en: "Session total: ",
+        ja: "セッション合計：",
+        de: "Sitzungsgesamt: ",
+        es: "Total de la sesión: ",
+        fr: "Total de la session : ",
+        pt: "Total da sessão: ",
+        ru: "Итого за сессию: ",
+    },
+    qpSessionTotalDetail: {
+        zh: "全量父会话 token 数（含子代理）",
+        en: "all-time parent session tokens (incl. subagents)",
+        ja: "全期間の親セッションのトークン数（サブエージェント含む）",
+        de: "alle Tokens der Eltern-Sitzung (inkl. Subagenten)",
+        es: "tokens de toda la sesión padre (incl. subagentes)",
+        fr: "tokens de toute la session parente (incl. sous-agents)",
+        pt: "tokens de toda a sessão pai (incl. subagentes)",
+        ru: "все токены родительской сессии (вкл. подагентов)",
+    },
+    qpCost24hLabel: {
+        zh: "24h：",
+        en: "24h: ",
+        ja: "24h：",
+        de: "24h: ",
+        es: "24h: ",
+        fr: "24h : ",
+        pt: "24h: ",
+        ru: "24h: ",
+    },
+    qpCost24hDetail: {
+        zh: "滚动 24h 费用",
+        en: "rolling 24h cost",
+        ja: "直近 24h のコスト",
+        de: "gleitende 24h-Kosten",
+        es: "coste de 24h (móvil)",
+        fr: "coût sur 24h glissantes",
+        pt: "custo de 24h (móvel)",
+        ru: "скользящие затраты за 24ч",
+    },
+    qpCost7dLabel: {
+        zh: "7 天：",
+        en: "7-day: ",
+        ja: "7 日：",
+        de: "7 Tage: ",
+        es: "7 días: ",
+        fr: "7 jours : ",
+        pt: "7 dias: ",
+        ru: "7 дней: ",
+    },
+    qpCost7dDetail: {
+        zh: "滚动 7 天费用",
+        en: "rolling 7d cost",
+        ja: "直近 7 日間のコスト",
+        de: "gleitende 7-Tage-Kosten",
+        es: "coste de 7 días (móvil)",
+        fr: "coût sur 7 jours glissants",
+        pt: "custo de 7 dias (móvel)",
+        ru: "скользящие затраты за 7 дней",
+    },
+    qpCost30dLabel: {
+        zh: "30 天：",
+        en: "30-day: ",
+        ja: "30 日：",
+        de: "30 Tage: ",
+        es: "30 días: ",
+        fr: "30 jours : ",
+        pt: "30 dias: ",
+        ru: "30 дней: ",
+    },
+    qpCost30dDetail: {
+        zh: "滚动 30 天费用",
+        en: "rolling 30d cost",
+        ja: "直近 30 日間のコスト",
+        de: "gleitende 30-Tage-Kosten",
+        es: "coste de 30 días (móvil)",
+        fr: "coût sur 30 jours glissants",
+        pt: "custo de 30 dias (móvel)",
+        ru: "скользящие затраты за 30 дней",
+    },
+    qpCostPartialLabel: {
+        zh: "费用估算不完整",
+        en: "Cost estimate is partial",
+        ja: "コスト見積りは一部です",
+        de: "Kostenschätzung ist unvollständig",
+        es: "La estimación de coste es parcial",
+        fr: "L'estimation du coût est partielle",
+        pt: "A estimativa de custo é parcial",
+        ru: "Оценка стоимости неполная",
+    },
+    qpCostPartialDetail: {
+        zh: "部分轮次无单价记录——显示的 $ 为下限",
+        en: "some turns had no rate entry — displayed $ is a lower bound",
+        ja: "一部のターンに単価記録がありません——表示の $ は下限です",
+        de: "einige Durchläufe ohne Preis-Eintrag — angezeigter $ ist eine Untergrenze",
+        es: "algunos turnos no tenían entrada de precio — el $ mostrado es un límite inferior",
+        fr: "certains tours n'avaient pas d'entrée de tarif — le $ affiché est un minimum",
+        pt: "alguns turnos sem entrada de taxa — o $ exibido é um limite inferior",
+        ru: "некоторые ходы без записи тарифа — показанный $ — это нижняя граница",
+    },
+    qpTurnRunningTpl: {
+        zh: "本轮运行：{secs}s",
+        en: "Turn running: {secs}s",
+        ja: "ターン実行中：{secs}s",
+        de: "Durchlauf läuft: {secs}s",
+        es: "Turno en ejecución: {secs}s",
+        fr: "Tour en cours : {secs}s",
+        pt: "Turno em execução: {secs}s",
+        ru: "Ход выполняется: {secs}s",
+    },
+    qpTurnRunningDetail: {
+        zh: "当前轮次开始至今的时长",
+        en: "time since current turn started",
+        ja: "現在のターン開始からの経過時間",
+        de: "Zeit seit Start des aktuellen Durchlaufs",
+        es: "tiempo desde que empezó el turno actual",
+        fr: "temps écoulé depuis le début du tour actuel",
+        pt: "tempo desde o início do turno atual",
+        ru: "время с начала текущего хода",
+    },
+    qpCopyLabel: {
+        zh: "复制 token 数",
+        en: "Copy token count",
+        ja: "トークン数をコピー",
+        de: "Token-Anzahl kopieren",
+        es: "Copiar recuento de tokens",
+        fr: "Copier le nombre de tokens",
+        pt: "Copiar contagem de tokens",
+        ru: "Копировать количество токенов",
+    },
+    qpCopyDetail: {
+        zh: "将全量会话 token 总数复制到剪贴板",
+        en: "copy all-time session total to clipboard",
+        ja: "全期間のセッション合計をクリップボードにコピー",
+        de: "Sitzungs-Gesamtanzahl in die Zwischenablage kopieren",
+        es: "copiar el total de tokens de la sesión al portapapeles",
+        fr: "copier le total de tokens de la session dans le presse-papiers",
+        pt: "copiar o total de tokens da sessão para a área de transferência",
+        ru: "скопировать общее число токенов сессии в буфер обмена",
+    },
+    qpResetLabel: {
+        zh: "重置会话统计",
+        en: "Reset session stats",
+        ja: "セッション統計をリセット",
+        de: "Sitzungsstatistiken zurücksetzen",
+        es: "Reiniciar estadísticas de la sesión",
+        fr: "Réinitialiser les statistiques de session",
+        pt: "Redefinir estatísticas da sessão",
+        ru: "Сбросить статистику сессии",
+    },
+    qpResetDetail: {
+        zh: "标记下次触发时全量重读（大型 transcript 约 1 秒）",
+        en: "mark for full re-read next fire (~1s for large transcripts)",
+        ja: "次回起動時にフル再読み込みをマーク（大きな transcript で約 1 秒）",
+        de: "Vollständiges Neu-Einlesen beim nächsten Tick markieren (~1s für große Transkripte)",
+        es: "marcar para relectura completa en el próximo disparo (~1s para transcripciones grandes)",
+        fr: "marquer pour une relecture complète au prochain déclencheur (~1s pour les gros relevés)",
+        pt: "marcar para releitura completa na próxima execução (~1s para transcrições grandes)",
+        ru: "отметить для полного перечитывания при следующем запуске (~1с для больших транскриптов)",
+    },
+    qpOpenDirLabel: {
+        zh: "打开状态目录",
+        en: "Open state dir",
+        ja: "状態ディレクトリを開く",
+        de: "Status-Verzeichnis öffnen",
+        es: "Abrir directorio de estado",
+        fr: "Ouvrir le répertoire d'état",
+        pt: "Abrir diretório de estado",
+        ru: "Открыть папку состояния",
+    },
+    qpOpenDirDetail: {
+        zh: "在文件管理器中显示 ~/.claude/cc-tab-status",
+        en: "reveal ~/.claude/cc-tab-status in your file manager",
+        ja: "~/.claude/cc-tab-status をファイルマネージャーで表示",
+        de: "~/.claude/cc-tab-status im Dateimanager anzeigen",
+        es: "mostrar ~/.claude/cc-tab-status en tu gestor de archivos",
+        fr: "révéler ~/.claude/cc-tab-status dans votre gestionnaire de fichiers",
+        pt: "revelar ~/.claude/cc-tab-status no seu gerenciador de arquivos",
+        ru: "показать ~/.claude/cc-tab-status в файловом менеджере",
+    },
+    qpOpenSettingsLabel: {
+        zh: "打开设置",
+        en: "Open Settings",
+        ja: "設定を開く",
+        de: "Einstellungen öffnen",
+        es: "Abrir configuración",
+        fr: "Ouvrir les paramètres",
+        pt: "Abrir configurações",
+        ru: "Открыть настройки",
+    },
+    qpOpenSettingsDetail: {
+        zh: "完整的 ccStatusDot.* 设置",
+        en: "full ccStatusDot.* settings",
+        ja: "ccStatusDot.* の全設定",
+        de: "alle ccStatusDot.*-Einstellungen",
+        es: "todos los ajustes de ccStatusDot.*",
+        fr: "tous les paramètres ccStatusDot.*",
+        pt: "todos os ajustes ccStatusDot.*",
+        ru: "все настройки ccStatusDot.*",
+    },
+
+    // === Sub-picker placeHolders (二级 picker) ===
+    spSelectWindow: {
+        zh: "选择窗口",
+        en: "Select window",
+        ja: "ウィンドウを選択",
+        de: "Fenster wählen",
+        es: "Seleccionar ventana",
+        fr: "Choisir une fenêtre",
+        pt: "Selecionar janela",
+        ru: "Выбрать окно",
+    },
+    spSelectDisplay: {
+        zh: "选择显示模式",
+        en: "Select display mode",
+        ja: "表示モードを選択",
+        de: "Anzeigemodus wählen",
+        es: "Seleccionar modo de visualización",
+        fr: "Choisir le mode d'affichage",
+        pt: "Selecionar modo de exibição",
+        ru: "Выбрать режим отображения",
+    },
+    spSelectSound: {
+        zh: "选择声音",
+        en: "Select sound",
+        ja: "サウンドを選択",
+        de: "Ton wählen",
+        es: "Seleccionar sonido",
+        fr: "Choisir un son",
+        pt: "Selecionar som",
+        ru: "Выбрать звук",
+    },
+
+    // === Feedback messages ===
+    // fbCopiedTpl: count {n} is placed as a SUFFIX after a colon (not as a
+    // determiner before the noun). This avoids plural-agreement issues across
+    // languages — English avoids "1 tokens", Russian avoids the 1/few/many
+    // count agreement (1 токен / 2-4 токена / 5 токенов), Spanish/Portuguese
+    // avoid "1 tokens". The noun stays fixed (Token count / Anzahl / Recuento /
+    // Nombre / Contagem / genitive-plural after Скопировано), so any {n} value
+    // reads grammatically.
+    fbCopiedTpl: {
+        zh: "已复制 token 数到剪贴板：{n}（{fmt}）",
+        en: "Token count copied to clipboard: {n} ({fmt})",
+        ja: "クリップボードにコピーしたトークン数：{n}（{fmt}）",
+        de: "Token-Anzahl in die Zwischenablage kopiert: {n} ({fmt})",
+        es: "Recuento de tokens copiado al portapapeles: {n} ({fmt})",
+        fr: "Nombre de tokens copié dans le presse-papiers : {n} ({fmt})",
+        pt: "Contagem de tokens copiada para a área de transferência: {n} ({fmt})",
+        ru: "Скопировано токенов в буфер обмена: {n} ({fmt})",
+    },
+    fbResetOk: {
+        zh: "token 统计已重置——下次 hook 触发将全量重读 transcript（大型会话可能约 1 秒）",
+        en: "Token stats reset — next hook fire re-reads the full transcript (may take ~1s for large sessions)",
+        ja: "トークン統計をリセットしました——次回の hook 起動時に transcript をフル再読み込みします（大きなセッションで約 1 秒かかる場合があります）",
+        de: "Token-Statistiken zurückgesetzt — beim nächsten Hook-Aufruf wird das vollständige Transkript neu eingelesen (~1s für große Sitzungen)",
+        es: "Estadísticas de tokens reiniciadas — el próximo disparo del hook releerá la transcripción completa (puede tardar ~1s en sesiones grandes)",
+        fr: "Statistiques de tokens réinitialisées — au prochain déclencheur du hook, le relevé complet sera relu (peut prendre ~1s pour les grosses sessions)",
+        pt: "Estatísticas de tokens redefinidas — a próxima execução do hook relerá a transcrição completa (pode levar ~1s para sessões grandes)",
+        ru: "Статистика токенов сброшена — при следующем запуске hook будет перечитана полная транскрипция (может занять ~1с для больших сессий)",
+    },
+    fbResetFailPrefix: {
+        zh: "重置失败：",
+        en: "Reset failed: ",
+        ja: "リセット失敗：",
+        de: "Zurücksetzen fehlgeschlagen: ",
+        es: "Reinicio fallido: ",
+        fr: "Échec de la réinitialisation : ",
+        pt: "Falha na redefinição: ",
+        ru: "Сбой сброса: ",
+    },
+    fbPanelFailPrefix: {
+        zh: "cc-status-dot：token 面板失败：",
+        en: "cc-status-dot: token panel failed: ",
+        ja: "cc-status-dot：トークンパネルが失敗しました：",
+        de: "cc-status-dot: Token-Panel fehlgeschlagen: ",
+        es: "cc-status-dot: panel de tokens fallido: ",
+        fr: "cc-status-dot : panneau de tokens échoué : ",
+        pt: "cc-status-dot: painel de tokens falhou: ",
+        ru: "cc-status-dot: сбой панели токенов: ",
+    },
+
+    // === Token SBI tooltip (§G tick) ===
+    ttWindowTpl: {
+        zh: "窗口：{win}",
+        en: "Window: {win}",
+        ja: "ウィンドウ：{win}",
+        de: "Fenster: {win}",
+        es: "Ventana: {win}",
+        fr: "Fenêtre : {win}",
+        pt: "Janela: {win}",
+        ru: "Окно: {win}",
+    },
+    ttSessionTotalTpl: {
+        zh: "会话总计：{fmt} tok",
+        en: "Session total: {fmt} tok",
+        ja: "セッション合計：{fmt} tok",
+        de: "Sitzungsgesamt: {fmt} tok",
+        es: "Total de la sesión: {fmt} tok",
+        fr: "Total de la session : {fmt} tok",
+        pt: "Total da sessão: {fmt} tok",
+        ru: "Итого за сессию: {fmt} tok",
+    },
+    ttSessionCostTpl: {
+        zh: "会话费用：{cost}",
+        en: "Session cost: {cost}",
+        ja: "セッションコスト：{cost}",
+        de: "Sitzungskosten: {cost}",
+        es: "Coste de la sesión: {cost}",
+        fr: "Coût de la session : {cost}",
+        pt: "Custo da sessão: {cost}",
+        ru: "Стоимость сессии: {cost}",
+    },
+    tt24hTpl: {
+        zh: "24h：{cost}",
+        en: "24h: {cost}",
+        ja: "24h：{cost}",
+        de: "24h: {cost}",
+        es: "24h: {cost}",
+        fr: "24h : {cost}",
+        pt: "24h: {cost}",
+        ru: "24h: {cost}",
+    },
+    tt7dayTpl: {
+        zh: "7 天：{cost}",
+        en: "7-day: {cost}",
+        ja: "7 日：{cost}",
+        de: "7 Tage: {cost}",
+        es: "7 días: {cost}",
+        fr: "7 jours : {cost}",
+        pt: "7 dias: {cost}",
+        ru: "7 дней: {cost}",
+    },
+    tt30dayTpl: {
+        zh: "30 天：{cost}",
+        en: "30-day: {cost}",
+        ja: "30 日：{cost}",
+        de: "30 Tage: {cost}",
+        es: "30 días: {cost}",
+        fr: "30 jours : {cost}",
+        pt: "30 dias: {cost}",
+        ru: "30 дней: {cost}",
+    },
+    ttPartial: {
+        zh: "注：估算不完整——部分轮次无单价记录",
+        en: "Note: partial estimate — some turns had no rate entry",
+        ja: "注：見積りは一部です——一部ターンに単価記録がありません",
+        de: "Hinweis: unvollständige Schätzung — einige Durchläufe ohne Preis-Eintrag",
+        es: "Nota: estimación parcial — algunos turnos no tenían entrada de precio",
+        fr: "Note : estimation partielle — certains tours n'avaient pas d'entrée de tarif",
+        pt: "Nota: estimativa parcial — alguns turnos sem entrada de taxa",
+        ru: "Примечание: неполная оценка — некоторые ходы без записи тарифа",
+    },
+    ttLastModelTpl: {
+        zh: "最近模型：{model}",
+        en: "Last model: {model}",
+        ja: "最終モデル：{model}",
+        de: "Letztes Modell: {model}",
+        es: "Último modelo: {model}",
+        fr: "Dernier modèle : {model}",
+        pt: "Último modelo: {model}",
+        ru: "Последняя модель: {model}",
+    },
+    ttProjectTpl: {
+        zh: "项目：{project}",
+        en: "Project: {project}",
+        ja: "プロジェクト：{project}",
+        de: "Projekt: {project}",
+        es: "Proyecto: {project}",
+        fr: "Projet : {project}",
+        pt: "Projeto: {project}",
+        ru: "Проект: {project}",
+    },
+    ttClickConfig: {
+        zh: "（点击配置）",
+        en: "(click to configure)",
+        ja: "（クリックで設定）",
+        de: "(zum Konfigurieren klicken)",
+        es: "(clic para configurar)",
+        fr: "(cliquer pour configurer)",
+        pt: "(clique para configurar)",
+        ru: "(щёлкните для настройки)",
+    },
+    ttNoDataTpl: {
+        zh: "cc-status-dot：暂无 token 数据（sid：{sid}...）",
+        en: "cc-status-dot: no token data yet (sid: {sid}...)",
+        ja: "cc-status-dot：まだトークンデータがありません（sid：{sid}...）",
+        de: "cc-status-dot: noch keine Token-Daten (sid: {sid}...)",
+        es: "cc-status-dot: sin datos de tokens aún (sid: {sid}...)",
+        fr: "cc-status-dot: pas encore de données de tokens (sid : {sid}...)",
+        pt: "cc-status-dot: sem dados de tokens ainda (sid: {sid}...)",
+        ru: "cc-status-dot: пока нет данных о токенах (sid: {sid}...)",
+    },
+    ttUnavailableTpl: {
+        zh: "cc-status-dot：token 统计不可用（sid：{sid}...）",
+        en: "cc-status-dot: token stats unavailable (sid: {sid}...)",
+        ja: "cc-status-dot：トークン統計は利用できません（sid：{sid}...）",
+        de: "cc-status-dot: Token-Statistiken nicht verfügbar (sid: {sid}...)",
+        es: "cc-status-dot: estadísticas de tokens no disponibles (sid: {sid}...)",
+        fr: "cc-status-dot: statistiques de tokens indisponibles (sid : {sid}...)",
+        pt: "cc-status-dot: estatísticas de tokens indisponíveis (sid: {sid}...)",
+        ru: "cc-status-dot: статистика токенов недоступна (sid: {sid}...)",
+    },
+    ttNoPanel: {
+        // \n in the baked IIFE becomes a real newline when VSCode renders the tooltip.
+        zh: "cc-status-dot：无激活的 CC 面板\n（打开一个 Claude Code 标签页以填充数据）",
+        en: "cc-status-dot: no active CC panel\n(open a Claude Code tab to populate)",
+        ja: "cc-status-dot：アクティブな CC パネルがありません\n（Claude Code タブを開くと表示されます）",
+        de: "cc-status-dot: kein aktives CC-Panel\n(Öffne einen Claude-Code-Tab zum Befüllen)",
+        es: "cc-status-dot: sin panel de CC activo\n(abre una pestaña de Claude Code para poblar)",
+        fr: "cc-status-dot: aucun panneau CC actif\n(ouvrez un onglet Claude Code pour le remplir)",
+        pt: "cc-status-dot: sem painel CC ativo\n(abra uma aba do Claude Code para popular)",
+        ru: "cc-status-dot: нет активной панели CC\n(откройте вкладку Claude Code для заполнения)",
+    },
+    ttNoPanelCreation: {
+        zh: "cc-status-dot：token 统计（无激活 CC 面板）",
+        en: "cc-status-dot: token stats (no active CC panel)",
+        ja: "cc-status-dot：トークン統計（アクティブな CC パネルがありません）",
+        de: "cc-status-dot: Token-Statistiken (kein aktives CC-Panel)",
+        es: "cc-status-dot: estadísticas de tokens (sin panel CC activo)",
+        fr: "cc-status-dot: statistiques de tokens (aucun panneau CC actif)",
+        pt: "cc-status-dot: estatísticas de tokens (sem painel CC ativo)",
+        ru: "cc-status-dot: статистика токенов (нет активной панели CC)",
+    },
+
+    // === 4-light SBI tooltip (§F tick + creation-time zero tooltip) ===
+    // Placeholders {done}/{running}/{pending}/{interrupted} are filled at call
+    // sites via .replace() chains. "Claude Code: " is a brand prefix kept
+    // untranslated (matches the threshold alert + token SBI tooltip style).
+    ttCountsTpl: {
+        zh: "Claude Code：{done} 完成，{running} 运行中，{pending} 待输入，{interrupted} 中断",
+        en: "Claude Code: {done} done, {running} running, {pending} pending, {interrupted} interrupted",
+        ja: "Claude Code：{done} 完了、{running} 実行中、{pending} 入力待ち、{interrupted} 中断",
+        de: "Claude Code: {done} abgeschlossen, {running} laufend, {pending} ausstehend, {interrupted} unterbrochen",
+        es: "Claude Code: {done} completados, {running} en ejecución, {pending} pendientes, {interrupted} interrumpidos",
+        fr: "Claude Code : {done} terminés, {running} en cours, {pending} en attente, {interrupted} interrompus",
+        pt: "Claude Code: {done} concluídos, {running} em execução, {pending} pendentes, {interrupted} interrompidos",
+        ru: "Claude Code: {done} завершено, {running} выполняется, {pending} ожидает, {interrupted} прервано",
+    },
+
+    // === notify() messages (§B — turn-complete / error feedback) ===
+    // ntTurnComplete carries the "Claude Code: " brand prefix baked in (it is
+    // the FULL notification body for the done state). ntRateLimit /
+    // ntOverloaded / ntInterrupted are the per-state短 messages concatenated
+    // AFTER "Claude Code: " (kept untranslated — same brand decision as
+    // ttCountsTpl above and alCostAlertTpl).
+    ntTurnComplete: {
+        zh: "Claude Code：本轮完成",
+        en: "Claude Code: turn complete",
+        ja: "Claude Code：ターン完了",
+        de: "Claude Code: Durchlauf abgeschlossen",
+        es: "Claude Code: turno completado",
+        fr: "Claude Code : tour terminé",
+        pt: "Claude Code: turno concluído",
+        ru: "Claude Code: ход завершён",
+    },
+    ntRateLimit: {
+        zh: "触发限速",
+        en: "rate limit reached",
+        ja: "レート制限に到達しました",
+        de: "Ratenbegrenzung erreicht",
+        es: "límite de tasa alcanzado",
+        fr: "limite de débit atteinte",
+        pt: "limite de taxa atingido",
+        ru: "достигнут лимит запросов",
+    },
+    ntOverloaded: {
+        zh: "服务器过载",
+        en: "server overloaded",
+        ja: "サーバーが過負荷です",
+        de: "Server überlastet",
+        es: "servidor sobrecargado",
+        fr: "serveur surchargé",
+        pt: "servidor sobrecarregado",
+        ru: "сервер перегружен",
+    },
+    ntInterrupted: {
+        zh: "已中断",
+        en: "interrupted",
+        ja: "中断されました",
+        de: "unterbrochen",
+        es: "interrumpido",
+        fr: "interrompu",
+        pt: "interrompido",
+        ru: "прервано",
+    },
+
+    // === Threshold alert (dispatchNotify direct call in §G tick) ===
+    alCostAlertTpl: {
+        zh: "CC 费用告警：{cost}（24h）",
+        en: "CC cost alert: {cost} (24h)",
+        ja: "CC コスト警告：{cost}（24h）",
+        de: "CC Kosten-Warnung: {cost} (24h)",
+        es: "Alerta de coste de CC: {cost} (24h)",
+        fr: "Alerte coût CC : {cost} (24h)",
+        pt: "Alerta de custo do CC: {cost} (24h)",
+        ru: "Предупреждение о стоимости CC: {cost} (24h)",
+    },
+    // v0.2.5 round-2 (MEDIUM, window-workflow gap surfacing): shown in the
+    // token SBI tooltip ONLY when tj.activeSubagents>0 — i.e. CC has
+    // in-flight subagents/workflow tasks whose tokens settle when the
+    // children complete. Without this line the user sees a stalled count
+    // during a pure-workflow run (parent idle, children working) with no
+    // explanation. The hook's scanSubagentTranscripts (cc-status.js:1540)
+    // gives partial real-time visibility at every parent TOK_EVENT, but a
+    // pure-workflow phase can have the parent idle for an extended period
+    // (no PostToolUse/Stop/UserPromptSubmit firing). The tooltip line tells
+    // the user the displayed total is incrementing in real-time as children
+    // stream AND will fully settle when they complete.
+    //
+    // v0.2.5 round-3 (MEDIUM): the round-2 wording ('tokens settle on
+    // completion / 会计入会话总计') was future-tense and contradicted the
+    // actual data flow — scanSubagentTranscripts (cc-status.js:1540, called
+    // every parent TOK_EVENT at cc-status.js:2088) already attributes
+    // in-flight subagent transcript bytes to the parent sid's buckets
+    // real-time via deriveTokensField, so during a workflow the displayed
+    // total visibly increments (100→600→900). The new wording reflects the
+    // dual 'real-time partial + final settlement on completion' semantics.
+    // Calibrated to match the current CC behavior; if CC starts writing
+    // workflow transcripts to a discoverable file the message can be
+    // retired (the count would then fully cover workflow tokens and the
+    // caveat would mislead).
+    ttWorkflowGap: {
+        zh: "$(info) 子代理 / workflow 运行中：token 已部分实时计入，结束时补齐结算",
+        en: "$(info) Subagents / workflow in flight — tokens incrementally counted, final settlement on completion",
+        ja: "$(info) サブエージェント / ワークフロー実行中：トークンは部分的にリアルタイム計上され、完了時に最終確定",
+        de: "$(info) Subagents / Workflow aktiv — Tokens werden schrittweise gezählt, Endabrechnung bei Abschluss",
+        es: "$(info) Subagentes / workflow en ejecución — tokens contados incrementalmente, cierre final al completarse",
+        fr: "$(info) Sous-agents / workflow en cours — tokens comptés incrémentalement, règlement final à l'achèvement",
+        pt: "$(info) Subagentes / workflow em execução — tokens contados incrementalmente, liquidação final ao concluir",
+        ru: "$(info) Субагенты / workflow выполняются — токены учитываются по мере поступления, финальный расчёт при завершении",
+    },
+};
 
 // ---------------------------------------------------------------------------
 // --- Anchor strings (verified byte-exact against CC 2.1.204) ---------------
@@ -486,110 +1386,11 @@ function fail(msg: string): never {
 // JSONC: settings.json may contain // and /* */ comments + trailing commas.
 // Strip them with a tiny scanner that respects string literals, then JSON.parse.
 // ---------------------------------------------------------------------------
-
-/** Skip whitespace + JSONC comments (both `// line` and `/* block *​/`)
- *  starting at offset `i` in `raw`. Returns the index of the next
- *  significant (non-ws, non-comment) character, or `raw.length` if the rest
- *  of the string is all ws/comments.
- *
- *  Centralized helper for the 7+ sites that previously inlined this same
- *  scan (stripJsonc / scanJsonValueEnd / findTopLevelKey / surgicalSet… /
- *  surgicalRemove…) — the e2e code-style review flagged the triplication as
- *  a DRY violation that amplified any tweak (e.g. supporting `#` line
- *  comments) into a 7-site edit. Returns the new offset; callers MUST NOT
- *  assume the returned char is a value boundary (it could be `}`, `]`, `,`,
- *  or any structural char).
- *
- *  Does NOT track `inString` — callers that need string-aware scanning
- *  (stripJsonc's main loop) keep their own inString state and call this
- *  only at known syntax-level positions (e.g. right after a `,`). */
-function skipWsAndComments(raw: string, i: number): number {
-    while (i < raw.length) {
-        const c = raw[i];
-        const next = raw[i + 1];
-        if (/\s/.test(c)) {
-            i += 1;
-            continue;
-        }
-        if (c === "/" && next === "/") {
-            while (i < raw.length && raw[i] !== "\n") i += 1;
-            continue;
-        }
-        if (c === "/" && next === "*") {
-            i += 2;
-            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
-            i += 2;
-            continue;
-        }
-        break;
-    }
-    return i;
-}
-
-function stripJsonc(text: string): string {
-    // Single-pass scanner: copies every byte that isn't a // or /* */ comment
-    // verbatim, while tracking `inString` so a `,}` or `,]` SEQUENCE INSIDE A
-    // STRING (e.g. a regex char class `[,}]` or a JSON one-liner arg) is NEVER
-    // mistaken for JSON syntax. The trailing-comma tolerance is done INLINE
-    // (not as a post-pass regex) precisely because a post-pass regex was a
-    // silent-corruption bug: it operated on the full flattened output, blind
-    // to string boundaries, so any user settings.json string holding `,}` or
-    // `,]` had its comma dropped at parse time and was then persisted back to
-    // disk via both the surgical-splice and round-trip write paths.
-    let out = "";
-    let i = 0;
-    let inString = false;
-    let quote = "";
-    while (i < text.length) {
-        const c = text[i];
-        const next = text[i + 1];
-        if (inString) {
-            out += c;
-            if (c === "\\") {
-                // Keep escaped char verbatim.
-                out += next ?? "";
-                i += 2;
-                continue;
-            }
-            if (c === quote) inString = false;
-            i += 1;
-            continue;
-        }
-        if (c === '"' || c === "'") {
-            inString = true;
-            quote = c;
-            out += c;
-            i += 1;
-            continue;
-        }
-        if (c === "/" && next === "/") {
-            while (i < text.length && text[i] !== "\n") i += 1;
-            continue;
-        }
-        if (c === "/" && next === "*") {
-            i += 2;
-            while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i += 1;
-            i += 2;
-            continue;
-        }
-        // Trailing-comma tolerance (string-aware): when we see a comma at the
-        // syntax level (not inString), peek ahead past ws + comments; if the
-        // next significant char closes a `}` or `]`, drop the comma. Uses
-        // the canonical skipWsAndComments helper so any future tweak to the
-        // comment-skip discipline (e.g. supporting `#` line comments) lands
-        // in one place instead of seven.
-        if (c === ",") {
-            const j = skipWsAndComments(text, i + 1);
-            if (text[j] === "}" || text[j] === "]") {
-                i += 1; // drop the comma — it's trailing.
-                continue;
-            }
-        }
-        out += c;
-        i += 1;
-    }
-    return out;
-}
+// v0.2.4 round-2 (ARCH-1 first slice): skipWsAndComments / stripJsonc /
+// scanJsonValueEnd + the surgical-json helpers + cmpVerStr moved to src/
+// modules (pure functions with no closure deps). parseJsonc stays here
+// because it depends on the local fail() helper for anchor-tagged error
+// formatting; it calls the imported stripJsonc via the import above.
 
 function parseJsonc(text: string, sourceLabel: string): Record<string, unknown> {
     try {
@@ -603,362 +1404,12 @@ function parseJsonc(text: string, sourceLabel: string): Record<string, unknown> 
 }
 
 // ---------------------------------------------------------------------------
-// Surgical JSONC editor
-// ---------------------------------------------------------------------------
-// The pre-fix wireHooks/unwireHooks used a parse-mutate-stringify round-trip
-// that DROPPED user // and /* */ comments and reformatted the entire file.
-// Users who keep notes / section headers in settings.json lost them on every
-// install + every re-wire triggered by a hook-command change. These helpers
-// locate the byte range of ONE top-level key's value and let us splice just
-// that range, leaving the rest of the file byte-for-byte identical.
-//
-// Limitations (acceptable for our use case):
-//   - Only finds keys at the TOP LEVEL of the root object (settings.json's
-//     "hooks" key lives at top level, so this is fine).
-//   - The REPLACED value loses any comments that were INSIDE it (e.g. inside
-//     the hooks object). Comments ELSEWHERE in the file are preserved
-//     verbatim. The user almost never comments inside "hooks"; the common
-//     case (top-level // notes, section headers) is fully preserved.
-//   - Single-quoted strings (tolerated by stripJsonc) at top level are also
-//     tolerated by the scanner.
-// ---------------------------------------------------------------------------
-
-/**
- * Scan one JSON value starting at offset `start` in `raw`. Returns the offset
- * JUST PAST the value's last character (so raw.slice(start, end) is the value
- * including its delimiters). Handles objects, arrays, strings, numbers, true,
- * false, null, and skips // and /* *​/ comments inside composite values.
- */
-function scanJsonValueEnd(raw: string, start: number): number {
-    // Skip leading whitespace + comments (canonical helper — DRY across the
-    // 7+ sites that previously inlined this scan).
-    const valueStart = skipWsAndComments(raw, start);
-    let i = valueStart;
-    if (i >= raw.length) return i;
-    const opener = raw[i];
-    // Composite value: { ... } or [ ... ] — walk depth, skip strings + comments.
-    if (opener === "{" || opener === "[") {
-        let depth = 0;
-        let inString = false;
-        let quote = "";
-        while (i < raw.length) {
-            const c = raw[i];
-            const next = raw[i + 1];
-            if (inString) {
-                if (c === "\\") {
-                    i += 2;
-                    continue;
-                }
-                if (c === quote) inString = false;
-                i += 1;
-                continue;
-            }
-            if (c === "/" && next === "/") {
-                while (i < raw.length && raw[i] !== "\n") i += 1;
-                continue;
-            }
-            if (c === "/" && next === "*") {
-                i += 2;
-                while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
-                i += 2;
-                continue;
-            }
-            if (c === '"' || c === "'") {
-                inString = true;
-                quote = c;
-                i += 1;
-                continue;
-            }
-            if (c === "{" || c === "[") depth += 1;
-            else if (c === "}" || c === "]") {
-                depth -= 1;
-                if (depth === 0) {
-                    i += 1;
-                    break;
-                }
-            }
-            i += 1;
-        }
-        return i;
-    }
-    // String value.
-    if (opener === '"' || opener === "'") {
-        const quote = opener;
-        i += 1;
-        while (i < raw.length) {
-            if (raw[i] === "\\") {
-                i += 2;
-                continue;
-            }
-            if (raw[i] === quote) {
-                i += 1;
-                break;
-            }
-            i += 1;
-        }
-        return i;
-    }
-    // Primitive (number / true / false / null) — walk until a top-level
-    // separator or newline ends the token.
-    while (i < raw.length && !/[,\]\}]/.test(raw[i])) i += 1;
-    return i;
-}
-
-/**
- * Find the byte range of a top-level key's value in a JSONC object literal.
- * Returns `{ keyStart, keyEnd, colon, valueStart, valueEnd }` describing the
- * key token, the colon after it, and the value byte range — or `null` if the
- * key is absent or the root is not an object literal.
- *
- * `valueStart` is the offset of the first non-whitespace, non-comment char of
- * the value; `valueEnd` is just past the value's last char (so
- * `raw.slice(valueStart, valueEnd)` is the value text including delimiters).
- */
-interface KeyRange {
-    keyStart: number;
-    keyEnd: number;
-    colon: number;
-    valueStart: number;
-    valueEnd: number;
-}
-function findTopLevelKey(raw: string, key: string): KeyRange | null {
-    let i = 0;
-    let inString = false;
-    let quote = "";
-    let depth = 0;
-    // Find the opening brace of the root object.
-    while (i < raw.length) {
-        const c = raw[i];
-        const next = raw[i + 1];
-        if (inString) {
-            if (c === "\\") {
-                i += 2;
-                continue;
-            }
-            if (c === quote) inString = false;
-            i += 1;
-            continue;
-        }
-        if (c === "/" && next === "/") {
-            while (i < raw.length && raw[i] !== "\n") i += 1;
-            continue;
-        }
-        if (c === "/" && next === "*") {
-            i += 2;
-            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
-            i += 2;
-            continue;
-        }
-        if (c === '"' || c === "'") {
-            inString = true;
-            quote = c;
-            i += 1;
-            continue;
-        }
-        if (c === "{") {
-            depth = 1;
-            i += 1;
-            break;
-        }
-        // Skip leading whitespace / BOM / etc before the root brace.
-        i += 1;
-    }
-    if (depth !== 1) return null; // no root object
-    // Walk the top-level object's members.
-    while (i < raw.length) {
-        const c = raw[i];
-        const next = raw[i + 1];
-        if (inString) {
-            if (c === "\\") {
-                i += 2;
-                continue;
-            }
-            if (c === quote) inString = false;
-            i += 1;
-            continue;
-        }
-        if (c === "/" && next === "/") {
-            while (i < raw.length && raw[i] !== "\n") i += 1;
-            continue;
-        }
-        if (c === "/" && next === "*") {
-            i += 2;
-            while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i += 1;
-            i += 2;
-            continue;
-        }
-        if (/\s/.test(c)) {
-            i += 1;
-            continue;
-        }
-        if (c === "}") {
-            // End of root object.
-            return null;
-        }
-        if (c === '"' || c === "'") {
-            // Member key.
-            const keyStart = i;
-            quote = c;
-            inString = true;
-            i += 1;
-            let keyValue = "";
-            while (i < raw.length) {
-                if (raw[i] === "\\") {
-                    keyValue += raw[i] + (raw[i + 1] ?? "");
-                    i += 2;
-                    continue;
-                }
-                if (raw[i] === quote) {
-                    inString = false;
-                    i += 1;
-                    break;
-                }
-                keyValue += raw[i];
-                i += 1;
-            }
-            const keyEnd = i;
-            // Find the colon, allowing ws + JSONC comments between key and
-            // colon (uncommon but valid JSONC). Uses the canonical
-            // skipWsAndComments helper so the comment-skip discipline is
-            // shared with stripJsonc / scanJsonValueEnd.
-            i = skipWsAndComments(raw, i);
-            if (raw[i] !== ":") {
-                // Malformed — bail.
-                return null;
-            }
-            const colon = i;
-            i += 1;
-            const valueEnd = scanJsonValueEnd(raw, i);
-            // scanJsonValueEnd returns offset past leading whitespace+comments
-            // too — recompute valueStart as the first non-ws/non-comment char
-            // via the canonical helper.
-            const vStart = skipWsAndComments(raw, i);
-            if (keyValue === key) {
-                return { keyStart, keyEnd, colon, valueStart: vStart, valueEnd };
-            }
-            i = valueEnd;
-            // Skip the trailing comma if present (and any comments / ws around it).
-            i = skipWsAndComments(raw, i);
-            if (raw[i] === ",") i += 1;
-            continue;
-        }
-        // Unexpected token at top level — bail.
-        i += 1;
-    }
-    return null;
-}
-
-/**
- * Splice a top-level key's value in a JSONC object literal, preserving the
- * rest of the file byte-for-byte. If the key is absent, inserts a new
- * `"key": <valueJson>` member after the opening brace (with 2-space indent
- * matching the conventional settings.json style). Returns the new raw text.
- *
- * For our use case (settings.json "hooks" key), the value is always a JSON
- * object we computed ourselves, so it contains no comments to preserve. The
- * surrounding file (other top-level keys + their comments) is untouched.
- */
-function surgicalSetTopLevelKey(raw: string, key: string, valueJson: string): string {
-    const range = findTopLevelKey(raw, key);
-    if (range) {
-        // Replace just the value byte range.
-        return raw.slice(0, range.valueStart) + valueJson + raw.slice(range.valueEnd);
-    }
-    // Key absent — insert after the opening brace of the root object.
-    // Find the opening brace, skipping leading comments / whitespace / BOM
-    // via the canonical helper. (The prior hand-rolled loop tracked
-    // inString against the pathological "string before root brace" case,
-    // which is invalid JSONC anyway — skipWsAndComments covers every
-    // real-world prefix: BOM, whitespace, // line notes, /* file headers */.)
-    const braceIdx = skipWsAndComments(raw, 0);
-    if (raw[braceIdx] !== "{") {
-        // Root is not an object (could be `[`, end-of-input, or any other
-        // unexpected token) — can't safely splice. Return raw unchanged so
-        // the caller falls through to its non-surgical handling.
-        return raw;
-    }
-    // Heuristic indentation: 2 spaces (matches the JSON.stringify(obj, null, 2)
-    // style the prior code wrote). If the existing file uses a different indent,
-    // the inserted block still parses correctly (JSON is whitespace-agnostic).
-    const member = `\n  ${JSON.stringify(key)}: ${valueJson},`;
-    // Insert immediately AFTER the opening brace. If there's already content on
-    // the same line, the leading \n moves our entry to its own line.
-    return raw.slice(0, braceIdx + 1) + member + raw.slice(braceIdx + 1);
-}
-
-/**
- * Remove a top-level key (and its trailing comma) from a JSONC object literal,
- * preserving the rest of the file byte-for-byte. Returns the new raw text, or
- * the original text if the key is absent. Handles the trailing-comma-after-
- * last-member edge case so the result is still valid JSONC.
- */
-function surgicalRemoveTopLevelKey(raw: string, key: string): string {
-    const range = findTopLevelKey(raw, key);
-    if (!range) return raw;
-    // We need to remove the key token + colon + value + trailing comma (if any).
-    // Start from keyStart; end at valueEnd, then consume any trailing comma
-    // (skipping ws + comments via the canonical helper).
-    const end = skipWsAndComments(raw, range.valueEnd);
-    let consume = end;
-    if (raw[consume] === ",") consume += 1;
-    // Also trim trailing whitespace on the value's line so we don't leave a
-    // dangling blank line. Walk start backward to include the key's leading
-    // newline (if present) so we don't leave a blank line above either.
-    let start = range.keyStart;
-    // Walk backward over whitespace but stop at a newline boundary so we eat
-    // the indentation + the preceding newline (cleaner result).
-    while (start > 0 && /[ \t]/.test(raw[start - 1])) start -= 1;
-    if (start > 0 && raw[start - 1] === "\n") start -= 1;
-    return raw.slice(0, start) + raw.slice(consume);
-}
-
-// ---------------------------------------------------------------------------
 // Extension discovery — find the highest-version anthropic.claude-code-* dir
 // ---------------------------------------------------------------------------
-
-/** Compare two `X.Y.Z` (or `X.Y`, or any segment count) version strings.
- *  Returns >0 if a>b, <0 if a<b, 0 if equal. Numeric per-segment comparison
- *  (not lexical). Missing segments on either side are treated as 0.
- *
- *  Canonical helper for ALL semver comparisons in this file + the companion
- *  (companion/extension.ts has its own cmpVerStr that MIRRORS this body —
- *  keep them in lockstep; the companion compiles standalone into a .vsix so
- *  it cannot import from patch.ts at runtime). A future 4-segment or
- *  pre-release-tag change touches ONE function (this one) + the mirror. */
-function cmpSemver(a: string, b: string): number {
-    const pa = a.split(".").map((x) => Number(x) || 0);
-    const pb = b.split(".").map((x) => Number(x) || 0);
-    const len = Math.max(pa.length, pb.length);
-    for (let i = 0; i < len; i++) {
-        const ai = pa[i] ?? 0;
-        const bi = pb[i] ?? 0;
-        if (ai !== bi) return ai - bi;
-    }
-    return 0;
-}
-
-function cmpVerStr(a: string, b: string): number {
-    // Thin wrapper around cmpSemver — kept as a local alias so existing call
-    // sites stay readable; the canonical helper name is cmpSemver.
-    return cmpSemver(a, b);
-}
-
-function cmpVer(a: number[], b: number[]): number {
-    // Compare semver-style numeric arrays component-wise, treating a missing
-    // component as 0 (so [1,2] === [1,2,0]). Robust to future 4-segment
-    // version schemes without a magic count; coupled to but not hard-tied to
-    // the 3-capture regex in discoverExtension. Uses the same per-segment
-    // logic as cmpSemver (canonical comparator) — kept as a number[]-flavored
-    // alias because discoverExtension already parses versions into number[]s
-    // at scan time and a round-trip through string join/split would be silly.
-    const len = Math.max(a.length, b.length);
-    for (let i = 0; i < len; i++) {
-        const ai = a[i] ?? 0;
-        const bi = b[i] ?? 0;
-        if (ai !== bi) return ai - bi;
-    }
-    return 0;
-}
+// v0.2.4 round-2 (ARCH-1 first slice): scanJsonValueEnd / KeyRange /
+// findTopLevelKey / surgicalSetTopLevelKey / surgicalRemoveTopLevelKey moved
+// to src/surgical-json.ts (pure helpers, no closure deps). cmpVerStr moved
+// to src/semver.ts. discoverExtension below uses the imported cmpVerStr.
 
 interface DiscoveredExt {
     dir: string;
@@ -992,7 +1443,7 @@ function discoverExtension(): DiscoveredExt {
                 `\nIs the Claude Code extension installed?`,
         );
     }
-    candidates.sort((a, b) => cmpVer(b.version, a.version));
+    candidates.sort((a, b) => cmpVerStr(b.version.join("."), a.version.join(".")));
     const top = candidates[0];
     if (candidates.length > 1) {
         log(`Multiple CC extensions found; using highest version ${top.version.join(".")} at ${top.dir}`);
@@ -1021,7 +1472,16 @@ function backupOnce(srcPath: string, bakPath: string): boolean {
     // Nothing to back up if the source doesn't exist yet (e.g. first-created
     // settings.json). In that case there's no original to preserve.
     if (!fs.existsSync(srcPath)) return false;
-    fs.copyFileSync(srcPath, bakPath);
+    // v0.2.6 round-3 HIGH (integrity): atomic copy. fs.copyFileSync does NOT
+    // unlink the destination on partial failure (libuv opens with
+    // O_CREAT|O_WRONLY|O_TRUNC and copies in chunks), so a partial .bak left
+    // by ENOSPC/EINTR/SIGKILL/antivirus would be treated as "present" by the
+    // existsSync gate above on the next call — silently becoming the permanent
+    // backup, which a future restore propagates into CC's extension.js /
+    // package.json / settings.json. The forward write path already uses
+    // writeAtomicSync for exactly this reason — the reverse path (and the
+    // .bak files those originals are restored from) must match.
+    atomicCopyFileSync(srcPath, bakPath);
     log(`backed up → ${path.basename(bakPath)}`);
     return true;
 }
@@ -1043,7 +1503,73 @@ function backupOnce(srcPath: string, bakPath: string): boolean {
 function writeAtomicSync(filePath: string, content: string, encoding: BufferEncoding = "utf8"): void {
     const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmp, content, encoding);
-    fs.renameSync(tmp, filePath);
+    try {
+        fs.renameSync(tmp, filePath);
+    } catch (e) {
+        // v0.2.6 round-3 LOW (integrity): best-effort cleanup of orphan .tmp
+        // when renameSync fails (EPERM / EXDEV / EACCES / antivirus lock on
+        // Windows). Without this, every failed rename leaves a .tmp on disk
+        // forever — none of the four write targets (CC ext dir, settings.json,
+        // companion-config.json, last-repatch.json) are swept by the writer's
+        // STATE_DIR .tmp GC, so orphans accumulated across install cycles.
+        try {
+            fs.unlinkSync(tmp);
+        } catch {
+            /* best-effort — orphan is no worse than today */
+        }
+        throw e;
+    }
+}
+
+/**
+ * Atomic write — Buffer variant. Identical tmp+rename discipline as
+ * writeAtomicSync but accepts a Buffer for binary safety. v0.2.6 round-3 HIGH
+ * (integrity): the reverse path (restoreExtension / restoreWebview /
+ * restorePackageJson) and the runtime-file install path (installRuntimeFiles
+ * for cc-status.js + token-rates.json, installCompanion for patch.js) all
+ * previously used fs.copyFileSync — a partial copy under ENOSPC/EINTR/SIGKILL
+ * leaves the destination half-written, and VSCode/Node load these files
+ * verbatim so a half-written extension.js bricks the entire CC extension.
+ * writeAtomicSync's JSDoc explicitly calls out package.json / extension.js /
+ * settings.json as needing atomic protection — those same files are restored
+ * via this helper on --revert, closing the asymmetric-protection gap.
+ *
+ * Buffer path avoids UTF-8 toString round-trip corruption of arbitrary bytes
+ * (CC's minified extension.js is valid UTF-8 but a Buffer-based copy is the
+ * canonical zero-loss form for file→file duplication).
+ */
+function writeAtomicSyncBuf(filePath: string, bytes: Buffer): void {
+    const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, bytes);
+    try {
+        fs.renameSync(tmp, filePath);
+    } catch (e) {
+        try {
+            fs.unlinkSync(tmp);
+        } catch {
+            /* best-effort */
+        }
+        throw e;
+    }
+}
+
+/**
+ * Atomic file copy — read source as Buffer, write via writeAtomicSyncBuf.
+ * v0.2.6 round-3 HIGH/MEDIUM (integrity): replaces every bare
+ * fs.copyFileSync used on CC-controlled files. fs.copyFileSync does NOT unlink
+ * the destination on partial failure (libuv uv_fs_copyfile opens with
+ * O_CREAT|O_WRONLY|O_TRUNC and copies in chunks; on ENOSPC/EINTR/EPERM
+ * mid-copy the destination is left whatever length it reached). A subsequent
+ * existsSync() gate (e.g. backupOnce) then sees the partial file as "present"
+ * and silently skips, so the safety net becomes the corruption source. This
+ * helper reads the source as a Buffer (fully in memory — CC's files are
+ * bounded: extension.js ~3MB, cc-status.js ~100KB, token-rates.json ~1KB,
+ * patch.js ~600KB) and writes via the atomic tmp+rename discipline. POSIX
+ * rename is atomic so the destination is never observed half-written.
+ */
+function atomicCopyFileSync(srcPath: string, dstPath: string): void {
+    const bytes = fs.readFileSync(srcPath);
+    writeAtomicSyncBuf(dstPath, bytes);
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -1091,8 +1617,8 @@ function assertCompiles(code: string, label: string): void {
             }
             const stderr = (err.stderr || err.message || "").trim();
             fail(
-                `${label} would be a SyntaxError — refusing to write (would brick the CC extension).\n` +
-                    `This is a bug in the injected code, not a Claude Code update — fix buildIIFE, then re-run. No files were changed.\n` +
+                `${label} would be a SyntaxError — refusing to write (would break the Claude Code extension, so the patch was aborted).\n` +
+                    `This is an internal patcher bug, not a Claude Code update. No files were changed. Please report it (with the node --check output below) at the project's issue tracker.\n` +
                     `node --check output:\n` +
                     stderr
                         .split("\n")
@@ -1162,6 +1688,52 @@ function buildIIFE(resDir: string): string {
     // discipline as cfgLiteral: patch.ts SOURCE is ASCII-only, the baked IIFE
     // contains literal UTF-8 emoji bytes (see cfgLiteral above).
     const dimEmLiteral = JSON.stringify(SBI_DIM_EM);
+    // v0.2.4 (code-style MEDIUM fix): bake TOK_WIN_KEYS as both a slash-
+    // joined detail string and a JSON-stringified array, then interpolate
+    // into the QuickPick template literal below. Eliminates 2 of the 5
+    // independent copies of the window-key sequence (patch.ts IIFE detail
+    // string + picker list); the writer's TOK_WIN_KEYS + docstring + test
+    // corpus are the remaining 3, each documented + cross-pinned.
+    const tokWinDetailLiteral = TOK_WIN_KEYS.join(" / ");
+    const tokWinKeysLiteral = JSON.stringify([...TOK_WIN_KEYS]);
+    // v0.2.5 round-3 (MEDIUM): bake TOK_WIN_MS as a JS-object literal so the
+    // IIFE can look up the rolling-window span (ms) for the currently-selected
+    // tWin. computeLiveDelta uses this to filter transcript rows by timestamp
+    // — mirroring the hook's deriveTokensField cutoff (cc-status.js:754-756)
+    // so the IIFE's dSum only counts rows INSIDE the rolling window. Without
+    // this filter, a long streaming turn (>5min on the 5min window, etc.)
+    // causes the IIFE to add OUT-of-window bytes to the in-window bucket sum,
+    // over-counting the displayed total. "all" maps to Infinity (cumulative —
+    // no filter). JSON.stringify(Infinity) → null, so we hand-build the
+    // literal with `Infinity` for the "all" key (valid JS, not valid JSON).
+    // hooks/test-contract-sync.mjs pins these ms values against the writer's
+    // TOK_WINDOWS so a future tuning edit touching only one side fails CI.
+    const tokWinMsLiteral =
+        "{" + TOK_WIN_KEYS.map((k) => JSON.stringify(k) + ":" + String(TOK_WIN_MS[k])).join(",") + "}";
+    // v0.2.4 (code-style MEDIUM fix): bake the writer↔reader contract
+    // extensions as JSON-stringified literals so the IIFE bytes follow a
+    // future patch.ts rename (the writer is a standalone .js that cannot
+    // import — its side mirrors these consts).
+    // v0.2.5 round-3 (MEDIUM): re-bake tokOffsetExtLiteral. Round-2 of an
+    // earlier fix stopped baking it because the QuickPick "Reset session
+    // stats" branch no longer touches <sid>.offset. BUT computeLiveDelta
+    // (added in v0.2.5 round-1) still references ".offset" — first as a
+    // raw hard-coded string (silent desync risk if TOK_OFFSET_EXT is ever
+    // renamed: the cross-file contract test would pass on the writer side
+    // while the IIFE side would silently read the wrong filename and zero
+    // the live delta forever). We therefore bake it from the const, the
+    // same discipline as tokForceRereadExtLiteral — single source of truth.
+    const tokOffsetExtLiteral = JSON.stringify(TOK_OFFSET_EXT);
+    const tokForceRereadExtLiteral = JSON.stringify(TOK_FORCEREREAD_EXT);
+    // v0.2.4 (intra-version i18n): bake the 8-language dictionary as a
+    // JSON-stringified object literal. Mirrors the cfgLiteral / dimEmLiteral
+    // baking discipline (single source of truth in patch.ts SOURCE; the IIFE
+    // bytes follow a future dict edit automatically). LANG detection + the
+    // t() helper are injected as small bodyLines entries in §A Preamble below.
+    // JSON.stringify escapes the CJK / em-dash / middot chars into the baked
+    // IIFE bytes as literal UTF-8 (VSCode parses the IIFE as UTF-8) — same as
+    // SBI_LIGHTS_CFG's emoji bytes.
+    const i18nLiteral = JSON.stringify(I18N_DICT);
     // State machine + notification + SBI aggregation mirror docs/STATES.md §1/§4/§4b/§7. Keep in sync.
     //
     // The banner carries INJECT_VERSION + a content hash of the body (everything
@@ -1169,7 +1741,18 @@ function buildIIFE(resDir: string): string {
     // drift — a re-run on an existing same-version install whose IIFE body
     // differs from the current buildIIFE() output triggers a .bak restore +
     // re-inject instead of silently skipping. See STAMP_HASH_LEN above.
+    // v0.2.4 round-2 (ARCH-2): bodyLines is organized into 8 logical sections
+    // (§A..§Z below) — each section starts with a `// === §X ... ===` banner
+    // so a maintainer can locate any IIFE byte sequence by grep'ing the source
+    // for the section name. The mega-line strings (showTokQuickPick, token SBI
+    // tick) stay inline — splitting them is high-risk (any byte drift bricks
+    // CC's extension.js); the banners make them findable without splitting.
+    // Section list: §A Preamble · §B SBI helpers (dispatchNotify + notify) ·
+    // §C 4-light SBI cmd + create · §D Token SBI cmd + create · §E Token panel
+    // helpers + showTokQuickPick · §F Per-tick 4-light aggregation · §G Token
+    // SBI tick + threshold alert · §H Per-panel tick · §Z onDidDispose + close.
     const bodyLines = [
+        // === §A Preamble (open + panel counter + requires + decay constants) ===
         `(function(t){`,
         `if(t.__ccsdDotStarted||!t.panelTab)return;`,
         `t.__ccsdDotStarted=true;`,
@@ -1179,17 +1762,39 @@ function buildIIFE(resDir: string): string {
         `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");`,
         `var RES=${resLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
-        `var DONE_TO_IDLE_MS=5*60*1000;`,
-        `/*§7.2 stale-running heuristic: running files get tool heartbeats, so mtime>SBI_RUNNING_STALE_MS→idle (crashed session whose SessionEnd never fired).*/`,
-        `var SBI_RUNNING_STALE_MS=30*60*1000;`,
+        `var DONE_TO_IDLE_MS=${DONE_TO_IDLE_MS};`,
+        `/*§7.2 stale-running heuristic: v0.2.6 keys off 'since' (the *→running transition time), not mtime. Stop preserveSince path (cc-status.js:390-401) keeps cur.since on inflight>0 Stop heartbeats while writeJsonAtomic refreshes mtime — mtime stays fresh forever under CC's repeated Stop fire on drifted inflight payloads, so mtime-decay never fires. since-decay fires correctly because since is preserved (not refreshed) across the same path. Mirrors done>5min / interrupted>24h decay which already key off since.*/`,
+        `var SBI_RUNNING_STALE_MS=${SBI_RUNNING_STALE_MS};`,
+        /*v0.2.6 round-1 stuck-yellow fix: per-tab running decay threshold.
+         Distinct name from SBI_RUNNING_STALE_MS (30min SBI-only) — per-tab is
+         user-visible so a more aggressive 15min surfaces drift sooner; using
+         a distinct name ALSO preserves test-iife.mjs IIFE.46b's invariant
+         "per-tab tick body does NOT reference SBI_RUNNING_STALE_MS". Used by
+         the per-tab tick body's running branch: running && since &&
+         now-since>SINCE_STALE_MS && since<now → render idle.svg (gray)
+         instead of running.svg (yellow), surfacing stuck sessions to the
+         user. Reader-only (no writer-side equivalent).*/
+        `var SINCE_STALE_MS=${SINCE_STALE_MS};`,
         /*§7.5 interrupted retention: crashed/killed CC sessions whose writer wrote
          state=interrupted never send SessionEnd, so without a retention heuristic
          the 🔴 light would grow monotonically. Decay interrupted files older
          than 24h to idle for COUNTING but keep the file on disk (diagnostic
          value preserved — see docs/STATES.md §7.5). 24h >> SBI_RUNNING_STALE_MS
          (30min) because interrupted is a terminal state the user may want to
-         inspect long after the fact.*/
-        `var INTERRUPTED_RETENTION_MS=24*60*60*1000;`,
+         inspect long after the fact. v0.2.4 round-2 (ARCH-6): the literal is
+         now template-substituted from the top-level INTERRUPTED_RETENTION_MS
+         const (mirrors the existing TOK_WIN_KEYS / TOK_OFFSET_EXT pattern) so
+         hooks/test-contract-sync.mjs can pin writer/reader equality via the
+         named const on both sides.*/
+        `var INTERRUPTED_RETENTION_MS=${INTERRUPTED_RETENTION_MS};`,
+        // v0.2.5 round-3 (MEDIUM): rolling-window spans in ms. Used by
+        // computeLiveDelta to filter transcript rows by timestamp so the
+        // IIFE's live-delta dSum only counts rows INSIDE the rolling window
+        // (mirrors the hook's deriveTokensField cutoff at cc-status.js:754-756).
+        // "all" maps to Infinity (cumulative — no filter). Baked from the
+        // top-level TOK_WIN_MS const so hooks/test-contract-sync.mjs can pin
+        // writer/reader equality.
+        `var TOK_WIN_MS=${tokWinMsLiteral};`,
         // SBI 4-light config table — baked from SBI_LIGHTS_CFG via JSON.stringify.
         // v0.1.17 dropped the v0.1.15/v0.1.16 `pri` field (single SBI uses one
         // SBI_PRIORITY const; per-light priority became dead data). Each entry
@@ -1201,20 +1806,65 @@ function buildIIFE(resDir: string): string {
         // the slot width stays `<ball><1-digit>` regardless of count (position
         // stability). See SBI_DIM_EM JSDoc + docs/STATES.md §7.
         `var DIM_EM=${dimEmLiteral};`,
+        // v0.2.4 (code-style LOW fix): per-light digit cap. Counts >= cap
+        // render as "N" instead of a multi-digit number, keeping the slot
+        // width at `<ball><1-digit>` so count changes never shift the row.
+        // Coupled to the SBI 4-light CFG table structure (the "N" variant
+        // assumes a 1-digit slot). Named now so a future tuning edit (e.g.
+        // cap=9 with a 2-digit slot) hits ONE site and reads clearly at
+        // both call sites (the cap fn + the render ternary below).
+        `var SBI_LIGHT_CAP=4;`,
         `var flashSeq=0,lastTermSince=null,seeded=false;/*flashSeq: interrupted on/off frame index (flashSeq%2)*/`,
+        // === §A.2 i18n (v0.2.4 intra-version: QuickPick + token SBI tooltip + notify + 4-light SBI tooltip) ===
+        // LANG detection: vs.env.language returns the VSCode UI locale as a
+        // BCP-47-ish string ("zh-cn", "zh-tw", "pt-br", "en", "en-us", "ja",
+        // "de", "es", "fr", "ru", ...). We lowercase + take the primary subtag
+        // so all zh-* variants collapse to "zh" and pt-br collapses to "pt".
+        // tr() helper: I18N[k][LANG] → I18N[k].en → k (key-as-fallback, makes a
+        // missing dictionary entry visibly wrong instead of silently empty).
+        // IMPORTANT: helper is named `tr` (not `t`) — the IIFE wrapper signature
+        // is `(function(t){...})(this)` where the parameter `t` is the CC panel
+        // `this` reference (used at runtime as t.panelTab / t.__ccsdSid /
+        // t.__ccsdTitle / t.__ccsdPending). V8 hoists nested function
+        // declarations ABOVE parameter assignment, so naming the helper `t`
+        // would shadow the panel reference and silently no-op the entire IIFE
+        // (line ~1488 `if(t.__ccsdDotStarted||!t.panelTab)return;` would fire
+        // an immediate return on every activation). `tr` collides with no IIFE
+        // local (e/en/k/fs/pth/vs/os/DIR/RES/CC_DEFAULT/CFG/DIM_EM/LANG/I18N/
+        // SEP/cap/flashSeq/seeded/lastTermSince all disjoint).
+        // Dictionary completeness (every key has all 8 languages) is asserted
+        // in hooks/test-iife.mjs IIFE.68-71.
+        `var LANG=(vs.env.language||"en").toLowerCase().split("-")[0];`,
+        `var I18N=${i18nLiteral};`,
+        `function tr(k){var e=I18N[k];return e&&(e[LANG]||e.en)||k;}`,
+        // === §B SBI helpers (dispatchNotify + notify — shared by §G threshold alert) ===
+        // v0.2.4 (architecture MEDIUM fix): shared osascript dispatch helper.
+        // Pre-refactor notify() and the threshold alert path (in the token
+        // tick) each had their OWN copy of the escape regex + execFile call,
+        // so a future fix to the escape rule (or adding sound for alerts)
+        // landed in one path but not the other. dispatchNotify() is now the
+        // single point: escapes `"` and `\\` against AppleScript injection,
+        // shells out to osascript on darwin (falling through to a VS Code
+        // message on async/sync failure), and falls straight through to a
+        // VS Code message on non-darwin. `sev` selects info vs warn for the
+        // fallback; `sndOpt` is an optional escaped sound-name string.
+        `function dispatchNotify(msg,sev,sndOpt){var vsMsg=function(){if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);};if(os.platform()==="darwin"){var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var sndStr=sndOpt?(' sound name "'+sndOpt+'"'):'';try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr],function(err){if(err)vsMsg()})}catch(e){vsMsg()}}else{vsMsg()}}`,
         `function notify(st,err){`,
         `var c=vs.workspace.getConfiguration("ccStatusDot");`,
         `if(!c.get("notify",true))return;`,
         `var focused=vs.window.state.focused;`,
         `if(focused&&!c.get("notifyWhenFocused",true))return;`,
         `var msg,sev;`,
-        `if(st==="done"){sev="info";msg="Claude Code: turn complete"}`,
-        `else{sev="warn";var m={rate_limit:"rate limit reached",overloaded:"server overloaded"}[err]||err||"interrupted";msg="Claude Code: "+m}`,
+        `if(st==="done"){sev="info";msg=tr("ntTurnComplete")}`,
+        `else{sev="warn";var m={rate_limit:tr("ntRateLimit"),overloaded:tr("ntOverloaded")}[err]||err||tr("ntInterrupted");msg="Claude Code: "+m}`,
         `if(t.__ccsdTitle)msg+=" ["+t.__ccsdTitle+"]";`,
-        `/*macOS: osascript system notification; fall through to VSCode message on async/sync failure. Both escMsg and escSnd escape " and \\ so a malicious settings.json cannot break or inject AppleScript.*/`,
-        `if(os.platform()==="darwin"){var snd=c.get("notifySound","Glass");var escSnd=(""+snd).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var sndStr=escSnd?(' sound name "'+escSnd+'"'):'';var escMsg=(""+msg).replace(/["\\\\]/g,function(c){return "\\\\"+c;});var vsMsg=function(){if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);};try{require("child_process").execFile("osascript",["-e",'display notification "'+escMsg+'" with title "Claude Code"'+sndStr],function(err){if(err)vsMsg()})}catch(e){vsMsg()}}`,
-        `else{if(sev==="info")vs.window.showInformationMessage(msg);else vs.window.showWarningMessage(msg);}`,
+        // v0.2.4 (architecture MEDIUM): delegate to dispatchNotify — escape
+        // rule + osascript + VSCode fallback are now in ONE place. Sound name
+        // is escaped here (read from ccStatusDot.notifySound) and passed as
+        // sndOpt so dispatchNotify stays parameter-pure.
+        `var snd=c.get("notifySound","Glass");var escSnd=(""+snd).replace(/["\\\\]/g,function(c){return "\\\\"+c;});dispatchNotify(msg,sev,escSnd);`,
         `}`,
+        // === §C 4-light SBI click cmd + SBI creation (single v0.1.17 SBI) ===
         // SBI click command — ONE runtime-registered command wired to the
         // single v0.1.17 SBI (v0.1.14-v0.1.16 used to wire it to all 4 SBIs).
         // Idempotent across panels via __ccsdSbiCmdRegistered; registerCommand
@@ -1234,7 +1884,89 @@ function buildIIFE(resDir: string): string {
         // `font-variant-numeric:tabular-nums`, which forces ASCII digits 0-9
         // to equal advance width regardless of font.
         // Wrapped in try/catch (isolation layer 1 of 3 — see docs/STATES.md §7.5).
-        `try{if(!globalThis.__ccsdSbi){try{var sbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,${SBI_PRIORITY});sbi.name="CC Status";sbi.text=DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0";sbi.tooltip="Claude Code: 0 done, 0 running, 0 pending, 0 interrupted";try{sbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};sbi.show();globalThis.__ccsdSbi=sbi;globalThis.__ccsdSbiLastKey=null;}catch(e){}}}catch(e){}`,
+        `try{if(!globalThis.__ccsdSbi){try{var sbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Left,${SBI_PRIORITY});sbi.name="CC Status";sbi.text=DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0"+DIM_EM+"0";sbi.tooltip=tr("ttCountsTpl").replace("{done}",0).replace("{running}",0).replace("{pending}",0).replace("{interrupted}",0);try{sbi.command=${JSON.stringify(SBI_CLICK_CMD)}}catch(e){};sbi.show();globalThis.__ccsdSbi=sbi;globalThis.__ccsdSbiLastKey=null;}catch(e){}}}catch(e){}`,
+        // === §D Token SBI click cmd + creation (right-side, v0.2.4+) ===
+        // === v0.2.4: token-stats SBI (right side) + QuickPick config panel ===
+        // Created as a SECOND StatusBarItem at StatusBarAlignment.Right with
+        // priority TOK_SBI_PRIORITY (-9995). Shows the active CC panel's token
+        // usage for the configured window (default 1h) with optional USD cost
+        // suffix. Click triggers the QuickPick config panel.
+        //
+        // try/catch wraps the whole creation block (layer 1 isolation) so a
+        // throw inside createStatusBarItem / .command= / .show() is swallowed
+        // and the IIFE continues to the per-tab tick + onDidDispose
+        // registration. The 4-light SBI above is unaffected.
+        //
+        // __ccsdActiveSid is the per-window "currently focused CC panel sid".
+        // Two publishers: ANCHOR_A's update_session_state handler (fires on
+        // panel state changes including visibility switches) + the per-panel
+        // tick (every 500ms when panelTab.active===true — the authoritative
+        // source, see the per-panel tick commentary for the v0.2.4 multi-panel
+        // race tighten). __ccsdLastActiveSid is the unconditional fallback
+        // updated by every per-panel tick regardless of active state, so the
+        // single-panel-with-undefined-active case still resolves to that
+        // panel. Falls back to "" (no active panel) → SBI shows "$(clock) —".
+        `try{if(!globalThis.__ccsdTokSbi){try{var tsbi=vs.window.createStatusBarItem(vs.StatusBarAlignment.Right,${TOK_SBI_PRIORITY});tsbi.name="CC Tokens";tsbi.text="$(clock) \\u2014";tsbi.tooltip=tr("ttNoPanelCreation");try{tsbi.command=${JSON.stringify(TOK_CLICK_CMD)}}catch(e){};tsbi.show();globalThis.__ccsdTokSbi=tsbi;globalThis.__ccsdActiveSid=globalThis.__ccsdActiveSid||"";globalThis.__ccsdLastActiveSid=globalThis.__ccsdLastActiveSid||"";}catch(e){}}}catch(e){}`,
+        // QuickPick click-command registration for the token SBI. Mirrors the
+        // 4-light SBI click-command pattern: idempotent via a globalThis flag,
+        // wrapped in nested try/catch (registerCommand throws on duplicate id).
+        // The handler opens a QuickPick config panel: window selector, display
+        // mode toggle, notify/sound integration, fast commands (copy count /
+        // reset / open state dir), and a link to the full Settings UI.
+        // showTokQuickPick is defined below in the same IIFE.
+        `try{if(!globalThis.__ccsdTokCmdRegistered){globalThis.__ccsdTokCmdRegistered=true;try{vs.commands.registerCommand(${JSON.stringify(TOK_CLICK_CMD)},function(){try{showTokQuickPick()}catch(e){try{vs.window.showErrorMessage(tr("fbPanelFailPrefix")+(e&&e.message||String(e)))}catch(_){}}})}catch(e){}}}catch(e){}`,
+        // === §E Token panel helpers (fmtTok/fmtUsd/sumTok/readTok) + showTokQuickPick ===
+        // v0.2.4 token-panel helpers + showTokQuickPick. Defined BEFORE the
+        // tick body so the registerCommand handler above can reference
+        // showTokQuickPick at call time (function declarations hoist, so
+        // placement is technically free, but keeping the helpers next to the
+        // QuickPick keeps the source readable).
+        //
+        // fmtTok: 1234567 → "1.2M", 12345 → "12.3k", 999 → "999".
+        // fmtUsd: 0.423 → "$0.42", 0.005 → "$0.005" (sub-cent precision for
+        //   low-cost sessions), null/NaN → "".
+        // sumTok: adds the 6 token dimensions of a totals/window object.
+        // readTok: reads the active sid's <sid>.json and returns the parsed
+        //   object (so the QuickPick can show session total / 24h / 7d /
+        //   30d). Returns null on any error.
+        // showTokQuickPick: builds a QuickPick with 5 sections (stats / notify /
+        //   totals / actions / settings). All configuration writes go through
+        //   vscode.workspace.getConfiguration("ccStatusDot").update(...,
+        //   ConfigurationTarget.Global) so they persist to settings.json
+        //   immediately and the IIFE's next tick picks up the change
+        //   (getConfiguration is re-read every tick — see plan §1.5).
+        //
+        // v0.2.4 consistency fixes folded into this helper:
+        //   - "Today" label renamed to "24h" (rolling-24h cost is NOT a
+        //     calendar-day "today" — the asymmetric label vs 7-day/30-day was
+        //     misleading). Tooltip mirrors the change.
+        //   - cost rows now carry the "~" prefix to match the SBI tooltip
+        //     (cost is always an estimate — token-rates.json carries the
+        //     approximation disclaimer, both surfaces should agree).
+        //   - Statistics window selector + detail string list all 8 windows
+        //     (5min/10min/1h/24h/3d/7d/30d/all) — the writer computes cost
+        //     for all 8 and the user can now pick any of them as the main
+        //     display window. Previously the selector exposed only 6 and
+        //     7d/30d appeared only in the tooltip.
+        //   - "Reset session stats" writes a <sid>.forcereread marker ONLY — it
+        //     no longer also unlinks <sid>.offset. The marker tells the next
+        //     hook fire to do a FULL re-read (bypassing the 256KB tail pre-
+        //     warm), so reset actually returns the true full-history total
+        //     instead of the tail slice. Keeping the offset sidecar is CRITICAL
+        //     for subagent preservation: the hook's forceFull path filters
+        //     ctx.buckets by `b.src && b.src !== 'main'` to keep already-merged
+        //     subagent contributions while re-reading the parent transcript
+        //     from byte 0. Unlinking the offset here would make the next fire
+        //     start from ctx.buckets=[] → the preservation filter would have
+        //     nothing to keep → already-merged subagent tokens (SubagentStop
+        //     fires once per subagent, no replay) would be permanently lost,
+        //     so Reset would silently DECREASE the displayed total by the
+        //     subagent share — the opposite of the "get accurate total" UX.
+        //     v0.2.4 round-3 (business-logic MEDIUM fix): dropped the
+        //     fs.unlinkSync(<sid>.offset) call; forcereread marker alone
+        //     carries the reset intent.
+        `function fmtTok(n){n=n||0;if(n>=1000000)return(n/1000000).toFixed(1)+"M";if(n>=1000)return(n/1000).toFixed(1)+"k";return String(n);}function fmtUsd(v){if(v==null||!isFinite(v))return"";if(v<0.01)return"$"+v.toFixed(3);return"$"+v.toFixed(2);}function fmtUsdApprox(v){var s=fmtUsd(v);return s?"~"+s:s;}function sumTok(w){if(!w)return 0;return (w.in||0)+(w.out||0)+(w.cr||0)+(w.cc5||0)+(w.cc1||0)+(w.cci||0);}function readTok(){try{var sid=globalThis.__ccsdActiveSid||globalThis.__ccsdLastActiveSid||"";if(!sid)return null;var f=pth.join(DIR,sid+".json");var j=JSON.parse(fs.readFileSync(f,"utf8"));if(!j||!j.tokens)return null;return j}catch(e){return null}}/*v0.2.5 (problem 2 fix): IIFE-side live delta. Reads the parent transcript's NEW bytes [sidecar.offset..jsonl.size] directly so the token SBI updates during CC streaming (between PostToolUse/Stop/SubagentStop fires when the hook is NOT running). Strict invariants to avoid double-count:(1) skip if !tj.tokens (no hook baseline yet \u2014 hook MUST fire first to set sidecar.offset);(2) skip if tj.state!=='running' (streaming only happens in running state \u2014 done/idle/interrupted have no new bytes);(3) skip if sidecar.offset<=0 (defensive: hook has not advanced the cursor);(4) hard cap toRead<=512KB (bounds the read; v0.2.5 round-3 MEDIUM: previously returned null on >512KB causing silent display freeze \u2014 now reads the 512KB tail with truncated=true so the tick can show a partial-delta indicator; bytes before the tail are missed until the next hook fire). IIFE never writes sidecar/jsonl \u2014 hook remains the sole writer, so the IIFE's read-only view is race-free. cache_creation dual form (object vs scalar) mirrors cc-status.js:1417-1425 exactly \u2014 hasCcObj chooses one, zeroes the other. isSidechain + <synthetic> skips mirror cc-status.js:1406-1408 \u2014 subagent rows are handled via the hook's scanSubagentTranscripts (problem 3a fix) and the parent's sidechain rows belong to subagent activity that the hook already counts via the nested subagents/ scan. v0.2.5 round-2 (MEDIUM): jsonl path is now AUTHORITATIVE via tj.transcript_path (carry-forward persisted by the hook on every TOK_EVENT fire). The cwd\u2192projects-dir escape rule ( /[^a-zA-Z0-9._-]/g \u2192 '-' ) is a FALLBACK for old <sid>.json files written before this fix; the hook itself distrusts the escape (cc-status.js:1502-1507 'has changed historically') so we prefer the path CC tells us directly. On any miss (path absent, jsonl absent, sidecar absent, partial line) returns null \u2192 tick falls back to hook.tokens-only display (zero delta), no crash. v0.2.5 round-3 (MEDIUM): (a) optional winMs param filters rows by timestamp (mirrors hook deriveTokensField cutoff cc-status.js:754-756 \u2014 without this, a long streaming turn that spans past the rolling-window edge would add OUT-of-window bytes to the in-window bucket sum, over-counting the displayed total); pass Infinity (or omit) for the cumulative 'all' window. (b) Row loop adds Number.isFinite(Date.parse(obj.timestamp)) guard mirroring hook cc-status.js:1411-1412 \u2014 without this, rows with missing/malformed timestamps are counted by the IIFE but skipped by the hook, causing a 'settlement shrink' on the next hook fire. (c) >512KB delta no longer returns null \u2014 reads the 512KB tail with truncated=true so the \u00a7G tick can prefix the displayed total with '\u2248' (U+2248 APPROXIMATELY EQUAL) to signal that bytes before the tail are missed until the next hook fire. v0.2.6 round-3 MEDIUM (reader-logic): the truncated boolean is now CONSUMED by the \u00a7G tick (livePrefix), closing the dead-flag gap left by the v0.2.5 static-tooltip fix (which removed the ttLiveDeltaTruncated tooltip push IIFE.95b but left the boolean orphaned). lastModel is overlaid onto tok.last_model when present so the tooltip shows the live-tail model even before the next hook fire stamps it.*/function computeLiveDelta(tj,sid,winMs){try{if(!tj||!tj.tokens||!tj.cwd||!sid||tj.state!=="running")return null;if(typeof winMs!=="number"||!Number.isFinite(winMs))winMs=Infinity;var nowMs=Date.now();var offPath=pth.join(DIR,sid+${tokOffsetExtLiteral});var offset=0;try{var sc=JSON.parse(fs.readFileSync(offPath,"utf8"));if(sc&&Number.isFinite(sc.offset))offset=sc.offset;}catch(_){}if(offset<=0)return null;var jsonlPath=null;if(typeof tj.transcript_path==="string"&&tj.transcript_path){jsonlPath=tj.transcript_path}else{var escaped=tj.cwd.replace(/[^a-zA-Z0-9._-]/g,"-");jsonlPath=pth.join(os.homedir(),".claude","projects",escaped,sid+".jsonl")}var stt;try{stt=fs.statSync(jsonlPath);}catch(_){return null;}if(!stt||!stt.isFile()||stt.size<=offset)return null;var toRead=stt.size-offset;var truncated=false;if(toRead>524288){offset=stt.size-524288;toRead=524288;truncated=true;}var fd=null;var result=null;try{fd=fs.openSync(jsonlPath,"r");var buf=Buffer.alloc(toRead);var br=fs.readSync(fd,buf,0,toRead,offset);if(br<=0){return null;}var lastNl=buf.lastIndexOf(0x0a,br-1);if(lastNl<0){return null;}var text=buf.toString("utf8",0,lastNl+1);var lines=text.split("\\n");var d={in:0,out:0,cr:0,cc5:0,cc1:0,cci:0};var lm=null;for(var i=0;i<lines.length;i++){var ln=lines[i];if(!ln.trim())continue;var obj;try{obj=JSON.parse(ln);}catch(_){continue;}if(!obj||obj.type!=="assistant")continue;var ts=Date.parse(obj.timestamp);if(!Number.isFinite(ts))continue;if(winMs!==Infinity&&ts<(nowMs-winMs))continue;if(obj.isSidechain===true)continue;var model=(obj.message&&obj.message.model)||"";if(typeof model==="string"&&model.indexOf("<synthetic>")===0)continue;var u=(obj.message&&obj.message.usage)||{};var hasCcObj=u.cache_creation&&typeof u.cache_creation==="object";d.in+=u.input_tokens||0;d.out+=u.output_tokens||0;d.cr+=u.cache_read_input_tokens||0;d.cc5+=hasCcObj?(u.cache_creation.ephemeral_5m_input_tokens||0):0;d.cc1+=hasCcObj?(u.cache_creation.ephemeral_1h_input_tokens||0):0;d.cci+=hasCcObj?0:(u.cache_creation_input_tokens||0);if(model)lm=model;}result={delta:d,lastModel:lm,truncated:truncated};}finally{if(fd!==null){try{fs.closeSync(fd);}catch(_){}}}return result;}catch(_){return null;}}function showTokQuickPick(){var cfg=vs.workspace.getConfiguration("ccStatusDot");var curWin=cfg.get("tokenStatsWindow","all");var curMode=cfg.get("tokenDisplayMode","both");var curNotify=cfg.get("notify",true);var curFocus=cfg.get("notifyWhenFocused",true);var curSound=cfg.get("notifySound","Glass");var curVis=cfg.get("tokenSbiVisible",true);var j=readTok();var tok=j&&j.tokens;var SEP={kind:vs.QuickPickItemKind.Separator,label:""};var items=[{label:tr("qpStatsWindowLabel")+curWin,detail:tr("qpStatsWindowDetail")},{label:tr("qpDisplayLabel")+curMode,detail:tr("qpDisplayDetail")}];items.push(SEP);items.push({label:(curVis?"$(eye) ":"$(eye-closed) ")+tr("qpSbiVisibleLabel")+(curVis?tr("qpOn"):tr("qpOff")),detail:"ccStatusDot.tokenSbiVisible"});items.push({label:(curNotify?"$(check) ":"")+tr("qpNotifyCompletion"),detail:"ccStatusDot.notify"});items.push({label:(curFocus?"$(check) ":"")+tr("qpNotifyFocused"),detail:"ccStatusDot.notifyWhenFocused"});items.push({label:tr("qpSoundLabel")+curSound,detail:"ccStatusDot.notifySound"});if(tok){items.push(SEP);items.push({label:"$(pulse) "+tr("qpSessionTotalPrefix")+fmtTok(sumTok(tok.total))+" tok"+(tok.cost!=null?" \u00b7 "+fmtUsdApprox(tok.cost):""),detail:tr("qpSessionTotalDetail")});if(tok.cost_24h!=null)items.push({label:"$(calendar) "+tr("qpCost24hLabel")+fmtUsdApprox(tok.cost_24h),detail:tr("qpCost24hDetail")});if(tok.cost_7d!=null)items.push({label:"$(calendar) "+tr("qpCost7dLabel")+fmtUsdApprox(tok.cost_7d),detail:tr("qpCost7dDetail")});if(tok.cost_30d!=null)items.push({label:"$(calendar) "+tr("qpCost30dLabel")+fmtUsdApprox(tok.cost_30d),detail:tr("qpCost30dDetail")});if(tok&&tok.cost_partial===true)items.push({label:"$(info) "+tr("qpCostPartialLabel"),detail:tr("qpCostPartialDetail")});if(j&&j.since){var el=Date.now()-j.since;if(el>0&&j.state==="running")items.push({label:"$(clock) "+tr("qpTurnRunningTpl").replace("{secs}",Math.round(el/1000)),detail:tr("qpTurnRunningDetail")})}}items.push(SEP);items.push({label:"$(clippy) "+tr("qpCopyLabel"),detail:tr("qpCopyDetail")});items.push({label:"$(trash) "+tr("qpResetLabel"),detail:tr("qpResetDetail")});items.push({label:"$(go-to-file) "+tr("qpOpenDirLabel"),detail:tr("qpOpenDirDetail")});items.push(SEP);items.push({label:"$(settings-gear) "+tr("qpOpenSettingsLabel"),detail:tr("qpOpenSettingsDetail")});vs.window.showQuickPick(items,{placeHolder:tr("qpPlaceHolder")}).then(function(p){if(!p)return;var label=p.label;if(label.indexOf(tr("qpStatsWindowLabel"))===0){vs.window.showQuickPick(${tokWinKeysLiteral},{placeHolder:tr("spSelectWindow")}).then(function(w){if(w)cfg.update("tokenStatsWindow",w,vs.ConfigurationTarget.Global)})}else if(label.indexOf(tr("qpDisplayLabel"))===0){vs.window.showQuickPick(["token","cost","both"],{placeHolder:tr("spSelectDisplay")}).then(function(m){if(m)cfg.update("tokenDisplayMode",m,vs.ConfigurationTarget.Global)})}else if(label.indexOf(tr("qpSbiVisibleLabel"))===0){cfg.update("tokenSbiVisible",!curVis,vs.ConfigurationTarget.Global)}else if(label.indexOf(tr("qpNotifyCompletion"))>=0){cfg.update("notify",!curNotify,vs.ConfigurationTarget.Global)}else if(label.indexOf(tr("qpNotifyFocused"))>=0){cfg.update("notifyWhenFocused",!curFocus,vs.ConfigurationTarget.Global)}else if(label.indexOf(tr("qpSoundLabel"))===0){vs.window.showQuickPick(["Basso","Bell","Blow","Bottle","Frog","Funk","Glass","Hero","Morse","Ping","Pop","Purr","Sosumi","Submarine","Tink"],{placeHolder:tr("spSelectSound")}).then(function(s){if(s)cfg.update("notifySound",s,vs.ConfigurationTarget.Global)})}else if(label.indexOf(tr("qpCopyLabel"))>=0){var tc=j&&j.tokens?sumTok(j.tokens.total):0;try{vs.env.clipboard.writeText(String(tc));vs.window.showInformationMessage(tr("fbCopiedTpl").replace("{n}",tc).replace("{fmt}",fmtTok(tc)))}catch(e){}}else if(label.indexOf(tr("qpResetLabel"))>=0){try{var sid=globalThis.__ccsdActiveSid||globalThis.__ccsdLastActiveSid||"";if(sid){try{fs.writeFileSync(pth.join(DIR,sid+${tokForceRereadExtLiteral}),String(Date.now()))}catch(e){}vs.window.showInformationMessage(tr("fbResetOk"))}}catch(e){vs.window.showErrorMessage(tr("fbResetFailPrefix")+(e&&e.message||String(e)))}}else if(label.indexOf(tr("qpOpenDirLabel"))>=0){try{vs.commands.executeCommand("revealFileInOS",DIR)}catch(e){}}else if(label.indexOf(tr("qpOpenSettingsLabel"))>=0){vs.commands.executeCommand("workbench.action.openSettings","ccStatusDot")}})}`,
+        // === §F Per-tick 4-light aggregation (the __ccsdSbiTimer body) ===
         `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
         `try{`,
         `var ag={running:0,done:0,interrupted:0,idle:0,pending:0};`,
@@ -1260,17 +1992,29 @@ function buildIIFE(resDir: string): string {
         `var st=j.state;var since=j.since;`,
         `/*§4 reader rule: done>5min→idle — IDLE sessions don't count toward the green light.*/`,
         `if(st==="done"&&since&&(Date.now()-since)>DONE_TO_IDLE_MS){st="idle";}`,
-        `/*§7.2 stale-running: mtime>SBI_RUNNING_STALE_MS→idle (running files get tool heartbeats; old mtime=crashed session).*/`,
-        `else if(st==="running"){var mt=0;try{mt=fs.statSync(fp).mtimeMs}catch(e2){}if(mt&&(Date.now()-mt)>SBI_RUNNING_STALE_MS){st="idle";}}`,
-        `/*§7.5 interrupted retention: mtime>INTERRUPTED_RETENTION_MS(24h)→idle — bounds 🔴 growth from abandoned crashes. File is NOT deleted (diagnostic value preserved).*/`,
-        `else if(st==="interrupted"){var mt=0;try{mt=fs.statSync(fp).mtimeMs}catch(e2){}if(mt&&(Date.now()-mt)>INTERRUPTED_RETENTION_MS){st="idle";}}`,
+        `/*§7.2 stale-running (v0.2.6: since-based, not mtime). since is the *→running transition time (set fresh by UserPromptSubmit / SubagentStart; PRESERVED by Stop inflight>0 path cc-status.js:390-401 — NOT refreshed — so a drifted inflight>0 stuck-running session has an old since even though mtime is fresh from the Stop heartbeat write). Mirrors the done>5min rule one branch up: decay on since, not mtime. __mt is still computed above for the cache-key short-circuit (mtime+size == content-change signal) but is no longer the decay signal.*/`,
+        `else if(st==="running"){if(since&&(Date.now()-since)>SBI_RUNNING_STALE_MS){st="idle";}}`,
+        `/*§7.5 interrupted retention: since>INTERRUPTED_RETENTION_MS(24h)→idle — keys off the TERMINAL timestamp (since), not mtime, so orphan SubagentStop/Notification writes that refresh mtime while preserving since (cc-status.js lines ~232/250/291) cannot postpone the 24h decay indefinitely. Mirrors the done>5min rule one branch up. Bounds 🔴 growth from abandoned crashes; file is NOT deleted (diagnostic value preserved).*/`,
+        `else if(st==="interrupted"&&since&&(Date.now()-since)>INTERRUPTED_RETENTION_MS){st="idle";}`,
         `if(st==="running")ag.running++;`,
         `else if(st==="done")ag.done++;`,
         `else if(st==="interrupted")ag.interrupted++;`,
         `/*catch-all idle bucket: any unknown/corrupt state is normalized to idle so the pending check below treats it consistently (a corrupt file cannot be "not yellow" yet "still blue").*/`,
         `else{st="idle";ag.idle++;}`,
         `/*pending is counted INDEPENDENTLY of state (a session can be running AND pending). Skip when st was downgraded to idle above so a stale crashed-mid-prompt session does not false-stick 🔵 forever.*/`,
-        `if(j.pending===true&&st!=="idle")ag.pending++;`,
+        // v0.2.5 (problem 1 fix): OR two sources — the file-pending flag
+        // (Notification hook → cc-status.js atomic write, async but
+        // cross-window) OR the per-window globalThis set (rename_tab IPC →
+        // synchronous, source-of-truth, but only covers THIS window's
+        // panels). files[i].slice(0,-5) strips the ".json" suffix to recover
+        // the sid key the set uses. The set is maintained by Anchor B's replB
+        // (in this same IIFE's host extension) and cleared by onDidDispose
+        // below; the file-pending branch still covers cross-window scenarios
+        // where the rename_tab for a panel in window W1 cannot update W2's
+        // globalThis. decay (st!=="idle") still applies after the OR so the
+        // 30min/5min/24h GC rules are not bypassed.
+        `var __ps=globalThis.__ccsdPendingSet;`,
+        `if(((j.pending===true)||(__ps&&__ps[files[i].slice(0,-5)]===true))&&st!=="idle")ag.pending++;`,
         `}catch(e){}`,
         `}`,
         // Prune orphaned cache entries (files unlinked by writer GC since the
@@ -1278,7 +2022,7 @@ function buildIIFE(resDir: string): string {
         `try{var __ks=Object.keys(__cc);for(var k=0;k<__ks.length;k++){if(!__stale[__ks[k]]){delete __cc[__ks[k]];}}}catch(e){}`,
         `}catch(e){}`,
         `/*cap each light's count at 4 so the "N" variant displays for >=4.*/`,
-        `var cap=function(n){return n>=4?4:n;};`,
+        `var cap=function(n){return n>=SBI_LIGHT_CAP?SBI_LIGHT_CAP:n;};`,
         `var cd=cap(ag.done),cr=cap(ag.running),cp=cap(ag.pending),ci=cap(ag.interrupted);`,
         // counts[] indexes match CFG[]: done/running/pending/interrupted.
         // Per-SBI render: (n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n). NO
@@ -1286,7 +2030,7 @@ function buildIIFE(resDir: string): string {
         // See docs/STATES.md §7 for the full render rule.
         `var counts=[cd,cr,cp,ci];`,
         `/*tooltip carries the UNcapped breakdown so the user sees actual counts even when lights cap at N.*/`,
-        `var tip="Claude Code: "+ag.done+" done, "+ag.running+" running, "+ag.pending+" pending, "+ag.interrupted+" interrupted";`,
+        `var tip=tr("ttCountsTpl").replace("{done}",ag.done).replace("{running}",ag.running).replace("{pending}",ag.pending).replace("{interrupted}",ag.interrupted);`,
         // v0.1.17 per-tick SBI update: concatenate 4 (ball+digit) tokens into
         // ONE text string assigned to the single SBI. v0.1.18 changed the
         // join from `""` to `" "` (single space) for token-to-token visual
@@ -1302,29 +2046,162 @@ function buildIIFE(resDir: string): string {
         // → "🟢3 🟡1 ⚪0 ⚪0" (v0.1.18 space-separated; ⚪ since v0.2.3
         //   reverted the ⚪→🟤 pivot back to gray)
         //   was v0.1.16 "🟢3" / "🟡1" / "⚪0" / "⚪0" as 4 separate SBI texts.
-        `try{if(globalThis.__ccsdSbi){var key=ag.done+","+ag.running+","+ag.pending+","+ag.interrupted;if(key!==globalThis.__ccsdSbiLastKey){globalThis.__ccsdSbiLastKey=key;var parts=[];for(var k=0;k<CFG.length;k++){var n=counts[k];parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n));}globalThis.__ccsdSbi.text=parts.join(" ");globalThis.__ccsdSbi.tooltip=tip;globalThis.__ccsdSbi.show();}}}catch(e){}`,
+        `try{if(globalThis.__ccsdSbi){var key=ag.done+","+ag.running+","+ag.pending+","+ag.interrupted;if(key!==globalThis.__ccsdSbiLastKey){globalThis.__ccsdSbiLastKey=key;var parts=[];for(var k=0;k<CFG.length;k++){var n=counts[k];parts.push((n===0?DIM_EM:CFG[k].em)+(n>=SBI_LIGHT_CAP?"N":""+n));}globalThis.__ccsdSbi.text=parts.join(" ");globalThis.__ccsdSbi.tooltip=tip;globalThis.__ccsdSbi.show();}}}catch(e){}`,
+        // === §G Token SBI tick + threshold alert (shares __ccsdSbiTimer) ===
+        // === v0.2.4: token SBI tick update (shares the same 500ms tick) ===
+        // Reads the active CC panel's <sid>.json tokens field and updates the
+        // right-side token SBI's text + tooltip. Re-reads ccStatusDot.*
+        // configuration every tick (no cached config — plan §1.5 decision A,
+        // "final consistency via getConfiguration every tick").
+        //
+        // Display logic:
+        //   - no active sid / file missing / no tokens → "$(clock) —"
+        //   - mode "token": "$(clock) 12.3k tok"
+        //   - mode "cost":  "$(pulse) ~$0.42" (or "$(clock) —" if cost null)
+        //   - mode "both":  "$(clock) 12.3k tok · ~$0.42" (cost hidden if null)
+        //
+        // v0.2.4 scope-alignment fixes:
+        //   - inline cost now reads tok['cost_'+tWin] (per-window cost) so the
+        //     token count and the $ shown on the same line describe the SAME
+        //     time window (previously tok.cost = all-time session total was
+        //     paired with the selected window's tokens, mixing scopes). Falls
+        //     back to tok.cost only when the per-window cost is null AND the
+        //     session cost is not (e.g. the writer couldn't price any bucket
+        //     in the window but could price some bucket session-wide).
+        //   - tooltip "Today (24h)" → "24h" (rolling-24h is NOT a calendar
+        //     day; label was asymmetric with 7-day/30-day and misled users).
+        //   - the token tick now reuses the 4-light aggregation's
+        //     __ccsdAgCache entry for activeSid+'.json' when its mtime+size
+        //     match (the aggregation scan runs ~30 lines above in the same
+        //     500ms tick and already stat+read+cached the file). Steady-state
+        //     token ticks become zero-extra fs.readFileSync.
+        //
+        // Threshold alerts (rolling-24h cost vs warnThresholdUsd):
+        //   - compares tok.cost_24h (rolling 24h) — matches the user's "daily
+        //     budget" mental model and naturally RE-ARMS when the window
+        //     slides past old expensive turns. The previous implementation
+        //     compared tok.cost (monotonic session total) which never drops,
+        //     so "re-arm on dip" was unreachable in practice.
+        //   - hysterisis: fire ONLY when crossing UP (prev<thr && cur>=thr),
+        //     tracked via __ccsdLastWarnBelow24h (true while cost_24h is
+        //     below thr). This gives ONE notification per genuine crossing
+        //     instead of the prior per-turn spam (the old `lastWarnTs <
+        //     tj.since` re-armed every new turn, firing every prompt once the
+        //     threshold was crossed).
+        //   - bypasses the notify() completion/focus gating (cost alerts are
+        //     a budget monitor, not a turn-done notification — the user
+        //     explicitly set warnThresholdUsd and expects alerts even with
+        //     "Notify on completion" off or while VS Code is focused).
+        //   - v0.2.4 round-3 (business-logic LOW fix): the alert now reads
+        //     cfg.notifySound (default "Glass") and escapes it the same way
+        //     notify() does, passing the result as sndOpt to dispatchNotify.
+        //     Pre-fix the call passed sndOpt=null → dispatchNotify's
+        //     `sndStr=sndOpt?(' sound name "'+sndOpt+'"'):''` branch produced
+        //     an empty string and the osascript notification played NO sound,
+        //     so the user heard the completion chime but a budget breach
+        //     (arguably the more important alert) was silent. Same cfg.read +
+        //     escape rule as notify() so a future sound-handling change lands
+        //     in both via dispatchNotify.
+        `try{var tsbi=globalThis.__ccsdTokSbi;if(tsbi){var cfg=vs.workspace.getConfiguration("ccStatusDot");if(cfg.get("tokenSbiVisible",true)===false){tsbi.hide()}else{tsbi.show()}var activeSid=globalThis.__ccsdActiveSid||globalThis.__ccsdLastActiveSid||"";var tWin=cfg.get("tokenStatsWindow","all");var tMode=cfg.get("tokenDisplayMode","both");var showCost=cfg.get("showCost",true);if(activeSid){var tj=null;try{var ajf=activeSid+".json";var ag=globalThis.__ccsdAgCache;var cached=ag&&ag[ajf];if(cached){var __st2=0,__sz2=0;try{var __s2=fs.statSync(pth.join(DIR,ajf));__st2=__s2.mtimeMs;__sz2=__s2.size;}catch(e4){}if(__st2===cached.mt&&__sz2===cached.sz){tj=cached.j}}}catch(e4b){}if(!tj){try{tj=JSON.parse(fs.readFileSync(pth.join(DIR,activeSid+".json"),"utf8"))}catch(e5){}}/*v0.2.5 problem 2: live delta = IIFE-side incremental read of the parent transcript's [sidecar.offset..jsonl.size] byte range. Strict invariants (see computeLiveDelta JSDoc above): skip unless tj.tokens + tj.cwd + activeSid + tj.state==='running' + sidecar.offset>0. IIFE never writes sidecar/jsonl, so the hook remains the sole writer and the delta is race-free. tokenLiveDeltaEnabled (default true) lets the user disable on perf-sensitive machines.*/var liveInfo=null;try{if(cfg.get("tokenLiveDeltaEnabled",true)===true){var __winMs=TOK_WIN_MS[tWin];liveInfo=computeLiveDelta(tj,activeSid,__winMs);}}catch(_){}var __ld=liveInfo?liveInfo.delta:null;var __lt=liveInfo?liveInfo.truncated===true:false;var __lm=liveInfo?liveInfo.lastModel:null;var dIn=__ld?__ld.in:0,dOut=__ld?__ld.out:0,dCr=__ld?__ld.cr:0,dCc5=__ld?__ld.cc5:0,dCc1=__ld?__ld.cc1:0,dCci=__ld?__ld.cci:0;var dSum=dIn+dOut+dCr+dCc5+dCc1+dCci;try{var tok=tj&&tj.tokens;if(tok&&tok.windows&&tok.windows[tWin]){var w=tok.windows[tWin];var total=sumTok(w)+dSum;var winCost=tok["cost_"+tWin];if(winCost==null)winCost=tok.cost;/*v0.2.6 round-3 MEDIUM (reader-logic): cost mirrors ONLY the hook's last fire, while dSum adds live bytes the hook hasn't seen yet. Suppress the cost suffix during streaming (dSum>0) so the bar never pairs a fresh token count with a stale cost. Restored to fmtUsdApprox(winCost) once dSum===0 (idle/done/interrupted or steady state).*/if(showCost&&dSum===0){var costStr=winCost!=null?fmtUsdApprox(winCost):""}else{costStr=""}/*v0.2.6 round-3 MEDIUM (reader-logic): consume computeLiveDelta's truncated flag (was dead after v0.2.5 removed ttLiveDeltaTruncated tooltip). Prefix with '\u2248' (U+2248 APPROXIMATELY EQUAL) when the 512KB tail cap fired so the user sees the displayed total is approximate (bytes before the tail are missed until the next hook fire).*/var livePfx=__lt?"\u2248":"";var tlabel;if(tMode==="cost"){tlabel=costStr?("$(pulse) "+costStr):"$(clock) \u2014"}else if(tMode==="token"){tlabel="$(clock) "+livePfx+fmtTok(total)+" tok"}else{tlabel="$(clock) "+livePfx+fmtTok(total)+" tok"+(costStr?" \u00b7 "+costStr:"")}tsbi.text=tlabel;var ttip=[tr("ttWindowTpl").replace("{win}",tWin),tr("ttSessionTotalTpl").replace("{fmt}",livePfx+fmtTok(sumTok(tok.total)+dSum))];if(dSum===0&&tok.cost!=null)ttip.push(tr("ttSessionCostTpl").replace("{cost}",fmtUsdApprox(tok.cost)));if(dSum===0&&tok.cost_24h!=null)ttip.push(tr("tt24hTpl").replace("{cost}",fmtUsdApprox(tok.cost_24h)));if(dSum===0&&tok.cost_7d!=null)ttip.push(tr("tt7dayTpl").replace("{cost}",fmtUsdApprox(tok.cost_7d)));if(dSum===0&&tok.cost_30d!=null)ttip.push(tr("tt30dayTpl").replace("{cost}",fmtUsdApprox(tok.cost_30d)));if(tok.cost_partial===true)ttip.push(tr("ttPartial"));/*v0.2.6 round-3 MEDIUM (reader-logic): overlay tok.last_model with liveInfo.lastModel so the tooltip reflects the live-tail model even before the next hook fire stamps it.*/var __lmv=__lm||(tok.last_model);if(__lmv)ttip.push(tr("ttLastModelTpl").replace("{model}",__lmv));if(tj.cwd)ttip.push(tr("ttProjectTpl").replace("{project}",tj.cwd));if(tj.activeSubagents&&Number(tj.activeSubagents)>0)ttip.push(tr("ttWorkflowGap"));ttip.push(tr("ttClickConfig"));var __tip=ttip.join("\\n");if(globalThis.__ccsdTokSbiLastTip!==__tip){globalThis.__ccsdTokSbiLastTip=__tip;tsbi.tooltip=__tip;}/*threshold alert: rolling-24h cost vs warnThresholdUsd, hysterisis re-arm*/var thr=cfg.get("warnThresholdUsd",0);if(thr>0&&tok.cost_24h!=null){if(globalThis.__ccsdLastWarnBelow24h===undefined)globalThis.__ccsdLastWarnBelow24h=tok.cost_24h<thr;var below=tok.cost_24h<thr;if(below){globalThis.__ccsdLastWarnBelow24h=true}else if(globalThis.__ccsdLastWarnBelow24h===true){globalThis.__ccsdLastWarnBelow24h=false;/*Cost alerts bypass the notify() completion/focus gates (v0.2.4 architecture MEDIUM fix): the user explicitly set a budget threshold, so it should fire even with \"Notify on completion\" off and while VS Code is focused. We therefore call dispatchNotify() directly (no gate checks) — the osascript escape rule + VS Code fallback are SHARED with notify() so a future fix to one path lands in both.*/try{var alSnd=cfg.get("notifySound","Glass");var alEscSnd=(""+alSnd).replace(/["\\\\]/g,function(c){return "\\\\"+c;});dispatchNotify(tr("alCostAlertTpl").replace("{cost}",fmtUsdApprox(tok.cost_24h)),"warn",alEscSnd);}catch(e6){}}}else if(tok&&tok.cost_24h==null&&globalThis.__ccsdLastWarnBelow24h!==undefined){globalThis.__ccsdLastWarnBelow24h=undefined}}else{tsbi.text="$(clock) 0 tok";tsbi.tooltip=tr("ttNoDataTpl").replace("{sid}",activeSid.slice(0,8))+"\\n"+tr("ttClickConfig");/*v0.2.6 round-3 MEDIUM (reader-logic): reset the tooltip dedup cache so the next good tick re-writes the tooltip even on a cache-hit (without this, a transient error/empty state leaves the cache holding the last good tip, and recovery to the SAME tip string would skip the write \u2014 leaving the tooltip stuck on unavailable).*/globalThis.__ccsdTokSbiLastTip=null;}}catch(e){tsbi.text="$(clock) \u2014";tsbi.tooltip=tr("ttUnavailableTpl").replace("{sid}",activeSid.slice(0,8));globalThis.__ccsdTokSbiLastTip=null;}}else{tsbi.text="$(clock) \u2014";tsbi.tooltip=tr("ttNoPanel");/*v0.2.6 round-3 MEDIUM follow-up (cache-desync symmetry): reset the tooltip dedup cache here too so the next good tick re-writes the tooltip even on a cache-hit. Round-3 added the reset to the two sibling branches above (ttNoDataTpl when activeSid has no tokens, ttUnavailableTpl when the read throws) but missed this outermost else (activeSid empty \u2014 no CC panel open). Without this reset, a tick that holds a good tip X in the cache, transitions to ttNoPanel (user closes all CC panels), then returns to the SAME CC session (identical cwd/totals/model/window) recomputes the identical tip X, hits the __ccsdTokSbiLastTip !== __tip short-circuit = false, and skips the tsbi.tooltip write \u2014 leaving the tooltip stuck on "no panel" until any tip input changes. Mirrors the two sibling resets so all three branches transitioning AWAY from a good tip drop the cache symmetrically.*/globalThis.__ccsdTokSbiLastTip=null;}}}catch(e){}`,
         `}catch(e){}`,
         `},${TICK_MS});}}catch(e){}`,
+        // === §H Per-panel tick (state-machine + notify dedup + svg switch) ===
         `var timer=setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
         `var sid=t.__ccsdSid;if(!sid)return;`,
-        `var st=null,since=null,err="";`,
-        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||""}catch(e){}`,
+        // v0.2.4: keep globalThis.__ccsdActiveSid fresh for the token SBI tick.
+        // Each CC panel runs its own per-panel tick (this setInterval) — the
+        // ACTIVE panel's tick fires here every 500ms and updates the global so
+        // the SBI tick (in the shared __ccsdSbiTimer above) sees the right sid.
+        // p.active is the VS Code WebviewPanel.active flag (true when this
+        // panel is the currently focused one).
+        //
+        // v0.2.4 race tighten: previously `p.active===true || typeof
+        // p.active==="undefined"` updated the global from ANY panel whose
+        // active flag was unset (which the code comment explicitly noted
+        // happens for "some panel types"). In a 2-CC-panel window where both
+        // had active===undefined, both panels' 500ms ticks overwrote the
+        // global in turn, making the token SBI oscillate between sessions.
+        // Now we ONLY publish on p.active===true. The fallback for the
+        // single-panel-with-undefined-active case (the original rationale) is
+        // preserved via __ccsdLastActiveSid: the per-panel tick still tracks
+        // its own sid unconditionally into __ccsdLastActiveSid, and the
+        // shared SBI tick (above) prefers __ccsdActiveSid, falling back to
+        // __ccsdLastActiveSid when __ccsdActiveSid is empty/stale. This
+        // bounds the multi-panel race to ONE overwrite per panel-activate
+        // event (the user actually switches tabs) instead of every 500ms.
+        `if(p.active===true){globalThis.__ccsdActiveSid=sid;globalThis.__ccsdLastActiveSid=sid}else if(typeof p.active==="undefined"&&!globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=sid}globalThis.__ccsdLastActiveSid=sid;`,
+        `var st=null,since=null,err="",pend=false;`,
+        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
-        `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){lastTermSince=since;try{notify(st,err)}catch(e){}}`,
+        `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){`,
+        ,
+        /*v0.2.4 follow-up (round-2 e2e fix): multi-panel notify dedup. Each panel
+         * runs its own per-panel tick with its own `seeded`/`lastTermSince` closure,
+         * so when N panels show the same session, each observes the running→done
+         * transition within a 500ms window and each fires notify() — N macOS
+         * notifications + N VS Code messages for the same session. Key a global
+         * dedup on (sid, since): the first panel to see a given terminal
+         * transition claims it; later panels within the same `since` epoch skip.
+         * A subsequent transition (new since) still fires because the key moves.
+         * Cost alerts (warnThresholdUsd) intentionally bypass this — they are
+         * budget-driven, not transition-driven, and live on a separate path.*/ `var __nkey=sid+":"+(since||0);`,
+        `if(globalThis.__ccsdLastNotifyKey===__nkey){lastTermSince=since;}`,
+        `else{globalThis.__ccsdLastNotifyKey=__nkey;lastTermSince=since;try{notify(st,err)}catch(e){}}`,
+        `}`,
         `/*permission pending: yield to CC native blue dot*/if(t.__ccsdPending)return;`,
+        // v0.2.6 blue-via-content: reader-side pending branch. The writer's
+        // Stop case now sets pending:true when Claude's last_assistant_message
+        // clearly awaits user input/decision/feedback (AWAIT_USER_RE match in
+        // cc-status.js). The reader renders our blue claude-logo-pending.svg
+        // when j.pending===true and the state was not decayed to idle. Yields
+        // to t.__ccsdPending above so CC's native permission blue dot wins
+        // when both flags are active (Notification fires for permission →
+        // both flags true → yield first; in practice they are mutually
+        // exclusive in time: last-message-pending fires only at Stop with no
+        // Notification, and Notification's permission path yields first).
+        // Stuck-running scenario (luceo): state='running' (background_tasks
+        // drift) + j.pending=true (last_message "等你测试反馈") → this branch
+        // renders blue, overriding the running-yellow branch below. Green
+        // done logic is untouched: pending=false falls through to done→green.
+        //
+        // v0.2.6 round-2 (HIGH reader-logic fix): apply state decay BEFORE
+        // the pending check. Round-1 placed the done>5min / running-stale
+        // 15min decay INSIDE the SVG selection below — leaving the `st`
+        // variable RAW at the pending check, so `st!=="idle"` was dead code
+        // (the writer only ever writes state='running'|'done'|'interrupted',
+        // NEVER 'idle' — see cc-status.js writeJsonAtomic). Result: a done+
+        // pending session (CC said "等你测试反馈") rendered BLUE FOREVER on
+        // the tab, even after the user walked away for hours/days, while
+        // the SBI aggregation tick (which DOES decay before its pending
+        // count) had already stopped counting it → tab-vs-SBI divergence
+        // exactly like the comment below claimed to prevent. Fix mirrors
+        // the SBI tick's decay chain at §F (lines ~1917-1923) but uses
+        // per-tab constants: DONE_TO_IDLE_MS for done, SINCE_STALE_MS for
+        // running. Does NOT decay interrupted here (round-2 LOW finding
+        // left as-is; interrupted+pending still renders blue — rare in
+        // practice because StopFailure clears pending at cc-status.js:558).
+        // Does NOT reference SBI_RUNNING_STALE_MS / INTERRUPTED_RETENTION_MS
+        // — preserves IIFE.46b's per-tab-vs-SBI decay-name divergence lock.
         `var now=Date.now();`,
+        `/*v0.2.6 round-2 (HIGH): decay st to idle BEFORE the pending check so a done>5min or running-stale>15min session with j.pending=true does not false-stick 🔵 forever. Mirrors SBI tick decay (§F) but uses per-tab constants (DONE_TO_IDLE_MS / SINCE_STALE_MS — preserves IIFE.46b per-tab/SBI name divergence). Same since-based defensive form as the SVG-selection decay below: since && now-since>THRESH (done) or && since<now (running, guards against future-timestamp corrupt files).*/`,
+        `if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS){st="idle";}`,
+        `else if(st==="running"&&since&&(now-since)>SINCE_STALE_MS&&since<now){st="idle";}`,
+        `/*reader pending (Notification OR Stop last-message semantic match): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
+        `if(pend && st!=="idle"){try{p.iconPath=vs.Uri.file(pth.join(RES,"claude-logo-pending.svg"))}catch(e){}return}`,
         `var svg;`,
         `if(st==="interrupted"){svg=(flashSeq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
-        `else if(st==="running"){svg=pth.join(RES,"claude-logo-running.svg")}`,
+        `/*v0.2.6 round-1 stuck-yellow fix: per-tab running decay. A running tab whose 'since' is older than SINCE_STALE_MS (15min) renders idle (gray) instead of running (yellow), surfacing "this session hasn't actually been running for 15min" to the user. Mirrors the done>5min→idle decay one branch below (same since-based defensive form: since && now-since>THRESH && since<now). Catches CC upstream payload drift (Stop inflight=1 stuck + preserveSince keeps state=running + activeSubagents=1 in the file indefinitely; without this decay the tab would stick yellow forever — see docs/STATES.md §7.4 "stale running treatment" row updated in v0.2.6). Real active running sessions (since<15min ago) render yellow unchanged.*/`,
+        `else if(st==="running"){svg=(since&&(now-since>SINCE_STALE_MS)&&since<now)?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-running.svg")}`,
         `else if(st==="done"){svg=(since&&(now-since>DONE_TO_IDLE_MS))?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-done.svg")}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
         `else{return}`,
         `flashSeq++;`,
         `try{p.iconPath=vs.Uri.file(svg)}catch(e){}`,
         `},${TICK_MS});`,
+        // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}}})}catch(e){}`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid=""}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -1375,7 +2252,7 @@ function currentIifeHash(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Writer-hook content hash . The writer hook (hooks/cc-status.js) carries a banner
+// Writer-hook content hash. The writer hook (hooks/cc-status.js) carries a banner
 // `/*cc-status-dot-hook:vX.Y.Z:HASH*/` on its first line; the hash is sha1 of
 // everything AFTER that banner line. installRuntimeFiles + reportStatus use
 // these helpers to detect BOTH inter-version drift (banner version differs
@@ -1489,6 +2366,25 @@ function injectFresh(extJs: string, src: string): void {
     const replA =
         'else if(e.request.type==="update_session_state")return ' +
         "this.__ccsdSid=e.request.sessionId,this.__ccsdTitle=e.request.title," +
+        // v0.2.4: also publish the active sid to globalThis so the token SBI
+        // tick (window-scoped, outside this panel closure) picks it up.
+        //
+        // v0.2.4 (business-logic HIGH fix): gate the publish on this panel
+        // being the currently-active one (this.panelTab.active===true). The
+        // prior unconditional publish meant ANY panel's update_session_state
+        // event — including background panels CC heartbeats state-refresh —
+        // overwrote __ccsdActiveSid, then the per-panel tick (500ms later)
+        // overwrote it back to the active panel. Two CC panels A(active)+B
+        // (background) therefore oscillated the token SBI between sessions
+        // every 500ms — exactly the oscillation v0.2.4 set out to fix, but
+        // only the per-panel tick path was gated (line ~1452 of buildIIFE);
+        // this event-driven publish path was missed. With the gate the
+        // event-driven path and the tick-driven path agree: only the active
+        // panel publishes. The `(...)` wrapping preserves the comma-expression
+        // form so the trailing `,{type:...}` still binds to the return
+        // statement (cannot switch to a block — see the comment at the top
+        // of injectFresh re: the minified `else if(...)return a,b,c` shape).
+        "(this.panelTab&&this.panelTab.active===true?(globalThis.__ccsdActiveSid=e.request.sessionId):0)," +
         iife +
         ',this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}';
 
@@ -1505,6 +2401,38 @@ function injectFresh(extJs: string, src: string): void {
         // matters for the message shown to the user.
         const replB =
             "this.panelTab.title=e.request.title;this.__ccsdTitle=e.request.title;this.__ccsdPending=!!e.request.hasPendingPermissions;" +
+            // v0.2.5 round-2 (MEDIUM): also stash this.__ccsdSid here, symmetric
+            // with replA (line ~2136). rename_tab's payload carries sessionId
+            // (the set sync below already uses it) and can fire BEFORE the first
+            // update_session_state — e.g. VS Code restart restoring a persisted
+            // panel, or CC reattaching a session tab title before the full
+            // session-state handshake completes. Without this stash t.__ccsdSid
+            // stays undefined until update_session_state eventually fires, so
+            // onDidDispose's `delete globalThis.__ccsdPendingSet[t.__ccsdSid]`
+            // degrades to a no-op `delete __ps[undefined]` if the panel is
+            // closed in that window → __ccsdPendingSet entry leaks. Idempotent
+            // with replA (both write the same value when both fire).
+            "this.__ccsdSid=e.request.sessionId;" +
+            // v0.2.5 (problem 1 fix): mirror the per-panel __ccsdPending flag into
+            // a window-scoped globalThis set so the §F 4-light aggregation (which
+            // scans STATE_DIR files, not panel objects) can pick up the
+            // authoritative hasPendingPermissions signal WITHOUT waiting for the
+            // Notification hook → cc-status.js spawn → atomic write → next 500ms
+            // reader tick chain. The set is keyed by e.request.sessionId (the
+            // same sid the aggregation loop extracts via files[i].slice(0,-5)).
+            // try/catch(_): the outer event parameter is `e` — using `catch(e)`
+            // here would shadow it for any subsequent reference in this handler.
+            // onDidDispose (§Z) deletes the entry on panel close; a CC crash
+            // leaving a stale entry is bounded by the same decay chain
+            // (running>30min mtime→idle) that governs the file-pending branch.
+            // v0.2.5 round-2 (LOW): let (block-scoped) instead of var — var
+            // hoists __ps to the rename_tab handler function top, leaking the
+            // binding past the try block into the trailing iife + `;let r;…`
+            // tail. No bug today (the tail does not reference __ps), but a
+            // footgun for any future edit at the end of replB. let keeps the
+            // binding local to the try block; behavior inside the try is
+            // identical to var.
+            "try{let __ps=globalThis.__ccsdPendingSet||(globalThis.__ccsdPendingSet=Object.create(null));if(e.request.hasPendingPermissions){__ps[e.request.sessionId]=true}else{delete __ps[e.request.sessionId]}}catch(_){}" +
             iife +
             ";let r;if(e.request.hasPendingPermissions)";
         next = next.replace(ANCHOR_B, replB);
@@ -1575,12 +2503,37 @@ function stripIifeInPlace(content: string): string | null {
     // `this.__ccsdSid=…` is unique to our injection (never appears in fresh
     // CC code), so a failed match here means the on-disk form is something we
     // don't recognize — bail to the safe RES-rewrite path.
+    //
+    // v0.2.4 form note: replA now includes a `globalThis.__ccsdActiveSid=`
+    // assignment between __ccsdTitle and the IIFE banner — the regex below
+    // accepts BOTH the legacy (pre-v0.2.4) and the new form by making the
+    // globalThis assignment optional via `(?:globalThis\\.__ccsdActiveSid=[^,]*,)?`.
+    //
+    // v0.2.4 form note: replA's publish is now gated as
+    //   `(this.panelTab&&this.panelTab.active===true?(globalThis.__ccsdActiveSid=e.request.sessionId):0),`
+    // (business-logic HIGH fix — multi-panel oscillation). The optional
+    // middle group is widened from the literal `globalThis.__ccsdActiveSid=
+    // e.request.sessionId,` form to `[^,]*,` "any comma-free segment then a
+    // comma" — this still anchors on the leading __ccsdTitle= and the
+    // following `/*cc-status-dot-injected:…*/` banner, and accepts all
+    // historical and future single-segment (no embedded comma) publish
+    // expressions. A future replA that embeds a comma in this slot would
+    // break stripIifeInPlace — the post-strip INJECT_MARKER-free + compile
+    // checks below are the safety net.
     const segA =
-        /this\.__ccsdSid=e\.request\.sessionId,this\.__ccsdTitle=e\.request\.title,\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\),/g;
-    // Anchor B segment: stash fields + IIFE + trailing semicolon. The leading
+        /this\.__ccsdSid=e\.request\.sessionId,this\.__ccsdTitle=e\.request\.title,(?:[^,]*?,)?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\),/g;
+    // Anchor B segment: stash fields + (v0.2.5: optional pending-set sync) +
+    // IIFE + trailing semicolon. The leading
     // `this.__ccsdTitle=…;this.__ccsdPending=…` pair is unique to our injection.
+    // v0.2.5 widened the form: between the __ccsdPending assignment and the
+    // IIFE banner, replB now emits a try{...}catch(_){} block that maintains
+    // globalThis.__ccsdPendingSet. The block has no nested IIFE marker and no
+    // `})(this)` form, so the same non-greedy match to the first `})(this);`
+    // still captures the whole segment. Pre-v0.2.5 strips are accepted via the
+    // optional `(?:try\{[\s\S]*?\}catch\(_\)\{\})?` group (matches the v0.2.5
+    // try-block OR nothing, never crosses the IIFE banner).
     const segB =
-        /this\.__ccsdTitle=e\.request\.title;this\.__ccsdPending=!!e\.request\.hasPendingPermissions;\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
+        /this\.__ccsdTitle=e\.request\.title;this\.__ccsdPending=!!e\.request\.hasPendingPermissions;(?:try\{[\s\S]*?\}catch\(_\)\{\})?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
 
     // Pre-check: at least one segment must match, otherwise this isn't ours.
     if (!segA.test(content) && !segB.test(content)) return null;
@@ -1699,7 +2652,16 @@ function restoreExtension(extDir: string): void {
         log("no extension.js.bak found — extension.js was not patched by this tool (nothing to restore)");
         return;
     }
-    fs.copyFileSync(bak, extJs);
+    // v0.2.6 round-3 HIGH (integrity): atomic restore. The forward-write path
+    // (injectFresh) uses writeAtomicSync + assertCompiles; the reverse path
+    // must match. fs.copyFileSync leaves extension.js half-written on partial
+    // failure (disk full / SIGKILL / EINTR between copy_file_range chunks),
+    // and VSCode loads extension.js verbatim — a half-written extension.js
+    // bricks the entire CC extension (commands vanish, new sessions refuse to
+    // open). restoreExtension is also the rollback path triggered by wireHooks
+    // failure in run() (line ~4496) — a rollback under disk pressure must not
+    // take the user from "install failed cleanly" to "CC installation broken".
+    atomicCopyFileSync(bak, extJs);
     log("restored extension.js from extension.js.bak");
     // Intentionally keep extension.js.bak as a safety net.
 }
@@ -1744,7 +2706,10 @@ function restoreWebview(extDir: string): void {
         const f = path.join(extDir, "webview", name);
         const bak = f + ".bak";
         if (fs.existsSync(bak)) {
-            fs.copyFileSync(bak, f);
+            // v0.2.6 round-3 HIGH (integrity): atomic restore (mirrors
+            // restoreExtension). A partial restore of webview/index.js bricks
+            // every CC webview the user opens.
+            atomicCopyFileSync(bak, f);
             log(`restored webview/${name} from .bak`);
         } else {
             log(`no webview/${name}.bak — was not patched (nothing to restore)`);
@@ -1785,7 +2750,10 @@ function restorePackageJson(extDir: string): void {
         log("no package.json.bak found — package.json was not patched by this tool");
         return;
     }
-    fs.copyFileSync(bak, pkgPath);
+    // v0.2.6 round-3 HIGH (integrity): atomic restore. A partial
+    // package.json write bricks CC at module-load (VSCode parses it on every
+    // activation).
+    atomicCopyFileSync(bak, pkgPath);
     log("restored package.json from package.json.bak");
 }
 
@@ -1903,7 +2871,16 @@ function installNodeWrapper(hookAbs: string, bakedNodeBin: string): void {
             "exit /b 0",
             "",
         ].join("\r\n");
-        fs.writeFileSync(wrapperAbs, body, "utf8");
+        // v0.2.6 round-3 MEDIUM (integrity): atomic write. The wrapper is the
+        // single point of failure for every CC hook invocation — settings.json
+        // bakes a command that execs this wrapper on every hook event. A
+        // partial wrapper write (ENOSPC/EINTR/antivirus real-time scan holding
+        // the file mid-write on Windows) means every subsequent hook spawn
+        // shells a malformed .cmd that fails to exec node, and because
+        // cc-status.js's contract is silent-exit(0) on any error, the user
+        // sees "status dots stopped updating" with zero diagnostic. Worse: the
+        // malformed wrapper is sticky until the next successful install run.
+        writeAtomicSync(wrapperAbs, body, "utf8");
     } else {
         // POSIX shell wrapper. The shebang is `#!/bin/sh` (not /bin/bash) for
         // portability; we avoid bash-only constructs. Glob expansion in the
@@ -1951,7 +2928,11 @@ done
 #    cc-status.js's own silent-exit(0) contract on the writer side).
 exit 0
 `;
-        fs.writeFileSync(wrapperAbs, body, "utf8");
+        // v0.2.6 round-3 MEDIUM (integrity): atomic write (see Windows branch
+        // comment above). Then chmod +x on the FINAL path (rename preserves
+        // the tmp's mode on POSIX; chmod-ing after rename is simplest and
+        // matches hookCommand's `sh <wrapper>` invocation contract).
+        writeAtomicSync(wrapperAbs, body, "utf8");
         // chmod +x so direct execution works (we still invoke via `sh <wrapper>`
         // from hookCommand to be safe across +x-bit-stripping sync tools, but
         // the +x bit means `./<wrapper>` also works for direct CLI testing).
@@ -2475,6 +3456,16 @@ function locateCompanionVsix(): string | null {
  *  its hardcoded constants). Idempotent: re-writing on every install
  *  refreshes the values. */
 function writeCompanionConfig(): void {
+    // v0.2.4 round-2 (ARCH-3): bake the canonical cmpVerStr body into the
+    // config so the companion can `new Function('a','b', src)`-cache it at
+    // activate() — eliminating the prior byte-for-byte mirror copy that
+    // lived in companion/extension.ts through v0.2.4. Extracted from
+    // src/semver.ts via the SAME regex shape hooks/test-version-sync.mjs uses
+    // (extractFnBody), so the body that ships in the config is byte-identical
+    // to the body the CI test asserts against. The src/semver.ts file is the
+    // single canonical source; both the patcher's runtime import (above) and
+    // the companion's runtime config-read derive from it.
+    const semverComparatorSrc = extractCmpVerStrBody();
     const config = {
         patcherVersion: PATCHER_VERSION,
         installDir: INSTALL_DIR,
@@ -2486,17 +3477,63 @@ function writeCompanionConfig(): void {
         // this in its vscode.extensions.all scan as a startsWith filter.
         ccExtIdPrefix: "anthropic.claude-code",
         searchDirs: SEARCH_DIRS,
+        // ARCH-3: comparator body (see comment above). Optional in the schema
+        // — older companions ignore the field; the v0.2.4+ companion requires
+        // it for the staleness check (degrades to skip-check when absent).
+        semverComparatorSrc,
         writtenAt: Date.now(),
     };
     try {
         fs.mkdirSync(INSTALL_DIR, { recursive: true });
         writeAtomicSync(COMPANION_CONFIG_PATH, JSON.stringify(config, null, 2));
         log(`wrote companion config → ${COMPANION_CONFIG_PATH} (patcherVersion ${PATCHER_VERSION})`);
+        if (!semverComparatorSrc) {
+            warn(
+                `semverComparatorSrc extraction failed — companion will skip the staleness check until next patcher run`,
+            );
+        }
     } catch (e) {
         warn(
             `failed to write ${COMPANION_CONFIG_PATH} (non-fatal — companion will fall back to its hardcoded constants): ${(e as Error).message ?? String(e)}`,
         );
     }
+}
+
+/** Extract the canonical cmpVerStr body from src/semver.ts as a string for
+ *  baking into companion-config.json. The body uses only `a`, `b`, and standard
+ *  JS builtins — no closure captures — so it's safe to ship to the companion's
+ *  `new Function('a','b', src)` constructor. Returns null on extraction
+ *  failure (writeCompanionConfig logs a warning in that case). */
+function extractCmpVerStrBody(): string | null {
+    let src = "";
+    try {
+        src = fs.readFileSync(path.join(SCRIPT_DIR, "src", "semver.ts"), "utf8");
+    } catch {
+        // Compiled mode (dist/): src/ lives one level up from dist/.
+        try {
+            src = fs.readFileSync(path.join(SCRIPT_DIR, "..", "src", "semver.ts"), "utf8");
+        } catch {
+            return null;
+        }
+    }
+    // Match `export function cmpVerStr(a: string, b: string): number { ... }`
+    // (the body is what we want; TS type annotations are stripped). Use the
+    // SAME brace-balanced extraction as test-version-sync.mjs: extractFnBody.
+    const startIdx = src.indexOf("function cmpVerStr(");
+    if (startIdx === -1) return null;
+    let i = src.indexOf("{", startIdx);
+    if (i === -1) return null;
+    let depth = 1;
+    i += 1;
+    const start = i;
+    while (i < src.length && depth > 0) {
+        const c = src[i];
+        if (c === "{") depth += 1;
+        else if (c === "}") depth -= 1;
+        i += 1;
+    }
+    if (depth !== 0) return null;
+    return src.slice(start, i - 1);
 }
 
 /** Write `INSTALL_DIR/last-repatch.json` after a successful --patch-only run so
@@ -2552,7 +3589,18 @@ function installCompanion(): void {
     try {
         if (fs.existsSync(srcPatchJs)) {
             fs.mkdirSync(INSTALL_DIR, { recursive: true });
-            fs.copyFileSync(srcPatchJs, dstPatchJs);
+            // v0.2.6 round-3 MEDIUM (integrity): atomic copy. The companion
+            // .vsix (companion/extension.ts runPatcher) re-execs `node
+            // ${PATCH_JS} --patch-only` on every VS Code startup to detect +
+            // heal CC auto-updates. A partial patch.js fails to parse at
+            // module load → runPatcher's child exits non-zero → the companion
+            // shows "cc-status-dot: auto-patch failed. Run `npx
+            // vscode-claude-code-status-dot` manually." on EVERY window
+            // startup until the user re-runs npx. This is the auto-healing
+            // safety net being bricked by the very install step that's
+            // supposed to set it up. atomicCopyFileSync uses tmp+rename so
+            // patch.js is never observed half-written.
+            atomicCopyFileSync(srcPatchJs, dstPatchJs);
             log(`copied patch.js → ${dstPatchJs} (companion re-execs this)`);
         } else {
             // Dev mode without a build: warn — the companion will fall through
@@ -2822,7 +3870,18 @@ function installRuntimeFiles(): void {
                         `source hooks/cc-status.js banner hash ${srcBannerHash} != body hash ${srcBodyHash} — hook body changed but banner not re-stamped; re-stamp the banner to match`,
                     );
                 }
-                fs.copyFileSync(srcHook, path.join(destHooks, "cc-status.js"));
+                // v0.2.6 round-3 MEDIUM (integrity): atomic copy. A partial
+                // cc-status.js truncates the Node script on disk; the next
+                // hook fire spawns `node cc-status.js` which either fails to
+                // parse (SyntaxError at module load → silent exit(0) per the
+                // final catch at line ~2300 → ALL status dots freeze, status
+                // files go stale, SBI ticks show stale state forever) or
+                // parses but lands a subtle logic bug. The forward install
+                // runs on every npx re-run, but a single failed install under
+                // disk pressure would leave the hook corrupt until the next
+                // successful install. atomicCopyFileSync uses tmp+rename so
+                // the destination is never observed half-written.
+                atomicCopyFileSync(srcHook, path.join(destHooks, "cc-status.js"));
             } else {
                 warn("source hook missing, not copied: hooks/cc-status.js");
             }
@@ -2845,7 +3904,80 @@ function installRuntimeFiles(): void {
             warn(`failed to write node-locating wrapper (non-fatal): ${(e as Error).message}`);
             warn(`  hooks will use the legacy baked-node-binary fallback until next successful install.`);
         }
-        log(`installed runtime files → ${INSTALL_DIR} (${copied}/${OUR_SVGS.length} SVGs + hook + wrapper)`);
+        // v0.2.4: copy token-rates.json (model→USD-per-1M-tokens pricing table)
+        // to INSTALL_DIR so the writer hook can read it via loadRates(). Hot-
+        // editable: a user adjusting prices only edits this file, no re-patch
+        // needed. Best-effort — missing rates just hides the $ suffix (cost=null).
+        //
+        // v0.2.4 user-edit preservation: previously this copy was unconditional,
+        // so any re-patch (manual re-run, CC auto-update via companion, or a
+        // version upgrade) silently clobbered user customizations (added GLM
+        // rates, tuned Opus prices, etc.). Now we compare source vs destination
+        // content: if they differ the user has edited the file, so we back it
+        // up to token-rates.json.bak (one slot — we do NOT overwrite an existing
+        // .bak, so the FIRST user customization survives across multiple
+        // upgrades) and warn before overwriting. Identical content = no edits =
+        // no backup needed, plain overwrite.
+        try {
+            const srcRates = path.join(PROJECT_ROOT, "token-rates.json");
+            if (fs.existsSync(srcRates)) {
+                const dstRates = path.join(INSTALL_DIR, "token-rates.json");
+                if (fs.existsSync(dstRates)) {
+                    let userEdited = false;
+                    try {
+                        const srcBuf = fs.readFileSync(srcRates);
+                        const dstBuf = fs.readFileSync(dstRates);
+                        userEdited = !srcBuf.equals(dstBuf);
+                    } catch {
+                        /* compare failed — assume not edited, plain overwrite */
+                    }
+                    if (userEdited) {
+                        const bakRates = dstRates + ".bak";
+                        try {
+                            if (!fs.existsSync(bakRates)) {
+                                // v0.2.6 round-3 MEDIUM (integrity): atomic
+                                // copy for the user-edit backup. A partial
+                                // .bak here would silently become the permanent
+                                // backup (next call sees existsSync(bak)===true
+                                // and skips), and a future overwrite would
+                                // propagate the partial bytes into the user's
+                                // token-rates.json — losing their custom rates.
+                                atomicCopyFileSync(dstRates, bakRates);
+                                warn(`token-rates.json has user edits — backed up to ${bakRates}`);
+                                warn(
+                                    `  re-apply your custom rates after this upgrade (or restore the .bak) — cost estimates revert to bundled defaults until then.`,
+                                );
+                            } else {
+                                warn(
+                                    `token-rates.json has user edits but a .bak already exists (preserving the older backup).`,
+                                );
+                                warn(`  your current edits will be overwritten — back them up manually if needed.`);
+                            }
+                        } catch (e) {
+                            warn(
+                                `could not back up user token-rates.json (proceeding with overwrite): ${(e as Error).message}`,
+                            );
+                        }
+                    }
+                }
+                // v0.2.6 round-3 MEDIUM (integrity): atomic copy. A partial
+                // token-rates.json leaves loadRates()'s JSON.parse throwing →
+                // catch returns {_default: null} → cost suffix silently
+                // disappears from every session SBI. Less severe than a partial
+                // cc-status.js (no state freeze) but still a silent regression
+                // the user would only notice by inspecting the SBI tooltip.
+                atomicCopyFileSync(srcRates, dstRates);
+            } else {
+                warn(
+                    "source token-rates.json missing — cost estimation will be disabled (token SBI still works, $ hidden)",
+                );
+            }
+        } catch (e) {
+            warn(`failed to copy token-rates.json (non-fatal): ${(e as Error).message}`);
+        }
+        log(
+            `installed runtime files → ${INSTALL_DIR} (${copied}/${OUR_SVGS.length} SVGs + hook + wrapper + token-rates.json)`,
+        );
     } catch (e) {
         warn(`runtime install dir setup failed: ${(e as Error).message}`);
         warn(`the IIFE/hook will reference ${INSTALL_DIR} — ensure files exist there or re-run.`);
@@ -3306,17 +4438,20 @@ function runSelfTestIo(): void {
         );
     }
 
-    // --- cmpSemver / cmpVer / cmpVerStr ---
-    eq("cmpSemver equal", 0, cmpSemver("1.2.3", "1.2.3"));
-    eq("cmpSemver a>b (major)", 1, Math.sign(cmpSemver("2.0.0", "1.9.9")));
-    eq("cmpSemver a<b (patch)", -1, Math.sign(cmpSemver("1.0.0", "1.0.1")));
-    eq("cmpSemver missing segment treated as 0", 0, cmpSemver("1.2", "1.2.0"));
-    eq("cmpSemver X.Y vs X.Y.Z", -1, Math.sign(cmpSemver("1.2", "1.2.1")));
-    eq("cmpVer [1,2,3] vs [1,2,3]", 0, cmpVer([1, 2, 3], [1, 2, 3]));
-    eq("cmpVer [2,0] vs [1,9,9]", 1, Math.sign(cmpVer([2, 0], [1, 9, 9])));
-    eq("cmpVerStr equal", 0, cmpVerStr("0.2.0", "0.2.0"));
-    eq("cmpVerStr a>b", 1, Math.sign(cmpVerStr("0.2.0", "0.1.99")));
-    eq("cmpVerStr a<b", -1, Math.sign(cmpVerStr("0.1.18", "0.2.0")));
+    // --- cmpVerStr (consolidated canonical comparator; cmpSemver/cmpVer
+    // aliases were removed in the v0.2.4 follow-up) ---
+    eq("cmpVerStr equal", 0, cmpVerStr("1.2.3", "1.2.3"));
+    eq("cmpVerStr a>b (major)", 1, Math.sign(cmpVerStr("2.0.0", "1.9.9")));
+    eq("cmpVerStr a<b (patch)", -1, Math.sign(cmpVerStr("1.0.0", "1.0.1")));
+    eq("cmpVerStr missing segment treated as 0", 0, cmpVerStr("1.2", "1.2.0"));
+    eq("cmpVerStr X.Y vs X.Y.Z", -1, Math.sign(cmpVerStr("1.2", "1.2.1")));
+    eq(
+        "cmpVerStr number[] join parity ([2,0] vs [1,9,9])",
+        1,
+        Math.sign(cmpVerStr([2, 0].join("."), [1, 9, 9].join("."))),
+    );
+    eq("cmpVerStr 0.2.0 vs 0.1.99", 1, Math.sign(cmpVerStr("0.2.0", "0.1.99")));
+    eq("cmpVerStr 0.1.18 vs 0.2.0", -1, Math.sign(cmpVerStr("0.1.18", "0.2.0")));
 
     process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
 }
@@ -3338,8 +4473,8 @@ function run(argv: string[]): void {
     }
     if (args.includes("--self-test-io")) {
         // Dev: run the patcher's pure I/O functions (stripJsonc / parseJsonc /
-        // surgicalSetTopLevelKey / surgicalRemoveTopLevelKey / cmpSemver /
-        // cmpVer) over a fixed fixture corpus and emit a JSON array of
+        // surgicalSetTopLevelKey / surgicalRemoveTopLevelKey / cmpVerStr)
+        // over a fixed fixture corpus and emit a JSON array of
         // { name, pass, expected, actual } rows. hooks/test-patcher-io.mjs
         // invokes this and asserts every row is `pass:true` — the patcher's
         // I/O surface had ZERO automated coverage before this gate (e2e

@@ -62,9 +62,14 @@ const CC_STATUS = path.join(__dirname, 'cc-status.js');
 // IIFE bakes (DONE_TO_IDLE_MS / SBI_RUNNING_STALE_MS / INTERRUPTED_RETENTION_MS
 // / cap()) and the writer enforces. Any patch.ts change MUST be mirrored here
 // — same DRY caveat as test-sbi-aggregation.mjs.
+// v0.2.6 round-1: SBI_RUNNING_STALE_MS now keys off `since` (the *→running
+// transition timestamp), NOT mtime. SINCE_STALE_MS is the per-tab decay
+// threshold (15min) — mirrored for parity though not used by the SBI
+// aggregation path in this replica.
 const DONE_TO_IDLE_MS = 5 * 60 * 1000; // 5 min — §4 done→idle
-const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC
+const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC (since-based, v0.2.6)
 const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
+const SINCE_STALE_MS = 15 * 60 * 1000; // 15 min — per-tab running decay (v0.2.6)
 
 // v0.1.16: each SBI is its own StatusBarItem with text `<ball><digit>`
 // (e.g. "🟢3", "🟤0" — 🟤 since the v0.1.17 ⚪→🟤 pivot; pre-pivot "⚪0").
@@ -119,25 +124,24 @@ function aggregate(home, now = Date.now()) {
       if (st === 'done' && since && now - since > DONE_TO_IDLE_MS) {
         st = 'idle';
       }
-      // §7.2 stale-running mtime>30min → idle
+      // §7.2 stale-running (v0.2.6: since-based, not mtime-based). since is
+      // the *→running transition time. cc-status.js Stop preserveSince path
+      // keeps cur.since on Stop heartbeats but writeJsonAtomic refreshes
+      // mtime — so under CC's drifted inflight>0 Stop payload (the stuck-
+      // yellow bug) mtime stays fresh forever and the 30min clock never
+      // elapsed. since-decay fires correctly because since is preserved.
+      // Mirrors done>5min one branch up.
       else if (st === 'running') {
-        let mt = 0;
-        try {
-          mt = fs.statSync(fp).mtimeMs;
-        } catch {
-          /* keep mt=0 — won't decay */
-        }
-        if (mt && now - mt > SBI_RUNNING_STALE_MS) st = 'idle';
+        if (since && now - since > SBI_RUNNING_STALE_MS) st = 'idle';
       }
-      // interrupted mtime>24h → idle (bounds 🔴 growth)
-      else if (st === 'interrupted') {
-        let mt = 0;
-        try {
-          mt = fs.statSync(fp).mtimeMs;
-        } catch {
-          /* keep mt=0 */
-        }
-        if (mt && now - mt > INTERRUPTED_RETENTION_MS) st = 'idle';
+      // §7.5 interrupted>24h → idle. Keys off `since` (the TERMINAL timestamp),
+      // NOT mtime — orphan SubagentStop/Notification writes refresh mtime while
+      // preserving since (cc-status.js preserveSince/preserveError paths), so
+      // mtime-based decay never fires under orphan activity and 🔴 would grow
+      // monotonically. Mirrors test-sbi-aggregation.mjs's replica and the IIFE
+      // source (patch.ts buildIIFE §7.5 branch, locked by IIFE.37d).
+      else if (st === 'interrupted' && since && now - since > INTERRUPTED_RETENTION_MS) {
+        st = 'idle';
       }
       if (st === 'running') ag.running++;
       else if (st === 'done') ag.done++;
@@ -454,19 +458,27 @@ logStep(
 
 // === §7  Crashed-mid-permission GC (stale-blue-light fix) ===================
 logPhase('§7  D crashed mid-permission 30+ min ago — both 🟡 and 🔵 must drop (stale-blue fix)');
-// D is running+pending. Backdate D's mtime to 31min so §7.2 stale-running decay
-// fires (D→idle). Pending on an idle-decayed session MUST NOT count toward 🔵
+// D is running+pending. Backdate D's `since` to 31min ago so §7.2 stale-running
+// decay fires (D→idle). Pending on an idle-decayed session MUST NOT count toward 🔵
 // — otherwise a crashed session killed mid-permission would false-stick 🔵 forever.
+// v0.2.6 round-1: decay now keys off `since` (the *→running transition time),
+// NOT mtime — the prior mtime-based rule was defeated by cc-status.js:390-401
+// Stop preserveSince path (mtime refreshed by every Stop heartbeat; since
+// preserved). Test now backdates `since` directly (was: utimes mtime only).
+// mtime is also backdated for symmetry with the real-crash scenario (both old).
 {
   const dPath = path.join(stateDir(home), 'D.json');
   const j = JSON.parse(fs.readFileSync(dPath, 'utf8'));
-  // mtime must be >30min stale. utimes the file (since is NOT the decay key for
-  // running — mtime is; §1.6a-decouple in test-sbi-aggregation.mjs locks this).
+  // since must be >30min stale. Rewrite the file with an aged since, then
+  // utimes mtime to match (both stale — mirrors a real crashed process whose
+  // last hook fire wrote the file 31min ago and never wrote again).
+  j.since = Date.now() - 31 * 60 * 1000;
+  fs.writeFileSync(dPath, JSON.stringify(j, null, 2));
   const past = new Date(Date.now() - 31 * 60 * 1000);
   fs.utimesSync(dPath, past, past);
 }
 logStep(
-  'D: mtime aged to 31min (past stale-running threshold) → D idle, pending NOT counted',
+  'D: since aged to 31min (past stale-running threshold) → D idle, pending NOT counted',
   home,
   // D decayed from running to idle. running drops 1→0 (D was the only running),
   // pending drops 1→0 (D held pending but is now idle — stale-blue fix).
@@ -583,6 +595,59 @@ capSweep('interrupted', 3, (n, h) => {
       pending: false,
     });
 });
+
+// === §10  Interrupted >24h decay keyed on `since` (not mtime) ===============
+// v0.2.5 round-2 e2e medium: this phase exercises the IIFE §7.5 rule that the
+// smoke-journey replica now mirrors (changed from mtime-keyed to since-keyed
+// decay). Plant an interrupted session whose `since` is 25h ago but whose
+// mtime is FRESH (simulating an orphan SubagentStop/Notification write that
+// refreshed mtime via cc-status.js's preserveSince/preserveError paths). The
+// IIFE MUST decay this session to idle (the mtime-based variant would NOT,
+// since the orphan write reset the mtime clock). Pre-fix the smoke-journey
+// replica's mtime-based branch never fired under this scenario (silent
+// divergence from the IIFE source the journey file claims to mirror).
+logPhase('§10  Interrupted >24h decays via `since` (not mtime — orphan-write-proof)');
+{
+  const h = newTempHome();
+  // Session X crashed 25h ago (since=Date.now()-25h), but an orphan write
+  // (SubagentStop arriving after the crash) refreshed its mtime to NOW. The
+  // IIFE's §7.5 rule decays interrupted→idle when since>24h regardless of
+  // mtime. So the count MUST be: interrupted=0 (decayed to idle), idle=1.
+  const oldSince = Date.now() - 25 * 60 * 60 * 1000;
+  writeStatus(h, 'X', {
+    state: 'interrupted',
+    since: oldSince,
+    error: 'interrupted',
+    activeSubagents: 0,
+    pending: false,
+  });
+  // Touch the file's mtime to "now" — simulates an orphan write that landed
+  // AFTER the crash. mtime-based decay would NOT fire (mtime is fresh); the
+  // since-based decay (correct) DOES fire.
+  const xPath = path.join(stateDir(h), 'X.json');
+  const fresh = new Date();
+  fs.utimesSync(xPath, fresh, fresh);
+  // Aggregate with default `now` (Date.now). X has since=now-25h → decay fires.
+  const got = aggregate(h);
+  const ok = got.interrupted === 0 && got.idle === 1;
+  if (ok) {
+    pass++;
+    console.log('  PASS  §10.1 interrupted since>24h → idle (orphan-write mtime refresh does NOT prevent decay)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §10.1 expected interrupted=0 idle=1, got ' +
+        JSON.stringify(got) +
+        ' (mtime-based decay would have left interrupted=1; the IIFE source uses since-based)',
+    );
+  }
+  // cleanup
+  try {
+    fs.rmSync(h, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+}
 
 // cleanup the journey's shared HOME (best-effort; tempdir will reap on reboot)
 try {

@@ -7,9 +7,9 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Type](https://img.shields.io/badge/Type-VSCode%20Patch-CCA700?style=flat-square)](#-arquitetura--documentação)
 
-**Veja num relance o estado de todas as suas sessões do Claude Code — sem precisar ficar alternando abas.**
+**Veja num relance o que todas as sessões do Claude Code estão fazendo — sem precisar ficar alternando abas**
 
-🟡 Em execução · 🟢 Concluído · 🔴 Interrompido (piscando rápido) · ⚪ Ocioso · 🔵 Aguardando você
+🟡 Em execução · 🟢 Concluído · 🔵 Aguardando você (o CC abriu a caixa de autorização, ou a resposta do CC diz "te aguardo / let me know") · 🔴 Interrompido (pisca rápido) — **ponto de 5 estados na aba + bloco de 4 luzes na barra inferior (🟢🟡🔵🔴, sem cinza — ocioso não conta no agregado inferior) + notificação de conclusão/interrupção + autocura do companion em atualizações do CC + tokens em tempo real no canto inferior direito / estimativa de $ custo (tokens de subagentes do workflow também entram na conta) + painel QuickPick que segue o idioma do VSCode (zh/en/ja/de/es/fr/pt/ru)**
 
 [简体中文](README.md) | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | **Português** | [Русский](README.ru.md)
 
@@ -17,137 +17,282 @@
 
 ---
 
-> Cada sessão do Claude Code ganha um **ponto colorido na aba** (amarelo / verde / vermelho / cinza / azul) — tanto na barra de abas do topo quanto na vista "Open Editors". Além disso, a **barra de status inferior agrega tudo num único bloco de 4 luzes 🟢🟡🔵🔴 com contagem** (sem o cinza: ocioso não é sessão ativa e não entra no agregado), para ver **todas** as sessões de uma vez. E você ainda recebe **notificações do sistema** quando o CC termina ou é interrompido.
+> Quando você está rodando várias sessões do Claude Code em paralelo, ficar alternando abas para ver quem terminou, quem travou aguardando autorização, quem foi interrompido por rate limit — é cansativo. Instale isto e **cada aba te diz o que está acontecendo**; a barra inferior ainda mostra o quadro geral de todas as sessões numa única olhada. Quando termina ou é interrompido, ainda salta uma notificação do sistema. Você pode ficar tranquilo alternando para o navegador ou outra janela.
+
+---
+
+## 🖼️ Entenda num relance
 
 <div align="center">
 
-<img src="docs/images/status-dots.png" width="640" alt="Pontos de estado nas abas">
+<img src="docs/images/status-dots.png" alt="Pontos de estado na barra de abas do topo e em Open Editors" width="640">
 
-*Pontos de estado nas abas do topo e em "Open Editors" — 🟡 amarelo em execução · 🟢 verde concluído · 🔵 azul aguardando você · 🔴 vermelho interrompido*
+**Barra de abas do topo + vista "Open Editors" no canto superior esquerdo** — 🟡 em execução · 🟢 concluído · 🔵 aguardando entrada · 🔴 interrompido
 
 <br>
 
-<img src="docs/images/completion-notification.png" width="640" alt="Notificação de conclusão">
+<img src="docs/images/completion-notification.png" alt="Notificação do macOS + som Glass" width="640">
 
-*Notificação do sistema + som quando a sessão termina*
+**Notificação do sistema + som quando a sessão termina** (em primeiro ou segundo plano)
 
-
+<!-- Placeholder de screenshot do bloco de 4 luzes inferior: recomendado adicionar uma captura da barra de status inferior mostrando 🟢done 🟡running 🔵pending 🔴interrupted + números. -->
 
 </div>
 
 ---
 
-## 🚀 Comece em 30 segundos
+## 🚀 Comece em 3 passos
+
+**Pré-requisitos**: Node.js 18+ e a extensão Claude Code instalada no VSCode.
 
 ```bash
 npx vscode-claude-code-status-dot
 ```
 
-Depois, no VSCode: `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux) → digite `Developer: Reload Window`.
+`Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux) → digite `Developer: Reload Window` → envie um prompt no CC.
 
-Pronto. Envie um prompt no Claude Code e observe o ponto da aba: 🟡 amarelo em execução → 🟢 verde quando concluído; e quando o CC pedir autorização / pergunta / elicit, a aba cede lugar ao ponto 🔵 azul nativo do CC (aguardando você) e a luz 🔵 da barra de status inferior soma +1.
+O ponto da aba fica 🟡 amarelo imediatamente, vira 🟢 verde quando termina (com notificação); quando o CC pede autorização a aba fica 🔵 azul (o leitor cede o ícone ao ponto azul nativo do CC, esperando você autorizar), e a luz 🔵 pendente inferior soma +1. **Funciona logo após a instalação — não precisa configurar nada.**
 
-<details>
-<summary>Pré-requisitos e instalação alternativa</summary>
-
-- **Node.js 18+**
-- **Extensão VSCode do Claude Code instalada** (você consegue abrir o painel de chat do CC dentro do VSCode)
-
-A partir do código-fonte (modo dev):
-```bash
-git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
-cd vscode-claude-code-status-dot
-npx tsx patch.ts
-```
-Os dois caminhos são equivalentes e idempotentes — pode rodar de novo quantas vezes quiser.
-
-</details>
+> Só vá nas [configurações](#-configuração-opcional) se quiser desligar notificações ou trocar o som.
 
 ---
 
-## 💬 O que você ganha?
+## 💬 O que você ganha
 
-**Ver o estado de cada sessão sem precisar clicar nela.** Enquanto o Claude Code trabalha, a cor do ponto da aba muda sozinha — e a barra de status inferior agrega tudo num só bloco.
+### 1. Ponto de 5 estados em cada aba
 
-| Situação | O que você vê |
-|---|---|
-| Você envia um prompt | 🟡 A aba da sessão fica **amarela** — está rodando |
-| O CC termina normalmente | 🟢 A aba fica **verde** + notificação do sistema (macOS) ou toast (Win/Linux) |
-| O CC é interrompido por rate limit / overload | 🔴 A aba **pisca vermelho rápido** + notificação trazendo o motivo |
-| Workflow / subagent ainda rodando em segundo plano | A aba principal **continua amarela** (não fica verde falsamente); `Stop` é a autoridade final |
-| CC pede permissão / pergunta / elicit | 🔵 Aparece como **pendente** na barra inferior (contador +1) + ponto azul nativo do CC |
-| Quer ver tudo de uma vez? | Olhe a **barra de status inferior**: 🟢🟡🔵🔴 com contagem, lado a lado, posições fixas |
-| O CC atualiza e quebra o patch? | A **extensão companion** se autocura na próxima inicialização do VSCode — você quase nem percebe |
+O ícone da aba da sessão do CC muda de cor conforme o estado — 🟡 em execução / 🟢 concluído / 🔴 interrompido (pisca rápido) / ⚪ ocioso / 🔵 aguardando entrada (quando o CC pede autorização, o leitor cede o ícone ao ponto azul nativo do CC, **não sobrescreve**). **A barra de abas do topo e a vista "Open Editors" no canto superior esquerdo mostram ao mesmo tempo**, totalmente sincronizadas. Rodando várias sessões em paralelo, uma olhada te diz quem ainda está trabalhando, quem já terminou, quem está preso esperando sua autorização.
 
-> **Tudo funciona logo após a instalação — sem configurar nada.** Só vá nas configurações se quiser desligar notificações ou trocar o som.
+### 2. Bloco agregado de 4 luzes inferior: o estado de todas as sessões de uma vez
+
+A barra de status inferior tem um bloco único com 4 pontos + números:
+
+```
+🟢 1   🟡 2   🔵 1   🔴 0
+done   running  pending  interrupted
+```
+
+3 sessões abertas — uma rodando, outra esperando autorização, outra concluída — a barra inferior mostra `🟢1 🟡1 🔵1 🔴0`, sem precisar alternar abas. **As posições das 4 luzes são fixas, os números mudam sem deslocar a linha** (algarismos tabulares na barra de status). Contador em 0 → luz apagada em cinza (placeholder sem brilho); >0 → acende a bola colorida.
+
+### 3. Notificação de conclusão / interrupção
+
+Quando o CC termina ou é interrompido por rate limit, salta uma **notificação do sistema** — em primeiro ou segundo plano:
+
+- **macOS**: cai do canto superior direito da tela, som Glass, sem botões, some sozinha em alguns segundos
+- **Windows / Linux**: toast no canto inferior direito do VSCode, também sem botões
+
+Você pode ficar tranquilo alternando para o navegador ou outra janela; quando termina, ele te avisa — sem precisar ficar olhando.
+
+### 4. 🔵 Pendente: o CC te avisa na hora quando quer sua entrada
+
+A luz 🔵 inferior soma +1 e a aba fica azul, com **dois tipos de gatilho**:
+
+**(a) O CC abre a caixa de autorização** (permission / question / elicit) — o leitor cede o ícone da aba ao ponto azul nativo do CC (**não sobrescreve**), e a barra de status inferior conta o pending de forma independente. Você vê num relance quantas sessões estão presas esperando sua autorização.
+
+**(b) A resposta do CC diz claramente "aguardando sua decisão/feedback"** — por exemplo, a última frase do CC ao terminar diz `te aguardo para testar e dar feedback`, `você decide se continuamos`, `let me know`, `your call`, `please confirm`, `Should I proceed?` etc., e a aba fica azul automaticamente (sobrescreve o amarelo-running ou verde-done). **Você não precisa ficar adivinhando "será que terminou ou será que está esperando eu dizer algo"** — essa é a dor mais relatada e mais frequente dos usuários (o CC falso-reporta conclusão quando na verdade está esperando entrada); agora a aba te diz direto.
+
+**Como diferenciar conclusão neutra vs. esperando resposta**:
+
+- Conclusão neutra (`concluído`, `Done.`, `todos os testes passaram`) → a aba fica 🟢 verde
+- Esperando sua decisão/feedback (chinês com `等你`/`你决定`/`请确认`/`告诉我`/`听你的`, inglês com `let me know`/`your call`/`please confirm`/`what do you think`/`over to you`, ou uma pergunta curta independente no final como `继续吗?`/`Should I proceed?`) → a aba fica 🔵 azul
+
+**Sem disparo falso**: identificadores dentro de blocos de código como `letMeKnow()` são removidos antes da correspondência; perguntas retóricas/informativas como `Why?`/`什么意思?`/`效果如何?` também não disparam (evita azul falso quando o CC se faz perguntas a si mesmo).
+
+### 4.5. 🪙 Tokens / $ custo no canto inferior direito
+
+O segundo SBI **no canto inferior direito** mostra o uso de tokens do painel CC ativo e a estimativa USD opcional:
+
+```
+$(clock) 12.3k tok · $0.42
+```
+
+- **Durante o streaming do CC, os tokens crescem em tempo real** — sem esperar a resposta terminar; a cada tick lê o final do transcript de forma incremental; a tooltip é estática (não pisca). Em máquinas sensíveis a desempenho, dá pra desligar com `tokenLiveDeltaEnabled`
+- **Janela padrão `all` (cumulativa, não zera)** — opções: 5min / 10min / 1h / 24h / 3d / 7d / 30d / all. `all` é cumulativo para a sessão inteira (cresce monotamente, como um razão, só aumenta); `5min..30d` são janelas móveis (turns antigos saem da janela, parecem "zerar", úteis para ver "quanto foi gasto nos últimos X minutos")
+- **Tokens de subagentes do workflow também entram na conta** — subagents / teammates spawnados em segundo plano são somados à estatística da sessão pai (o que você paga por eles não fica "invisível")
+- Estimativa USD via `token-rates.json` com recarga quente (preços oficiais Anthropic pré-definidos; modelos desconhecidos como GLM ocultam `$`, mostrando só tokens)
+- A tooltip mostra o total/24h/7 dias/30 dias + model + project + tempo decorrido da rodada atual
+- Clique no SBI abre o painel QuickPick: troca de janela / modo de exibição (token / cost / both) / toggle de notificação / escolha de som / copiar contagem / resetar stats / abrir diretório de estado / abrir configurações
+- **O painel QuickPick + a tooltip seguem o idioma da interface do VSCode** (zh/en/ja/de/es/fr/pt/ru; idiomas desconhecidos caem para en) — VSCode em português → painel em português; os valores de configuração (5min/all/token/cost/both/nomes de som) são neutros por idioma, nunca traduzidos
+- Alerta de limite: `ccStatusDot.warnThresholdUsd` dispara uma notificação ao cruzar o limite (desativado por padrão)
+
+**Fonte dos dados**: o jsonl de transcrição do CC é a fonte autoritativa única (cada linha `assistant` em `message.usage`); o hook writer lê de forma incremental (byte-offset sidecar, mesmo um arquivo de 33MB fica < 100ms). CC `/resume` reutiliza o mesmo sid → a estatística continua naturalmente; sessão nova começa em 0.
+
+Detalhes em [USAGE.md §3.6](docs/USAGE.md) e [STATES.md §8](docs/STATES.md).
+
+### 5. Autocura do companion: recupera automaticamente depois de o CC atualizar e sobrescrever
+
+Atualizações automáticas do CC substituem o patch inteiro. **Desde v0.2.0**, ao rodar o `npx` ele também instala automaticamente uma **extensão companion** nos seus editores da família VSCode (incluindo Insiders / Cursor / VSCodium); na próxima inicialização do VSCode, se o companion detectar que o CC desfez o patch, **re-aplica o patcher automaticamente + sugere `Reload Window` uma vez** — na maioria das vezes você não faz nada, recuperação transparente.
+
+### 6. Persistência: apagar o código / limpar cache / atualizar o CC não afetam
+
+A cópia de runtime fica em `~/.claude/cc-status-dot/` (ícones SVG + scripts de hook + patcher). Todos os comandos de hook e caminhos de ícone apontam para esse **caminho absoluto** — apagar o código-fonte do projeto, limpar o cache do npx, atualização automática do CC: nada disso toca aqui; a extensão já patcheada continua renderizando normalmente.
+
+### 7. Sem verde falso durante workflow
+
+Enquanto rodam subagents / cron em segundo plano, a aba da sessão principal **continua amarela** (não finge conclusão) — o `Stop` hook só confia no contador de `background_tasks` do payload, sem descer a deriva. Só quando o trabalho realmente termina é que fica verde.
+
+### 8. Rede de segurança (nunca quebra o CC)
+
+Antes de escrever o `extension.js`, roda `node --check` no arquivo completo de 2.6MB (guardião assertCompiles, injeção inválida é recusada antes de escrever), escrita atômica (`.tmp` + rename), `INJECT_VERSION` reinjeta automaticamente. Mesmo se o patcher falhar, **não vai corromper a extensão do CC**.
+
+### 9. Restauração sem danos num único comando
+
+`npx vscode-claude-code-status-dot --revert` restaura completamente o `extension.js` a partir do `.bak`, remove os hooks cirurgicamente, **preservando todos os seus dados de usuário**.
+
+> ⚠️ **Declaração honesta**: isto é um **patch**, não uma extensão independente — o VSCode não permite que uma extensão de terceiros modifique o ícone da aba webview de outra extensão; o único caminho viável é patchear o `extension.js` do próprio CC. O custo: atualizações automáticas do CC sobrescrevem, mas a extensão companion recupera automaticamente (ver item 5).
 
 ---
 
 ## 🎨 Cores de estado
 
-| Cor | Significado | Quando aparece |
+| Cor | Significado | Gatilho |
 |---|---|---|
-| 🟡 Amarelo `#CCA700` (estático, sem animação) | Em execução | Envio de prompt, antes/depois de chamada de ferramenta (heartbeat), spawn de subagent |
-| 🟢 Verde `#3FB950` (estático) | Rodada concluída | O CC dispara `Stop` (**após 5 minutos vira cinza automaticamente**) |
+| 🟡 Amarelo `#CCA700` (**estático**, sem animação) | Em execução | Envio de prompt, antes/depois de chamada de ferramenta (heartbeat), spawn de subagent |
+| 🟢 Verde `#3FB950` (estático) | Rodada concluída (não espera usuário) | O CC dispara `Stop` e a última resposta é conclusão neutra (`concluído`/`Done.`); **após 5 minutos vira cinza automaticamente** |
 | 🔴 Vermelho `#F85149` (pisca rápido) | Interrompido / erro | O CC dispara `StopFailure` (rate limit, overload etc.) |
 | ⚪ Cinza `#808080` (estático) | Ocioso | Inicial / concluído há mais de 5 minutos / sem arquivo de estado |
-| 🔵 Azul (nativo do CC) | Aguardando autorização | Ponto azul nativo do CC, **este projeto não sobrescreve** |
+| 🔵 Azul `#58A6FF` (estático) | Aguardando entrada do usuário (dois gatilhos) | (a) **O CC abre a caixa de autorização**: o leitor cede o ícone ao ponto azul nativo do CC (**não sobrescreve**); (b) **A última resposta do CC contém semântica "aguardando sua decisão"** (`等你`/`你决定`/`请确认`/`let me know`/`your call` etc.) → o leitor renderiza o `claude-logo-pending.svg` azul (sobrescreve o amarelo-running / verde-done). A luz 🔵 inferior conta os dois casos |
 
-> Em execução é amarelo estático (sem piscar); interrompido mantém o pisca rápido de alerta. O contrato completo de estados está em [`docs/STATES.md`](docs/STATES.md).
+> Em execução é amarelo estático (sem animação); interrompido mantém o pisca vermelho rápido de alerta. O contrato completo de estados (eventos / SVG / IPC / notificações) está em [`docs/STATES.md`](docs/STATES.md).
 
 ---
 
-## ✨ Recursos
+## 🛠️ Detalhes das capacidades
 
-- **📍 Ponto de estado de 5 cores em cada aba** — visível simultaneamente na barra de abas do topo e em "Open Editors". idle/running/done são estáticos; interrupted pisca vermelho rápido; quando o CC pede autorização, o leitor devolve o ícone ao CC, que mostra o ponto 🔵 azul nativo (permission yield).
-- **📊 Bloco de 4 luzes agregadas na barra de status inferior** — 🟢concluído · 🟡correndo · 🔵pendente · 🔴interrompido, cada uma com sua contagem ao lado. As 4 posições são fixas — os dígitos mudam sem deslocar as luzes. Veja **todas** as sessões num único olhar.
-- **🔵 Pending = aguardando você** — sempre que o CC pede permissão / pergunta / elicit, a luz azul acende e o contador soma +1 (alimentado pelo hook `Notification`, independente do estado da sessão).
-- **🔔 Notificações de conclusão / interrupção** — macOS: notificação do sistema (canto superior direito, som `Glass`, sem botões, some sozinha), em primeiro ou segundo plano. Windows / Linux: toast embutido do VSCode.
-- **🛡️ Companion que se autocura (v0.2.0+)** — quando o CC atualiza e sobrescreve o patch, a extensão companion detecta na inicialização do VSCode, re-aplica o patch automaticamente e sugere reload. **Você não precisa fazer nada.**
-- **♻️ Persistente** — runtime em `~/.claude/cc-status-dot/`. Apagar o código-fonte, limpar o cache do npx, ou uma atualização do CC: a extensão já patcheada continua funcionando.
-- **🔒 Seguro contra quebra do CC** — `assertCompiles` valida o código com `node --check` antes de escrever; IIFE inválido é recusado, escrita atômica, `INJECT_VERSION` reinjeta automaticamente. **Nunca quebra o CC.**
-- **⚙️ Mantém running enquanto o workflow roda** — subagent / cron em segundo plano não deixa a sessão verde falsamente; `Stop` é a autoridade final.
-- **🪝 9 hooks (incluindo `Notification`)** — gravam o estado da sessão em arquivo; o leitor de ícones reage em tempo real.
-- **↩️ Restauração sem danos** — `--revert` restaura tudo a partir do `.bak`, remove os hooks cirurgicamente e preserva seus dados de usuário.
+### 🟡 Ponto de 5 estados nas abas
+
+O ícone da aba de cada sessão do CC muda de cor conforme o estado, **visível tanto na barra de abas do topo quanto na vista "Open Editors" no canto superior esquerdo**. running/idle/done são pontos estáticos, interrupted pisca vermelho rápido, e quando o CC pede autorização o leitor cede o ícone ao ponto azul nativo do CC (**não sobrescreve**).
+
+### 📊 Bloco agregado de 4 luzes na barra inferior
+
+A barra de status inferior (lado esquerdo, perto do centro) tem um bloco único (**um único StatusBarItem + `parts.join(' ')` concatenado com espaços**) agregando as 4 luzes: **🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted**, cada uma seguida por sua contagem (limitada a 0/1/2/3/N, onde N significa ≥4):
+
+- count=0 → bola cinza ⚪ + número (apagada, placeholder sem brilho)
+- count>0 → bola colorida + número (acesa)
+
+**As posições das 4 luzes são fixas — os números mudam sem deslocar** — a CSS `font-variant-numeric:tabular-nums` do VSCode impõe algarismos tabulares em todos os itens; ASCII 0-9 não tremem em nenhuma fonte.
+
+🔵 pending é uma dimensão independente (desacoplada do state), **conta os dois gatilhos**: (a) o CC pede autorização / question / elicit (o hook `Notification` grava `pending:true`); (b) a resposta do CC contém semântica "aguardando sua decisão" (quando o hook `Stop` lê a última resposta e encontra palavras-chave como `等你`/`let me know`/`your call`, grava `pending:true`). **Contagem dupla da fonte agregada inferior** — flag pending em tempo real do CC (síncrono nesta janela) + `<sid>.json.pending` em disco (assíncrono entre janelas); a caixa de autorização mal abre, já acende, sem perder contagem. O ícone da aba em (a) cede para o ponto azul nativo do CC (não sobrescreve); em (b) renderiza o azul direto (sobrescreve amarelo/verde).
+
+**GC de 3 estágios** previne deriva de contagem: done há mais de 5 minutos → idle (verde -1) / running sem atualização há mais de 30 minutos → idle (recupera sessões travadas) / interrupted há mais de 24 horas → idle; pending tem GC baseado no campo st (pending travado volta a idle, decrementando amarelo + azul ao mesmo tempo).
+
+O bloco inteiro funciona via **1 StatusBarItem de runtime + texto concatenado** (o IIFE muta diretamente o text do SBI a cada 500ms), sem precisar patchear o `package.json` do CC, sem precisar de blocos ThemeColor.
+
+### 🔔 Notificação de conclusão / interrupção
+
+Quando a sessão transita para `done` ou `interrupted` (cada novo evento de conclusão/interrupção `since` dispara uma vez, sem repetição):
+
+- **macOS**: dispara uma **notificação do sistema** (cai do canto superior direito da tela, com som, sem nenhum botão, some sozinha em alguns segundos) — **tanto em primeiro quanto em segundo plano** (`notifyWhenFocused` padrão `true`).
+- **Windows / Linux**: sem osascript, recorre à mensagem embutida do VSCode (toast no canto inferior direito, também sem botões, some sozinha).
+
+O som da notificação é controlado por `ccStatusDot.notifySound` (padrão `Glass`, compartilhado entre done e interrupção; `""` silencia). Na primeira notificação do sistema no macOS, salta uma autorização "Script Editor quer enviar notificações"; basta permitir.
+
+### 🛡️ Extensão companion que se autocura (v0.2.0+)
+
+Ao rodar `npx`, ele detecta automaticamente o CLI `code` no PATH (incluindo `code-insiders` / `cursor` / `codium`) e instala o **.vsix companion** (`cc-status-dot-companion`) via `code --install-extension` em cada editor da família VS Code detectado; também copia `patch.js` para `INSTALL_DIR/patch.js`.
+
+A cada inicialização do VSCode, a extensão companion verifica o marcador `cc-status-dot-injected` dentro da extensão do CC — se uma atualização automática do CC tiver desfeito o patch (o marcador sumiu), o companion roda `node ~/.claude/cc-status-dot/patch.js` automaticamente para re-aplicar, e sugere `Reload Window` uma vez. **Recuperação transparente para o usuário**, sem precisar rodar `npx` manualmente.
+
+### ⚙️ Mantém running durante workflow
+
+Em segundo plano, ao rodar workflow / subagent, a sessão principal continua amarela (não fica verde falsamente), não falso-reporta conclusão — o `Stop` só confia no contador de `background_tasks` no payload, sem descer a deriva.
+
+### 📂 Sincronia no Open Editors
+
+As abas do CC na vista "Open Editors" no canto superior esquerdo **também ganham ponto de estado**, totalmente sincronizadas com a barra de abas do topo.
+
+### 🔒 Mecanismo de persistência
+
+Os caminhos de SVG referenciados pelo reader (IIFE injetado) e os comandos de hook ligados ao settings.json apontam para caminhos **absolutos** dentro de `INSTALL_DIR` (`~/.claude/cc-status-dot/`), e não para o diretório do código-fonte. Na instalação, o patcher copia uma cópia idempotente de lá (de `resources/` + `hooks/`). Então mesmo que você apague o diretório do código-fonte, limpe o cache do npx, ou o CC se atualize automaticamente (só sobrescreve o diretório da extensão, não toca `~/.claude/`), a extensão já patcheada continua renderizando normalmente.
+
+### ↩️ Restauração sem danos num clique
+
+`--revert` restaura completamente o extension.js a partir do `.bak`, remove os hooks cirurgicamente, preserva seus dados de usuário.
+
+<details>
+<summary>📖 Caminho de upgrade (como atualizar da versão antiga instalada via git clone)</summary>
+
+Usuários da versão antiga podem simplesmente rodar `npx vscode-claude-code-status-dot` de novo: o patcher detecta a injeção antiga → restaura a versão original automaticamente → reinjeta a nova versão, **sem precisar fazer `--revert` antes**.
+
+</details>
+
+<details>
+<summary>📖 Por que é um patch (e não uma extensão independente)</summary>
+
+O ícone da aba de `WebviewPanel` do VSCode (`iconPath`) é definido **exclusivamente pela extensão que cria o painel** — não há API pública que permita a uma extensão de terceiros alterá-lo. A aba de sessão do CC é exatamente um WebviewPanel criado pela própria extensão do CC, e seu ícone só pode ser atribuído dentro do `extension.js` do CC. Alternativas exaustivamente consideradas (extensão independente, proposed API, interceptação de webview etc.) são todas inviáveis; o único caminho viável é o patch. O custo: atualizações automáticas do CC sobrescrevem — e é justamente isso que a companion v0.2.0+ resolve automaticamente.
+
+</details>
+
+<details>
+<summary>📖 Lista de comandos</summary>
+
+| Comando | O que faz |
+|---|---|
+| `npx vscode-claude-code-status-dot` | Instala (patcheia extension.js + liga hooks + instala companion, idempotente; limpa resíduos de versões antigas) |
+| `npx vscode-claude-code-status-dot --revert` | Restaura (recupera do `.bak` + remove hooks + apaga INSTALL_DIR, preserva dados de usuário) |
+| `npx vscode-claude-code-status-dot --status` | Relatório de diagnóstico dry-run, não altera nenhum arquivo |
+
+Em modo dev troque o comando por `npx tsx patch.ts` (com os mesmos parâmetros).
+
+Ou a partir do código-fonte (modo dev):
+```bash
+git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
+cd vscode-claude-code-status-dot
+npx tsx patch.ts
+```
+Os dois caminhos são equivalentes e idempotentes. O IIFE e os hooks referenciam o caminho absoluto do `INSTALL_DIR` — **apagar o código / limpar o cache npx não afeta a extensão já patcheada**.
+
+</details>
 
 ---
 
 ## ⚙️ Configuração (opcional)
 
-Tudo funciona sem configurar nada. Se quiser ajustar, escreva no `settings.json` do VSCode:
+Escreva no `settings.json` do VSCode (sem configurar, os padrões se aplicam):
 
 ```json
 {
   "ccStatusDot.notify": true,
   "ccStatusDot.notifyWhenFocused": true,
-  "ccStatusDot.notifySound": "Glass"
+  "ccStatusDot.notifySound": "Glass",
+
+  "ccStatusDot.tokenStatsWindow": "all",
+  "ccStatusDot.tokenDisplayMode": "both",
+  "ccStatusDot.tokenSbiVisible": true,
+  "ccStatusDot.tokenLiveDeltaEnabled": true,
+  "ccStatusDot.showCost": true,
+  "ccStatusDot.warnThresholdUsd": 0
 }
 ```
 
 | Opção | Padrão | Descrição |
 |---|---|---|
 | `ccStatusDot.notify` | `true` | Chave geral das notificações |
-| `ccStatusDot.notifyWhenFocused` | `true` | Também notifica quando o VSCode está em primeiro plano (`false` = apenas em segundo plano) |
-| `ccStatusDot.notifySound` | `"Glass"` | Som da notificação macOS (compartilhado entre done e interrupção; `""` = silencioso; opções: Basso / Ping / Hero etc.) |
+| `ccStatusDot.notifyWhenFocused` | `true` | Também notifica quando o VSCode está em primeiro plano (notificação do sistema no macOS / mensagem VSCode no Win/Linux); `false` = só notifica em segundo plano |
+| `ccStatusDot.notifySound` | `"Glass"` | Som da notificação do sistema no macOS (compartilhado entre done e interrupção; `""` silencia; opções: Basso / Ping / Hero etc.) |
+| `ccStatusDot.tokenStatsWindow` | `"all"` | Janela de tempo do SBI de tokens no canto inferior direito. `all` = cumulativo (sessão inteira, não zera, padrão); `5min/10min/1h/24h/3d/7d/30d` = janelas móveis (turns antigos saem da janela automaticamente, parece que "zera") |
+| `ccStatusDot.tokenDisplayMode` | `"both"` | Modo de exibição do SBI de tokens: `token` (só tokens) / `cost` (só $) / `both` (ambos) |
+| `ccStatusDot.tokenSbiVisible` | `true` | Mostrar / ocultar o SBI de tokens |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | Durante o streaming, o IIFE lê o final do transcript a cada tick para que os tokens se atualizem entre disparos do hook; defina `false` em máquinas sensíveis a desempenho |
+| `ccStatusDot.showCost` | `true` | Mostrar `$` (modelos desconhecidos são ocultados automaticamente; requer entrada correspondente em `token-rates.json`) |
+| `ccStatusDot.warnThresholdUsd` | `0` | Notificação ao cruzar limite de custo (0 = desativado; número positivo = limite USD, dispara uma vez por cruzamento) |
 
----
+> **Preços personalizados por modelo**: `~/.claude/cc-status-dot/token-rates.json` é uma tabela de preços com recarga quente — por padrão cobre os preços oficiais da Anthropic; modelos não correspondidos como GLM ocultam `$` automaticamente. Adicione um glob para mostrar `$` neles:
 
-## 🧰 Comandos
-
-| Comando | Função |
-|---|---|
-| `npx vscode-claude-code-status-dot` | Instala (idempotente; limpa resíduos de versões antigas automaticamente) |
-| `npx vscode-claude-code-status-dot --revert` | Restaura tudo (recupera do `.bak`, remove os hooks, apaga o `INSTALL_DIR`, preserva seus dados) |
-| `npx vscode-claude-code-status-dot --status` | Diagnóstico dry-run, não altera nenhum arquivo |
-
-> Em modo dev, troque o comando por `npx tsx patch.ts` (mesmos parâmetros).
+```jsonc
+{
+  "_default": null,
+  "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
+  "glm-*":           { "in": 0.5, "out": 1.5 }
+}
+```
 
 ---
 
 ## ❓ FAQ
 
 **Depois de atualizar o CC o ponto de estado sumiu?**
-Desde a v0.2.0, a extensão companion checa o marcador `cc-status-dot-injected` na inicialização do VSCode e, se o CC tiver sobrescrito o patch, re-aplica automaticamente `node ~/.claude/cc-status-dot/patch.js` + sugere `Reload Window` num clique — na maioria das vezes você nem percebe. Sem o companion (ou se preferir reparar manualmente): rode `npx vscode-claude-code-status-dot` de novo — a cópia de runtime em `~/.claude/cc-status-dot/` não é tocada pela atualização do CC.
+Atualizações automáticas do CC substituem o diretório da extensão inteiro, e o arquivo patcheado é sobrescrito pela versão original. **Desde v0.2.0**: a extensão companion verifica o marcador `cc-status-dot-injected` na inicialização do VS Code; se o CC tiver desfeito o patch, re-aplica `node ~/.claude/cc-status-dot/patch.js` automaticamente e sugere `Reload Window` uma vez — na maioria das vezes você não faz nada. Se o companion não tiver sido instalado ou você quiser reparar manualmente: rode `npx vscode-claude-code-status-dot` de novo (a cópia de runtime dos SVGs/hooks em `~/.claude/cc-status-dot/` não é tocada pela atualização do CC; o código-fonte do projeto ter sido apagado também não afeta).
 
 **Acabei de instalar e o ícone não mudou?**
 Primeiro faça `Developer: Reload Window`. Se ainda não funcionar, rode `npx vscode-claude-code-status-dot --status`: se aparecer `patched: no`, rode o install de novo; se `baked RES ... (STALE)`, rode de novo para reescrever no local; se `hooks wired: no`, rode de novo; se `missing SVGs`, rode de novo para completar.
@@ -169,42 +314,25 @@ vscode-claude-code-status-dot        # depois de instalar, rode o comando direto
 
 ## ⚠️ Limitações conhecidas
 
-- **Interrupção manual via Esc não tem hook**: o CC não dispara Stop/StopFailure ([#45289](https://github.com/anthropics/claude-code/issues/45289) / [#9516](https://github.com/anthropics/claude-code/issues/9516)); o estado fica em running e se corrige no próximo prompt.
-- **Atualização automática do CC sobrescreve** o `extension.js` patcheado → **desde v0.2.0 a extensão companion re-aplica o patch automaticamente + sugere reload** (ver FAQ); sem o companion, rode o comando manualmente.
-- **Fragilidade da âncora minificada**: o patch depende de duas strings precisas no código do CC; em caso de divergência de versão o patcher devolve "Anchor mismatch" e se recusa a escrever (a extensão não é corrompida).
+- **Interrupção manual via Esc não tem hook**: o CC não dispara Stop/StopFailure ([#45289](https://github.com/anthropics/claude-code/issues/45289) / [#9516](https://github.com/anthropics/claude-code/issues/9516)); o estado fica em running e se corrige no próximo prompt/Stop.
+- **Atualização automática do CC sobrescreve**: o `extension.js` patcheado é sobrescrito pela versão original → **desde v0.2.0 a extensão companion re-aplica o patcher automaticamente + sugere reload** (ver FAQ); sem o companion, rode o comando manualmente para recuperar.
+- **Fragilidade da âncora minificada**: o patch depende de duas strings precisas no código do CC; em caso de divergência de versão o patcher devolve "Anchor mismatch" e se recusa a escrever; antes de escrever o extension.js ainda roda `node --check` no arquivo completo de 2.6MB (guardião assertCompiles, IIFE inválido é recusado antes de escrever), escrita atômica (`.tmp` + rename), `INJECT_VERSION` reinjeta automaticamente — **nunca corrompe o CC**.
 - **Sem notificação quando o VSCode está totalmente fechado**: o IIFE roda no processo host da extensão; VSCode fechado → sem notificação.
 - **Clique na notificação do sistema não salta para a aba**: o `osascript` não tem callback de clique; a notificação é apenas um lembrete — use o ponto verde/vermelho da aba como referência para voltar ao VSCode.
+- **Prioridade do SBI sem posse**: o bloco da barra inferior ocupa `StatusBarAlignment.Left` na prioridade `-9996` (um único ponto); a API StatusBarItem do VSCode não tem mecanismo de namespace/posse por extensão — se outras extensões declararem a mesma prioridade, podem empurrar nosso SBI para o canto. **A arquitetura de bloco único de um SBI elimina o modo de falha "linha dividida por injetor externo"** (4 SBIs independentes poderiam ser partidos por SBIs de outras extensões inseridos entre as luzes; como a linha inteira é um único SBI, inserções externas só caem nas duas pontas da linha, sem separar as 4 luzes). Não ocorre no uso mainstream; STATES.md §7.5 declara essa limitação de forma honesta.
+- **Dependência da pilha de fontes emoji**: os pontos da barra inferior são glifos emoji (🟢🟡🔵🔴⚪) e dependem da pilha de fontes emoji do sistema — macOS (Apple Color Emoji) / Windows 10+ (Segoe UI Emoji) / Linux mainstream (Noto Color Emoji) renderizam colorido normalmente; Win7 / alguns Linux headless / ambientes SSH remotos sem fontes emoji podem renderizar como glifos em preto-e-branco ou blocos de tofu. Essa é uma escolha estética deliberada (pontos emoji > blocos de cor padronizados multiplataforma).
 
 ---
 
 ## 🏗️ Arquitetura + documentação
 
-<details>
-<summary>📖 Por que é um patch (e não uma extensão independente)?</summary>
+**Patch no `extension.js` do CC (injeta um temporizador que define o ícone da aba) + hooks do CC que gravam o estado + notificações de conclusão/interrupção.** Documentação completa:
 
-O ícone da aba de `WebviewPanel` do VSCode (`iconPath`) é definido **exclusivamente pela extensão que cria o painel** — não há API pública que permita a uma extensão de terceiros alterá-lo. A aba de sessão do CC é exatamente um WebviewPanel criado pela própria extensão do CC, e seu ícone só pode ser atribuído dentro do `extension.js` do CC. Alternativas exaustivamente consideradas (extensão independente, proposed API, interceptação de webview etc.) são todas inviáveis; o único caminho viável é o patch. O custo: atualizações automáticas do CC sobrescrevem — e é exatamente isso que a **companion v0.2.0+ resolve automaticamente**.
-
-</details>
-
-<details>
-<summary>📖 Como funciona (resumo técnico)</summary>
-
-- **Patch no `extension.js` do CC** — injeta um temporizador (IIFE) que define o `iconPath` da aba e dispara as notificações done/interrupted.
-- **9 hooks do CC** — gravam o estado da sessão em arquivo; o `Notification` alimenta o contador de pending de forma independente do estado.
-- **Runtime em `~/.claude/cc-status-dot/`** — 4 SVGs (idle + running + done + error) + script de hook + `patch.js` para a companion re-aplicar.
-- **Barra de status inferior** — 1 único `StatusBarItem` (`StatusBarAlignment.Left`, prioridade `-9996`) renderiza o bloco de 4 luzes; o IIFE atualiza o texto concatenado a cada 500ms, com `font-variant-numeric: tabular-nums` nativo do VSCode para garantir que as posições não deslocam quando os dígitos mudam.
-- **assertCompiles** — `node --check` valida o IIFE antes de escrever; IIFE inválido é recusado e a extensão original não é tocada. Escrita atômica + `INJECT_VERSION` permite reinjeção automática em upgrades.
-- **Companion .vsix** — instalada em cada CLI da família VSCode no PATH (`code`, `code-insiders`, `cursor`, `codium`); detecta sobreescrita na inicialização e re-aplica o patch + sugere reload.
-
-</details>
-
-Documentação completa:
-
-- [`docs/STATES.md`](docs/STATES.md) — **Contrato de estados (fonte única de verdade)**: cinco estados (4 do leitor + azul de permission yield) / mapeamento de eventos / IPC / notificações
+- [`docs/STATES.md`](docs/STATES.md) — **Contrato de estados (fonte única de verdade)**: cinco estados (cinza/amarelo/verde/vermelho/azul) + bloco agregado de 4 luzes na barra inferior / mapeamento de eventos / IPC / notificações
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — Princípio da injeção do ícone (âncora / IIFE / associação de SVG)
 - [`docs/USAGE.md`](docs/USAGE.md) — Guia de uso (instalação / troubleshooting / restauração)
 
-> Este projeto modifica o `extension.js` da extensão do CC (com backup; `--revert` restaura totalmente) e escreve em `~/.claude/settings.json` (backup na primeira vez). Os scripts de hook são projetados para **nunca bloquear ou interromper o CC** — qualquer erro sai silenciosamente com `exit(0)`.
+> Este projeto modifica o `extension.js` da extensão do CC (com backup; `--revert` restaura totalmente) e escreve em `~/.claude/settings.json` (backup na primeira vez). Os scripts de hook **nunca bloqueiam o CC** — qualquer erro sai silenciosamente. **9 hooks** (incluindo o `Notification` que grava pending em disco).
 
 ---
 

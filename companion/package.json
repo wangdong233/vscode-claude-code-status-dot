@@ -2,7 +2,7 @@
   "name": "cc-status-dot-companion",
   "displayName": "cc-status-dot Companion",
   "description": "Detects Claude Code extension auto-updates and silently re-applies the cc-status-dot patch. Ships inside the vscode-claude-code-status-dot npm package — install via: npx vscode-claude-code-status-dot",
-  "version": "0.2.3",
+  "version": "0.2.6",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,
@@ -16,7 +16,90 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "contributes": {},
+  "contributes": {
+    "configuration": {
+      "title": "cc-status-dot",
+      "properties": {
+        "ccStatusDot.notify": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when Claude Code completes a turn (state transitions to done or interrupted)."
+        },
+        "ccStatusDot.notifyWhenFocused": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also fire the completion notification when VSCode is the currently focused window. Disable to only notify when you're in another app."
+        },
+        "ccStatusDot.notifySound": {
+          "type": "string",
+          "enum": [
+            "Basso",
+            "Bell",
+            "Blow",
+            "Bottle",
+            "Frog",
+            "Funk",
+            "Glass",
+            "Hero",
+            "Morse",
+            "Ping",
+            "Pop",
+            "Purr",
+            "Sosumi",
+            "Submarine",
+            "Tink"
+          ],
+          "default": "Glass",
+          "description": "macOS system sound to play on completion notification (ignored on Linux/Windows)."
+        },
+        "ccStatusDot.tokenStatsWindow": {
+          "type": "string",
+          "enum": [
+            "5min",
+            "10min",
+            "1h",
+            "24h",
+            "3d",
+            "7d",
+            "30d",
+            "all"
+          ],
+          "default": "all",
+          "description": "Time window for the right-side token stats status bar item. 'all' = cumulative (never resets, default); the rolling windows (5min..30d) naturally age out old turns. Match this default with the IIFE cfg.get fallback (pin enforced by test-version-sync.mjs)."
+        },
+        "ccStatusDot.tokenDisplayMode": {
+          "type": "string",
+          "enum": [
+            "token",
+            "cost",
+            "both"
+          ],
+          "default": "both",
+          "description": "What to show on the token stats SBI: token count only, USD cost only, or both."
+        },
+        "ccStatusDot.tokenSbiVisible": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the token stats status bar item on the right side."
+        },
+        "ccStatusDot.tokenLiveDeltaEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Read the active session's transcript tail every tick so token counts update during streaming (between hook fires). Disable on perf-sensitive machines."
+        },
+        "ccStatusDot.showCost": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the USD cost estimate alongside the token count (requires a matching model entry in token-rates.json — unknown models like GLM are auto-hidden)."
+        },
+        "ccStatusDot.warnThresholdUsd": {
+          "type": "number",
+          "default": 0,
+          "description": "Notify when the session cost estimate crosses this USD threshold (0 = disabled). Fires once per crossing."
+        }
+      }
+    }
+  },
   "scripts": {
     "build": "tsc -p ./tsconfig.json",
     "package:vsix": "vsce package --no-dependencies -o cc-status-dot-companion-$npm_package_version.vsix"

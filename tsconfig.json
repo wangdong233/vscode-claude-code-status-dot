@@ -17,6 +17,6 @@
     "sourceMap": false,
     "removeComments": false
   },
-  "include": ["patch.ts"],
-  "exclude": ["node_modules", "dist", "hooks", "resources", "docs", "src", "companion"]
+  "include": ["patch.ts", "src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "hooks", "resources", "docs", "companion"]
 }

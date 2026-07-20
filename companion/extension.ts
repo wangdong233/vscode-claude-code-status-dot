@@ -84,7 +84,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.2.3";
+const MIN_PATCHER_VERSION = "0.2.6";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -98,6 +98,17 @@ interface CompanionConfig {
     ccExtIdPrefix?: string;
     searchDirs?: string[];
     writtenAt?: number;
+    /** v0.2.4 round-2 (ARCH-3): source text of the canonical cmpVerStr body
+     *  (the SAME body that lives in src/semver.ts). patch.ts:writeCompanionConfig
+     *  extracts the body via regex and writes it here so the companion can
+     *  `new Function('a','b', src)`-cache it on globalThis at activate() —
+     *  eliminating the prior mirror copy at companion/extension.ts. The
+     *  companion compiles standalone into a .vsix so it cannot import
+     *  src/semver.ts at runtime; this field is the runtime channel that
+     *  keeps the canonical source flowing to the companion without a static
+     *  mirror. When absent (older patcher wrote the config), the staleness
+     *  check that uses the comparator is silently skipped (degraded mode). */
+    semverComparatorSrc?: string;
 }
 
 /** Read INSTALL_DIR/companion-config.json. Returns null if missing / corrupt
@@ -128,11 +139,11 @@ function injectMarker(): string {
     return effectiveConfig?.injectMarker ?? "cc-status-dot-injected";
 }
 
-/** Expected IIFE version stamp. Falls back to the v0.2.3 hardcoded value if
+/** Expected IIFE version stamp. Falls back to the v0.2.6 hardcoded value if
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.2.3";
+    return effectiveConfig?.injectVersion ?? "v0.2.6";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -273,33 +284,57 @@ function discoverCcInThisFlavor(): string | null {
     return best?.dir ?? null;
 }
 
-/** Compare two `X.Y.Z` version strings numerically. Returns >0 if a>b, <0 if
- *  a<b, 0 if equal. Used to detect a stale INSTALL_DIR/patch.js snapshot
- *  (config.patcherVersion < MIN_PATCHER_VERSION).
+/** v0.2.4 round-2 (ARCH-3): compare two `X.Y.Z` version strings numerically.
+ *  Returns >0 if a>b, <0 if a<b, 0 if equal. Used to detect a stale
+ *  INSTALL_DIR/patch.js snapshot (config.patcherVersion < MIN_PATCHER_VERSION).
  *
- *  MIRROR HEADER (DRY contract): this function MUST stay byte-for-byte
- *  equivalent to patch.ts:cmpSemver / cmpVerStr. The companion compiles
- *  standalone into a .vsix so it cannot import the canonical helper at
- *  runtime — the price of distribution isolation is a mirror copy. A future
- *  4-segment or pre-release-tag change touches BOTH files; if you change
- *  the body, mirror it here. See hooks/test-version-sync.mjs for the CI
- *  assertion that the two implementations agree on a fixed test corpus. */
-function cmpVerStr(a: string, b: string): number {
-    const pa = a.split(".").map((x) => Number(x) || 0);
-    const pb = b.split(".").map((x) => Number(x) || 0);
-    const len = Math.max(pa.length, pb.length);
-    for (let i = 0; i < len; i++) {
-        const ai = pa[i] ?? 0;
-        const bi = pb[i] ?? 0;
-        if (ai !== bi) return ai - bi;
+ *  CANONICAL SOURCE: src/semver.ts. The companion compiles standalone into a
+ *  .vsix so it cannot import src/semver.ts at runtime. Instead,
+ *  patch.ts:writeCompanionConfig extracts the canonical body via regex and
+ *  writes it to companion-config.json as `semverComparatorSrc`. The companion
+ *  reads that field once at activate() and `new Function('a','b', src)`-caches
+ *  it on globalThis.__ccsdCmpVerStr — eliminating the prior byte-for-byte
+ *  mirror copy that lived here through v0.2.4.
+ *
+ *  When `semverComparatorSrc` is absent (older patcher wrote the config before
+ *  the field was added), getCmpVerStr() returns null and the staleness check
+ *  is skipped (degraded mode — the check is best-effort, not load-bearing; a
+ *  stale patch.js is still detected via the IIFE-content-hash mismatch on the
+ *  next patcher run).
+ *
+ *  See hooks/test-version-sync.mjs §Q for the CI assertion that the
+ *  config-baked body agrees with src/semver.ts on a fixed test corpus, and
+ *  hooks/test-contract-sync.mjs for the cross-file shape pin. */
+type CmpVerStr = (a: string, b: string) => number;
+const CMP_VER_STR_CACHE_KEY = "__ccsdCmpVerStr";
+
+function getCmpVerStr(): CmpVerStr | null {
+    const cached = (globalThis as Record<string, unknown>)[CMP_VER_STR_CACHE_KEY] as
+        | CmpVerStr
+        | undefined;
+    if (cached) return cached;
+    const src = effectiveConfig?.semverComparatorSrc;
+    if (typeof src !== "string" || src.trim() === "") return null;
+    try {
+        // Construct the comparator from the config-baked source. The body
+        // uses only `a`, `b`, `.split`, `.map`, `Number`, `Math.max`, `pa[i]
+        // ?? 0`, and arithmetic — no closure captures, so the Function
+        // constructor is safe (no access to companion scope).
+        const fn = new Function("a", "b", src) as CmpVerStr;
+        (globalThis as Record<string, unknown>)[CMP_VER_STR_CACHE_KEY] = fn;
+        return fn;
+    } catch {
+        // Malformed source — degrade. A future patcher run refreshes the
+        // config with a valid body.
+        return null;
     }
-    return 0;
 }
 
 /** Freshness check for the on-disk CC extension.js.
  *   "fresh"  — marker present AND version stamp matches the effective
  *              INJECT_VERSION (from companion-config.json, falling back to
- *              the v0.2.3 hardcoded default if config is missing).
+ *              the hardcoded default baked into injectVersion() if config
+ *              is missing).
  *   "stale"  — marker present BUT version stamp differs (older patcher was
  *              used last time; CC hasn't auto-updated since). We re-run patch
  *              so the new INJECT_VERSION's IIFE body lands.
@@ -671,7 +706,13 @@ export function activate(_ctx: vscode.ExtensionContext): void {
     effectiveConfig = readCompanionConfig();
     if (effectiveConfig) {
         const cfgVer = effectiveConfig.patcherVersion;
-        if (typeof cfgVer === "string" && cmpVerStr(cfgVer, MIN_PATCHER_VERSION) < 0) {
+        // v0.2.4 round-2 (ARCH-3): getCmpVerStr() returns null when the
+        // config lacks semverComparatorSrc (older patcher that pre-dates the
+        // field). Skip the staleness check in that case — the check is
+        // best-effort; a stale patch.js is still caught by the IIFE-content-
+        // -hash mismatch on the next patcher run.
+        const cmp = getCmpVerStr();
+        if (typeof cfgVer === "string" && cmp && cmp(cfgVer, MIN_PATCHER_VERSION) < 0) {
             // Stale INSTALL_DIR/patch.js snapshot: the user did
             // `npm install -g ...@latest` (refreshed the .vsix + companion)
             // WITHOUT re-running the bin (so INSTALL_DIR/patch.js is still

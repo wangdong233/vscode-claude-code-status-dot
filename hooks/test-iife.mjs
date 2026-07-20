@@ -37,6 +37,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import vm from 'vm';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -162,6 +163,11 @@ check('IIFE.3  running   -> claude-logo-running.svg', iife.includes('claude-logo
 check('IIFE.4  done      -> claude-logo-done.svg', iife.includes('claude-logo-done.svg'));
 check('IIFE.5  idle      -> claude-logo-idle.svg', iife.includes('claude-logo-idle.svg'));
 check('IIFE.6  interrupted -> claude-logo-error.svg', iife.includes('claude-logo-error.svg'));
+// v0.2.6 blue-via-content: reader renders a 5th our-svg for the pending
+// state (Notification OR Stop last-message semantic match). The svg is
+// shipped in resources/ and the IIFE references it by name from the
+// per-panel tick's new `pend && st!=="idle"` branch.
+check('IIFE.6a pending    -> claude-logo-pending.svg', iife.includes('claude-logo-pending.svg'));
 // interrupted off-frame falls back to CC's claude-logo.svg (not one of ours).
 check('IIFE.7  interrupted off-frame -> CC claude-logo.svg', iife.includes('claude-logo.svg'));
 
@@ -172,13 +178,116 @@ check('IIFE.8  dedup uses seeded flag', /seeded\s*=\s*true/.test(iife));
 check('IIFE.9  dedup uses lastTermSince', /lastTermSince/.test(iife));
 check('IIFE.10 dedup keyed on since change', /since\s*!==\s*lastTermSince/.test(iife));
 check('IIFE.11 no prevSt field (old dedup)', !/\bprevSt\b/.test(iife));
+// v0.2.5 round-3 (e2e MEDIUM regression-lock): cross-panel notify dedup. The
+// round-2 e2e fix introduced globalThis.__ccsdLastNotifyKey — keyed on
+// (sid, since), it lets the FIRST panel to observe a running→done transition
+// claim it; later panels within the same `since` epoch skip notify() so N
+// panels showing the same session produce ONE notification instead of N.
+// Without this lock a focused refactor that strips ONLY __ccsdLastNotifyKey
+// (leaving the per-panel transition detection intact — IIFE.8/IIFE.9/IIFE.10
+// all still pass) would silently re-introduce the N-panels=N-notifications
+// bug for the same terminal transition. The mechanism is correct (verified
+// by trace: single-threaded JS makes the check-and-set atomic; a subsequent
+// transition moves the key so it still fires; SessionEnd→reopen with
+// preserved-since is correctly suppressed); the gap was purely regression
+// coverage. The regex lock below closes that window cheaply and matches the
+// discipline of IIFE.8-IIFE.11 (which lock the OLDER per-panel dedup).
+check(
+  'IIFE.11b cross-panel notify dedup keyed on __ccsdLastNotifyKey (round-2 e2e fix regression lock)',
+  /globalThis\.__ccsdLastNotifyKey/.test(iife),
+  'missing __ccsdLastNotifyKey — multi-panel dedup regressed (N panels would each fire notify for the same terminal transition)',
+);
 
 // --- 4. Permission pending yield (STATES.md §1 v0.1.8) ----------------------
 check('IIFE.12 __ccsdPending yield present', /if\s*\(\s*t\.__ccsdPending\s*\)\s*return/.test(iife));
+// v0.2.6 blue-via-content: per-panel reader pending branch. The IIFE's
+// per-panel tick reads j.pending from the status file and renders our blue
+// claude-logo-pending.svg when pending=true && state!=="idle". Priority:
+// this branch fires AFTER the __ccsdPending yield (so CC's native permission
+// blue dot wins when both flags active) and BEFORE the state-based if-chain
+// (so pending=true overrides running-yellow / done-green). The position lock
+// asserts pend branch index > yield index, and the svg assertion above
+// (IIFE.6a) asserts the path reference exists.
+check(
+  'IIFE.12a per-panel reader pending branch (pend && st!=="idle") -> claude-logo-pending.svg',
+  /if\s*\(\s*pend\s*&&\s*st\s*!==\s*"idle"\s*\)\s*\{[^}]*claude-logo-pending\.svg/.test(iife),
+);
+check(
+  'IIFE.12b per-panel tick reads j.pending===true into pend',
+  /pend\s*=\s*\(\s*j\.pending\s*===\s*true\s*\)/.test(iife),
+);
+{
+  // Position lock: the pend branch must fire AFTER the __ccsdPending yield
+  // (so CC's native permission blue dot wins) and BEFORE the per-tab
+  // interrupted state branch (so pending overrides running/done/idle).
+  // Anchor interrupted to `flashSeq%2===0` (unique to the per-tab interrupted
+  // flash; the aggregation block's `st==="interrupted"` decay check appears
+  // earlier in the IIFE and would false-index).
+  const yieldIdx = iife.indexOf('t.__ccsdPending');
+  const pendIdx = iife.indexOf('pend && st!=="idle"');
+  const perTabInterruptedIdx = iife.indexOf('flashSeq%2===0');
+  check(
+    'IIFE.12c pend branch positioned AFTER __ccsdPending yield AND BEFORE per-tab interrupted branch',
+    yieldIdx >= 0 && pendIdx >= 0 && perTabInterruptedIdx >= 0 && pendIdx > yieldIdx && pendIdx < perTabInterruptedIdx,
+    'yield=' + yieldIdx + ' pend=' + pendIdx + ' perTabInterrupted(flashSeq%2===' + perTabInterruptedIdx + ')',
+  );
+}
+{
+  // v0.2.6 round-2 (HIGH reader-logic fix): pin decay-BEFORE-pending-check
+  // ordering. Round-1 placed the done>5min / running-stale-15min decay
+  // INSIDE the SVG selection (after the pend check) — leaving `st` RAW at
+  // the pend check, so a done+pending session stuck blue forever. This block
+  // asserts:
+  //   (a) the per-tab tick now contains a decay chain `st="idle"`
+  //       assignment BEFORE the pend check;
+  //   (b) the decay chain uses per-tab constants (DONE_TO_IDLE_MS for done,
+  //       SINCE_STALE_MS for running) — NOT SBI_RUNNING_STALE_MS nor
+  //       INTERRUPTED_RETENTION_MS (preserves IIFE.46b divergence lock);
+  //   (c) `var now=Date.now()` is hoisted BEFORE the decay chain (the chain
+  //       reads `now` so it must be defined first);
+  //   (d) the decay chain sits BETWEEN the __ccsdPending yield and the pend
+  //       check (so the yield's early-return still wins for CC-native
+  //       permission blue, and the decay runs only for the file-pending path).
+  const yieldIdx = iife.indexOf('t.__ccsdPending');
+  const pendIdx = iife.indexOf('pend && st!=="idle"');
+  const perTabDecayDoneIdx = iife.indexOf('if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS){st="idle";}');
+  const perTabDecayRunningIdx = iife.indexOf(
+    'else if(st==="running"&&since&&(now-since)>SINCE_STALE_MS&&since<now){st="idle";}',
+  );
+  const perTabNowIdx = iife.indexOf('var now=Date.now();');
+  check(
+    'IIFE.12d per-tab tick applies decay BEFORE pending check (HIGH round-2: done>5min→idle)',
+    perTabDecayDoneIdx >= 0 && pendIdx >= 0 && perTabDecayDoneIdx < pendIdx,
+    'decayDone=' + perTabDecayDoneIdx + ' pend=' + pendIdx,
+  );
+  check(
+    'IIFE.12e per-tab tick applies running-stale decay BEFORE pending check (HIGH round-2: running>15min→idle)',
+    perTabDecayRunningIdx >= 0 && pendIdx >= 0 && perTabDecayRunningIdx < pendIdx,
+    'decayRunning=' + perTabDecayRunningIdx + ' pend=' + pendIdx,
+  );
+  check(
+    'IIFE.12f per-tab decay chain sits AFTER __ccsdPending yield (yield still wins for CC-native blue)',
+    yieldIdx >= 0 && perTabDecayDoneIdx >= 0 && yieldIdx < perTabDecayDoneIdx,
+    'yield=' + yieldIdx + ' decayDone=' + perTabDecayDoneIdx,
+  );
+  check(
+    'IIFE.12g per-tab `var now=Date.now()` hoisted BEFORE decay chain (decay reads `now`)',
+    perTabNowIdx >= 0 && perTabDecayDoneIdx >= 0 && perTabNowIdx < perTabDecayDoneIdx,
+    'now=' + perTabNowIdx + ' decayDone=' + perTabDecayDoneIdx,
+  );
+}
 
 // --- 5. done → idle 5-min fallback (STATES.md §4) ---------------------------
 check('IIFE.13 DONE_TO_IDLE_MS constant', /DONE_TO_IDLE_MS/.test(iife));
-check('IIFE.14 5min value (5*60*1000)', /5\s*\*\s*60\s*\*\s*1000/.test(iife));
+// v0.2.5 round-2 (ARCH-6): DONE_TO_IDLE_MS is now template-substituted from
+// the patch.ts top-level const, so the IIFE bytes carry either the computed
+// numeric form (`var DONE_TO_IDLE_MS=300000;`) OR the prior expression form
+// (`var DONE_TO_IDLE_MS=5*60*1000;`). Accept either; the value is also
+// pinned by test-contract-sync.mjs's extractNumericConst extraction.
+check(
+  'IIFE.14 5min value (5*60*1000)',
+  /5\s*\*\s*60\s*\*\s*1000/.test(iife) || /DONE_TO_IDLE_MS\s*=\s*300000/.test(iife),
+);
 
 // --- 6. macOS osascript path + VSCode fallback (M17) ------------------------
 // The fallback is critical: without it, a notification permission denial or
@@ -224,7 +333,7 @@ check(
 // v0.1.17 banner specifically: locks the single-SBI compact-concat pivot
 // (a regression that rolled back to v0.1.16 4-SBI would surface here
 // before any SBI assertion fires).
-check('IIFE.21c banner carries v0.2.0 stamp', /\/\*cc-status-dot-injected:v0\.2\.3:/.test(iife));
+check('IIFE.21c banner carries v0.2.6 stamp', /\/\*cc-status-dot-injected:v0\.2\.6:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -347,9 +456,14 @@ check('IIFE.26 no setContext calls in executable code', !/vs\.commands\.executeC
 // 4 setContext keys.
 check('IIFE.27 SBI reads ALL files via readdirSync(DIR)', /readdirSync\s*\(\s*DIR\s*\)/.test(iife));
 // cap() clamps 4+ to 4 so the disp() "N" variant kicks in for >=4 sessions.
+// v0.2.5 code-style LOW fix: cap() now uses the named SBI_LIGHT_CAP const
+// instead of the bare literal 4 (same value, but the regex needs to accept
+// either form for forward/backward compat with older IIFE bodies on disk).
 check(
   'IIFE.28 SBI cap() clamps 4+ to 4 (display N)',
-  /cap\s*=\s*function\s*\(\s*n\s*\)\s*\{\s*return\s+n\s*>=\s*4\s*\?\s*4\s*:\s*n/.test(iife),
+  /cap\s*=\s*function\s*\(\s*n\s*\)\s*\{\s*return\s+n\s*>=\s*(?:4|SBI_LIGHT_CAP)\s*\?\s*(?:4|SBI_LIGHT_CAP)\s*:\s*n/.test(
+    iife,
+  ),
 );
 // pending counted INDEPENDENTLY of state but WITH a stale-session GC: the
 // v0.1.13 review found a crashed CC session killed mid-permission-prompt
@@ -372,17 +486,32 @@ check(
 // indexOf to assert the pending check fires AFTER the interrupted-decay
 // block closes — closing the ordering hole. (Behavioral coverage of this
 // ordering lives in test-sbi-aggregation.mjs §1.5/§1.6b.)
+//
+// v0.2.5 (problem 1 fix): the pending check is now a two-source OR —
+// `j.pending===true` (Notification hook → file) OR `__ps[<sid>]===true`
+// (rename_tab IPC → globalThis.__ccsdPendingSet). Both branches still gate
+// on `st!=="idle"` so decay remains authoritative. The regex below accepts
+// EITHER the legacy single-source form OR the new OR form — the OR form's
+// definitive tokens (`j.pending===true`, `__ps[`, `st!=="idle"`,
+// `ag.pending++`) all appear in order. The strict position lock (IIFE.29b)
+// pins the new OR form's `ag.pending++` AFTER the interrupted-decay block.
 check(
-  'IIFE.29 SBI counts pending independent of state with idle GC (j.pending===true && st!=="idle")',
-  /if\s*\(\s*j\.pending\s*===\s*true\s*&&\s*st\s*!==\s*"idle"\s*\)\s*ag\.pending\+\+/.test(iife),
+  'IIFE.29 SBI counts pending independent of state with idle GC (OR file-pending OR globalThis set)',
+  /__ps\s*=\s*globalThis\.__ccsdPendingSet/.test(iife) &&
+    /j\.pending\s*===\s*true/.test(iife) &&
+    /__ps\[files\[i\]\.slice\(0,-5\)\]/.test(iife) &&
+    /st\s*!==\s*"idle"\s*\)\s*ag\.pending\+\+/.test(iife),
 );
 {
   // Position lock: pending check must come AFTER all three decay branches.
   // Anchor on the interrupted-decay block's closing form (the LAST decay
   // branch before the pending check); if the pending check appears earlier
   // in the IIFE source than that close, the ordering regressed.
+  // v0.2.5: pendingToken widened to match the new OR form's literal
+  // (the `__ps[files[i].slice(0,-5)]===true` fragment is unique to the
+  // OR'd second branch).
   const decayCloseToken = 'INTERRUPTED_RETENTION_MS){st="idle";}';
-  const pendingToken = 'j.pending===true&&st!=="idle")';
+  const pendingToken = '__ps[files[i].slice(0,-5)]===true';
   const decayIdx = iife.indexOf(decayCloseToken);
   const pendingIdx = iife.indexOf(pendingToken);
   check(
@@ -390,6 +519,299 @@ check(
     decayIdx >= 0 && pendingIdx >= 0 && pendingIdx > decayIdx,
     'decayClose=' + decayIdx + ' pending=' + pendingIdx,
   );
+}
+// v0.2.5 (problem 1 fix): the per-panel __ccsdPending flag set by Anchor B
+// is mirrored into globalThis.__ccsdPendingSet (window-scoped) so the §F
+// aggregation (which scans files, not panel objects) can pick up the
+// authoritative hasPendingPermissions signal synchronously. The set sync
+// lives in replB; onDidDispose clears the entry on panel close. Both
+// fragments must be present — the set is the single source of the OR'd
+// second branch above. The set-sync block is added at patch time, NOT
+// baked into buildIIFE — verify against patch.ts source (mirrors the
+// IIFE.55 ANCHOR_A replA pattern).
+{
+  const patchSrc = fs.readFileSync(path.join(ROOT, 'patch.ts'), 'utf8');
+  check(
+    'IIFE.29c ANCHOR_B replB maintains globalThis.__ccsdPendingSet on rename_tab (set sync)',
+    patchSrc.includes('globalThis.__ccsdPendingSet||(globalThis.__ccsdPendingSet=Object.create(null))') &&
+      patchSrc.includes('__ps[e.request.sessionId]=true') &&
+      patchSrc.includes('delete __ps[e.request.sessionId]'),
+  );
+}
+check(
+  'IIFE.29d onDidDispose clears the panel sid from globalThis.__ccsdPendingSet (teardown)',
+  /if\s*\(\s*globalThis\.__ccsdPendingSet\s*\)\s*delete globalThis\.__ccsdPendingSet\[t\.__ccsdSid\]/.test(iife) &&
+    /else if\s*\(\s*globalThis\.__ccsdActiveSid\s*===\s*t\.__ccsdSid\s*\)/.test(iife),
+  'round-1 HIGH fix: both onDidDispose sid references must read t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick var sid is NOT visible here',
+);
+// v0.2.5 round-2 (MEDIUM): rename_tab can fire BEFORE update_session_state
+// (VS Code restart restoring a persisted panel, or CC reattaching a session
+// tab title before the full session-state handshake completes). replB must
+// therefore stash this.__ccsdSid on rename_tab too — otherwise onDidDispose's
+// `delete globalThis.__ccsdPendingSet[t.__ccsdSid]` degrades to a no-op if
+// the panel closes in that window, and the set entry leaks. The fix is one
+// line `this.__ccsdSid=e.request.sessionId;` in replB; this check pins both
+// the literal AND the var→let fix (round-2 LOW: block-scope to the try).
+{
+  const patchSrc = fs.readFileSync(path.join(ROOT, 'patch.ts'), 'utf8');
+  // Count occurrences of the sid-assignment literal. It must appear in BOTH
+  // replA (update_session_state, v0.1.x baseline) AND replB (rename_tab,
+  // round-2 fix). Pre-round-2 patch.ts has it only once (replA); post-fix
+  // patch.ts has it twice (replA + replB). We assert >= 2 occurrences, which
+  // uniquely identifies the round-2 addition without being sensitive to
+  // surrounding whitespace or comment edits.
+  const sidAssignments = patchSrc.split('this.__ccsdSid=e.request.sessionId').length - 1;
+  check(
+    'IIFE.29f ANCHOR_B replB stashes this.__ccsdSid on rename_tab (event-order lock)',
+    sidAssignments >= 2,
+    'round-2 MEDIUM: replB must assign this.__ccsdSid (>= 2 occurrences expected: replA + replB); got ' +
+      sidAssignments,
+  );
+  check(
+    'IIFE.29g ANCHOR_B replB uses let __ps (block-scoped, not var hoist)',
+    patchSrc.includes('try{let __ps=globalThis.__ccsdPendingSet') &&
+      !patchSrc.includes('try{var __ps=globalThis.__ccsdPendingSet'),
+    'round-2 LOW: var hoists __ps to the rename_tab handler function top, leaking the binding past the try block; let keeps it local',
+  );
+}
+
+// v0.2.5 round-1 (HIGH e2e regression lock): IIFE.29d above is a STRUCTURAL
+// regex check — it locks the source literal but cannot detect a scope error.
+// The round-1 HIGH bug was exactly that: the onDidDispose callback referenced
+// bare `sid` (declared as `var sid` inside the setInterval callback — NOT
+// visible to the sibling onDidDispose closure), so
+// `delete globalThis.__ccsdPendingSet[sid]` threw ReferenceError (silently
+// swallowed by the inner try/catch — set entry stuck), and
+// `else if(globalThis.__ccsdActiveSid===sid)` threw too (NOT swallowed —
+// escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at
+// the closed session, token SBI kept reading the dead <sid>.json). The
+// regex-only IIFE.29d test PASSED while the bug shipped.
+//
+// This block runs the ACTUAL IIFE body in a vm sandbox with mocked
+// fs/path/vscode/os and fires the registered onDidDispose callback to verify
+// the teardown actually clears the entries. A future re-introduction of the
+// scope bug would throw ReferenceError inside the vm context, which we catch
+// and surface as a test failure.
+{
+  // Strip the banner — the body must be the raw `(function(t){...})(this)`.
+  const bannerEnd = iife.indexOf('*/');
+  const iifeBody = bannerEnd >= 0 ? iife.slice(bannerEnd + 2) : iife;
+
+  // Build a minimal mock for the vscode module. Only the surface reachable
+  // at IIFE entry + at dispose time needs to behave; everything else is
+  // inert (function bodies that never run because setInterval is a no-op).
+  function makeMockVs() {
+    return {
+      workspace: { getConfiguration: () => ({ get: (_k, d) => d }) },
+      window: {
+        createStatusBarItem: () => ({
+          show() {},
+          hide() {},
+          text: '',
+          tooltip: '',
+          name: '',
+          command: null,
+          dispose() {},
+        }),
+        showInformationMessage() {},
+        showErrorMessage() {},
+        showWarningMessage() {},
+        showQuickPick() {},
+        setStatusBarMessage() {},
+        state: { active: true },
+      },
+      commands: {
+        registerCommand: () => ({ dispose() {} }),
+        executeCommand() {},
+      },
+      env: { language: 'en', clipboard: { writeText() {} } },
+      Uri: { file: (p) => ({ fsPath: p }) },
+      StatusBarAlignment: { Left: 1, Right: 2 },
+      QuickPickItemKind: { Separator: -1 },
+      ConfigurationTarget: { Global: 1 },
+    };
+  }
+
+  function makeMockFs() {
+    return {
+      readFileSync: (p, _enc) => {
+        if (typeof p === 'string' && p.endsWith('.json')) return JSON.stringify({ state: 'idle', since: null });
+        return '';
+      },
+      statSync: () => ({ mtimeMs: 0, size: 0 }),
+      readdirSync: () => [],
+      existsSync: () => false,
+      openSync: () => 0,
+      closeSync: () => undefined,
+      readSync: () => 0,
+    };
+  }
+
+  // Build a fresh sandbox. `initialPanelCount` lets the multi-panel case
+  // simulate a pre-existing panel without running a second IIFE entry.
+  function makeSandbox(initialPanelCount, sid) {
+    const pendingSet = Object.create(null);
+    if (sid) pendingSet[sid] = true;
+    const requireFn = (mod) => {
+      if (mod === 'fs') return makeMockFs();
+      if (mod === 'path') return path;
+      if (mod === 'vscode') return makeMockVs();
+      if (mod === 'os') return { homedir: () => '/tmp/ccsd-test-home' };
+      throw new Error('test requires unknown module: ' + mod);
+    };
+    return {
+      require: requireFn,
+      // setInterval as no-op: we only care about the dispose callback, which
+      // is registered synchronously at IIFE entry. Returning 0 lets the
+      // IIFE's `var timer=setInterval(...)` succeed; clearInterval(0) is a
+      // no-op on the real API and our mock matches that.
+      setInterval: () => 0,
+      clearInterval: () => {},
+      console: { log() {}, error() {}, warn() {} },
+      // Pre-set the globals the onDidDispose teardown will read/mutate so we
+      // can assert the delta without depending on ticks actually firing.
+      __ccsdPanelCount: initialPanelCount,
+      __ccsdPendingSet: pendingSet,
+      __ccsdActiveSid: sid || '',
+      __ccsdLastActiveSid: sid || '',
+    };
+  }
+
+  // Minimal panel mock. onDidDispose stores the callback so the test can
+  // fire it after IIFE entry; _fireDispose() is the test-only trigger.
+  function makePanel(sid) {
+    let disposeCb = null;
+    const panel = {
+      __ccsdSid: sid,
+      panelTab: {
+        active: true,
+        iconPath: null,
+        onDidDispose: (cb) => {
+          disposeCb = cb;
+        },
+      },
+      context: { extensionPath: '/tmp/ccsd-ext' },
+    };
+    panel.panelTab._fireDispose = () => {
+      if (disposeCb) disposeCb();
+    };
+    panel._disposeRegistered = () => typeof disposeCb === 'function';
+    return panel;
+  }
+
+  // Run the IIFE so `this` (which the IIFE passes as `t`) is the panel. We
+  // wrap the IIFE in an outer function whose `this` is the panel; the IIFE
+  // inside reads that `this` and forwards it as `t`.
+  function runIifeEntry(panel, sandbox) {
+    sandbox.__panel = panel; // make the panel reachable inside the context
+    vm.createContext(sandbox);
+    vm.runInContext('(function(){' + iifeBody + '}).call(this.__panel)', sandbox);
+  }
+
+  // --- Case A: SINGLE panel. Dispose brings count to 0 → last-panel-out
+  //     teardown path. Verifies the delete succeeds (set cleared) AND the
+  //     last-panel-out branch clears __ccsdActiveSid/__ccsdLastActiveSid.
+  {
+    const sid = 'S1';
+    const panel = makePanel(sid);
+    const sandbox = makeSandbox(0, sid);
+    let entryErr = null;
+    try {
+      runIifeEntry(panel, sandbox);
+    } catch (e) {
+      entryErr = e;
+    }
+    check(
+      'IIFE.29e (e2e) SINGLE-panel IIFE entry runs without throwing',
+      entryErr === null,
+      entryErr ? entryErr.message : '',
+    );
+    check(
+      'IIFE.29e (e2e) SINGLE-panel onDidDispose callback was registered',
+      panel._disposeRegistered(),
+      'panel.panelTab.onDidDispose was not called during IIFE entry',
+    );
+    let disposeErr = null;
+    try {
+      panel.panelTab._fireDispose();
+    } catch (e) {
+      disposeErr = e;
+    }
+    check(
+      'IIFE.29e (e2e) SINGLE-panel onDidDispose fires without ReferenceError',
+      disposeErr === null,
+      disposeErr ? disposeErr.message : '',
+    );
+    check(
+      'IIFE.29e (e2e) SINGLE-panel onDidDispose clears __ccsdPendingSet[sid]',
+      sandbox.__ccsdPendingSet && sandbox.__ccsdPendingSet[sid] === undefined,
+      'pendingSet=' + JSON.stringify(sandbox.__ccsdPendingSet || {}),
+    );
+    check(
+      'IIFE.29e (e2e) SINGLE-panel onDidDispose decrements __ccsdPanelCount to 0',
+      sandbox.__ccsdPanelCount === 0,
+      'count=' + sandbox.__ccsdPanelCount,
+    );
+    check(
+      'IIFE.29e (e2e) SINGLE-panel last-panel-out clears __ccsdActiveSid',
+      sandbox.__ccsdActiveSid === '',
+      'activeSid="' + sandbox.__ccsdActiveSid + '"',
+    );
+    check(
+      'IIFE.29e (e2e) SINGLE-panel last-panel-out clears __ccsdLastActiveSid',
+      sandbox.__ccsdLastActiveSid === '',
+      'lastActiveSid="' + sandbox.__ccsdLastActiveSid + '"',
+    );
+  }
+
+  // --- Case B: MULTI panel (count=2 after entry, dispose → 1). The else-if
+  //     branch `else if(globalThis.__ccsdActiveSid===t.__ccsdSid)` is the
+  //     critical HIGH-bug path — pre-fix it threw ReferenceError that escaped
+  //     to VSCode's event dispatcher (no inner try/catch on this branch).
+  //     This case is the regression lock for that specific path: with the
+  //     bug, __ccsdActiveSid would stay pointed at the closed 'S1'.
+  {
+    const sid = 'S1';
+    const panel = makePanel(sid);
+    const sandbox = makeSandbox(1, sid); // pre-existing panel → entry bumps to 2
+    let entryErr = null;
+    try {
+      runIifeEntry(panel, sandbox);
+    } catch (e) {
+      entryErr = e;
+    }
+    check(
+      'IIFE.29e (e2e) MULTI-panel IIFE entry runs without throwing',
+      entryErr === null,
+      entryErr ? entryErr.message : '',
+    );
+    let disposeErr = null;
+    try {
+      panel.panelTab._fireDispose();
+    } catch (e) {
+      disposeErr = e;
+    }
+    check(
+      'IIFE.29e (e2e) MULTI-panel onDidDispose fires without ReferenceError (HIGH-bug path)',
+      disposeErr === null,
+      disposeErr ? disposeErr.message : '',
+    );
+    check(
+      'IIFE.29e (e2e) MULTI-panel onDidDispose clears __ccsdPendingSet[sid]',
+      sandbox.__ccsdPendingSet && sandbox.__ccsdPendingSet[sid] === undefined,
+      'pendingSet=' + JSON.stringify(sandbox.__ccsdPendingSet || {}),
+    );
+    check(
+      'IIFE.29e (e2e) MULTI-panel onDidDispose decrements __ccsdPanelCount to 1',
+      sandbox.__ccsdPanelCount === 1,
+      'count=' + sandbox.__ccsdPanelCount,
+    );
+    check(
+      'IIFE.29e (e2e) MULTI-panel else-if clears __ccsdActiveSid (HIGH-bug regression lock)',
+      sandbox.__ccsdActiveSid === '',
+      'activeSid="' + sandbox.__ccsdActiveSid + '" — pre-fix ReferenceError left it pointed at the closed session',
+    );
+  }
 }
 
 // --- 12. v0.1.14 lifecycle: panel counter + teardown dispose of SBI ----------
@@ -458,11 +880,23 @@ check(
     iife,
   ),
 );
-// §7.2 stale-running heuristic (mtime>SBI_RUNNING_STALE_MS→idle) is preserved
-// in the SBI aggregation (variable name kept for grep continuity).
+// §7.2 stale-running heuristic — v0.2.6 round-1 fix: switched from mtime
+// (__mt>SBI_RUNNING_STALE_MS) to since-based decay (since>SBI_RUNNING_STALE_MS).
+// Rationale: cc-status.js:390-401 Stop case preserveSince path keeps cur.since
+// across Stop heartbeats (does NOT refresh since) while writeJsonAtomic
+// refreshes mtime — so under CC's drifted inflight>0 Stop payload (workflow
+// actually finished but CC keeps re-firing Stop with background_tasks.length=1)
+// mtime stays fresh forever and the 30min clock never elapsed. since is
+// preserved across the same path so since-decay fires correctly. Lock the
+// since-based form so a regression reverting to mtime (and the silent
+// stuck-yellow-at-scale bug) would surface. The cache-probe __mt is still
+// computed above (used for mtime+size content-change short-circuit) but is
+// no longer the decay signal.
 check(
-  'IIFE.37b SBI stale-running heuristic (mtime>SBI_RUNNING_STALE_MS→idle)',
-  /\(\s*Date\.now\s*\(\s*\)\s*-\s*mt\s*\)\s*>\s*SBI_RUNNING_STALE_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}/.test(iife),
+  'IIFE.37b SBI stale-running heuristic (since > SBI_RUNNING_STALE_MS→idle, v0.2.6)',
+  /else if\s*\(\s*st\s*===\s*"running"\s*\)\s*\{\s*if\s*\(\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*SBI_RUNNING_STALE_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}\s*\}/.test(
+    iife,
+  ),
 );
 // e2e-test round-2: lock the VALUE of SBI_RUNNING_STALE_MS, not just its
 // use. The sibling constants DONE_TO_IDLE_MS (IIFE.14) and
@@ -472,23 +906,37 @@ check(
 // the yellow light) or to 30h (would never GC crashed sessions, re-opening
 // the false-stick-at-1 yellow) would not be caught. Mirror the sibling
 // assertions so all three decay thresholds have their values pinned.
+// v0.2.5 round-2 (ARCH-6): SBI_RUNNING_STALE_MS is template-substituted
+// from the patch.ts top-level const, so the IIFE bytes carry either the
+// computed numeric form (`var SBI_RUNNING_STALE_MS=1800000;`) OR the prior
+// expression form (`var SBI_RUNNING_STALE_MS=30*60*1000;`). Accept either;
+// the value is also pinned by test-contract-sync.mjs.
 check(
   'IIFE.37b2 SBI_RUNNING_STALE_MS value (30*60*1000)',
-  /var\s+SBI_RUNNING_STALE_MS\s*=\s*30\s*\*\s*60\s*\*\s*1000/.test(iife),
+  /var\s+SBI_RUNNING_STALE_MS\s*=\s*(?:30\s*\*\s*60\s*\*\s*1000|1800000)/.test(iife),
 );
 // v0.1.13/v0.1.14 interrupted retention (architecture-review fix): interrupted
 // files older than 24h decay to idle so the 🔴 red light doesn't monotonically
 // grow from accumulated abandoned interrupted sessions (crashed/killed CC
-// never sends SessionEnd). File is NOT deleted — only the count drops. Lock
-// the constant + the decay branch so a regression that dropped the GC would
-// re-open the unbounded 🔴 growth.
+// never sends SessionEnd). File is NOT deleted — only the count drops.
+// v0.2.5 round-2 (ARCH-6): INTERRUPTED_RETENTION_MS is template-substituted
+// from the patch.ts top-level const, so accept the computed numeric form
+// (`var INTERRUPTED_RETENTION_MS=86400000;`) OR the prior expression form.
 check(
   'IIFE.37c SBI INTERRUPTED_RETENTION_MS constant (24h decay for 🔴)',
-  /var\s+INTERRUPTED_RETENTION_MS\s*=\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/.test(iife),
+  /var\s+INTERRUPTED_RETENTION_MS\s*=\s*(?:24\s*\*\s*60\s*\*\s*60\s*\*\s*1000|86400000)/.test(iife),
 );
+// v0.2.4 follow-up (round-2 data-logic fix): the decay used to key off mtime,
+// but orphan SubagentStop / Notification writes on an interrupted parent
+// refresh the file's mtime while preserving since (see cc-status.js
+// SubagentStop preserveSince + Notification preserveError paths) — under
+// orphan activity the 24h clock never elapsed. The decay now keys off
+// `since` (the terminal timestamp set by StopFailure), mirroring the
+// done>5min branch one block up. Lock the since-based form so a regression
+// reverting to mtime (and the silent 🔴-grows-forever bug) would surface.
 check(
-  'IIFE.37d SBI interrupted>24h mtime decay →idle (bounds 🔴 growth)',
-  /else if\s*\(\s*st\s*===\s*"interrupted"\s*\)\s*\{\s*var\s+mt\s*=\s*0;try\s*\{\s*mt\s*=\s*fs\.statSync\s*\(\s*fp\s*\)\.mtimeMs\s*\}\s*catch\s*\(\s*e2\s*\)\s*\{\s*\}\s*;?\s*if\s*\(\s*mt\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*mt\s*\)\s*>\s*INTERRUPTED_RETENTION_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}\s*\}/.test(
+  'IIFE.37d SBI interrupted>24h since decay →idle (bounds 🔴 growth, orphan-write-proof)',
+  /else if\s*\(\s*st\s*===\s*"interrupted"\s*&&\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*INTERRUPTED_RETENTION_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}/.test(
     iife,
   ),
 );
@@ -506,14 +954,18 @@ check(
 // rendering width.
 //
 // Per-token render rule (UNCHANGED from v0.1.16, just collected into txt):
-//   txt += (n===0 ? DIM_EM : CFG[k].em) + (n>=4 ? "N" : ""+n)
+//   txt += (n===0 ? DIM_EM : CFG[k].em) + (n>=SBI_LIGHT_CAP ? "N" : ""+n)
 // → "🟢3 🟡1 ⚪0 ⚪0" (v0.1.18 space-separated; ⚪ since v0.2.0 reverted
 //   the ⚪→🟤 pivot back to gray)
 //   was v0.1.16 4 separate SBI texts "🟢3" / "🟡1" / "⚪0" / "⚪0" with
 //   ~16px gap between each pair.
+// v0.2.5 code-style LOW fix: n>=4 became n>=SBI_LIGHT_CAP (same value).
+// The regex accepts either form so the test stays green on pre-v0.2.5 IIFE
+// bodies (e.g. on-disk installs that haven't been re-injected yet).
 check(
-  'IIFE.38 per-tick concat: parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n)) + parts.join(" ") (v0.1.18 space-separated)',
-  iife.includes('parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n))') && iife.includes('parts.join(" ")'),
+  'IIFE.38 per-tick concat: parts.push((n===0?DIM_EM:CFG[k].em)+(n>=(4|SBI_LIGHT_CAP)?"N":""+n)) + parts.join(" ") (v0.1.18 space-separated)',
+  /parts\.push\(\(n===0\?DIM_EM:CFG\[k\]\.em\)\+\(n>=(?:4|SBI_LIGHT_CAP)\?"N":""\+n\)\)/.test(iife) &&
+    iife.includes('parts.join(" ")'),
   'expected: parts.push(...) + parts.join(" ") for space-separated lights',
 );
 check(
@@ -532,10 +984,14 @@ check(
   'cached ThemeColor identifiers must be gone from executable code',
 );
 // The cap() helper is UNCHANGED from v0.1.14/v0.1.15 — still clamps 4+ to 4
-// so the "N" variant kicks in for >=4 sessions.
+// so the "N" variant kicks in for >=4 sessions. v0.2.5 code-style LOW fix:
+// cap() now uses the named SBI_LIGHT_CAP const instead of the bare literal
+// 4 (same value); regex accepts either form for forward/backward compat.
 check(
   'IIFE.38d cap() helper unchanged (4+ → 4, drives the "N" variant)',
-  /var\s+cap\s*=\s*function\s*\(\s*n\s*\)\s*\{\s*return\s+n\s*>=\s*4\s*\?\s*4\s*:\s*n/.test(iife),
+  /var\s+cap\s*=\s*function\s*\(\s*n\s*\)\s*\{\s*return\s+n\s*>=\s*(?:4|SBI_LIGHT_CAP)\s*\?\s*(?:4|SBI_LIGHT_CAP)\s*:\s*n/.test(
+    iife,
+  ),
 );
 // counts[] array indexes match CFG[] (done/running/pending/interrupted). The
 // per-SBI loop reads counts[k] — a regression that permuted the order would
@@ -545,13 +1001,19 @@ check(
   /var\s+counts\s*=\s*\[\s*cd\s*,\s*cr\s*,\s*cp\s*,\s*ci\s*\]/.test(iife),
 );
 // Tooltip carries the UNcapped breakdown so the user can see real counts even
-// when the lights cap at N. All 4 SBIs carry the same tooltip. UNCHANGED from
-// v0.1.14/v0.1.15 — lock the literal format string.
+// when the lights cap at N. All 4 SBIs carry the same tooltip.
+// v0.2.4 intra-version i18n round-1: the literal now lives in the I18N dict's
+// ttCountsTpl key ("Claude Code: {done} done, {running} running, {pending}
+// pending, {interrupted} interrupted" for en) and is filled at runtime via
+// tr("ttCountsTpl").replace("{done}",ag.done).... Accept EITHER the pre-i18n
+// inline literal form OR the post-i18n tr("ttCountsTpl") form so the
+// assertion stays green across the i18n pivot and on pre-i18n on-disk IIFEs.
+// The full wiring (per-tick + creation) is pinned by IIFE.79 below.
 check(
   'IIFE.40 SBI tooltip = "Claude Code: N done, N running, N pending, N interrupted"',
   iife.includes(
     '"Claude Code: "+ag.done+" done, "+ag.running+" running, "+ag.pending+" pending, "+ag.interrupted+" interrupted"',
-  ),
+  ) || /tr\(\s*"ttCountsTpl"\s*\)\.replace\(\s*"\{done\}"\s*,\s*ag\.done\s*\)/.test(iife),
 );
 // v0.1.17 per-tick update: STILL has the lastKey memo short-circuit keyed
 // on the UNcapped aggregation tuple (steady-state IPC writes drop from
@@ -673,20 +1135,20 @@ check(
 check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*vs\.Uri\.file/.test(iife));
 
 // --- 18. Decay-profile divergence lock (architecture-review round-2) ----------
-// STATES.md §7.4 documents an INTENTIONAL asymmetry: the SBI aggregation tick
-// applies all three decay rules (DONE_TO_IDLE_MS 5min, SBI_RUNNING_STALE_MS
-// 30min-mtime, INTERRUPTED_RETENTION_MS 24h-mtime) so abandoned sessions
-// don't false-stick lights at scale; the per-tab tick applies ONLY
-// done>5min so a crashed session's TAB keeps yellow/red as a per-tab alert
-// (the user can see WHICH tab crashed). Nothing structural enforces this —
-// a future edit could quietly collapse the two paths and silently regress
-// the "tab stays yellow for crashed session" UX (or vice versa). These
-// assertions lock the divergence:
-//   - SBI tick body references SBI_RUNNING_STALE_MS AND INTERRUPTED_RETENTION_MS
-//   - per-tab tick body references NEITHER (only DONE_TO_IDLE_MS)
-// A refactor that added running/interrupted decay to the per-tab tick would
-// fail IIFE.46b; a refactor that dropped running/interrupted decay from the
-// SBI tick would fail IIFE.46.
+// STATES.md §7.4 documents an INTENTIONAL asymmetry between SBI vs per-tab
+// decay. v0.2.6 round-1 partially COLLAPSED this asymmetry: the per-tab tick
+// now applies a running decay (SINCE_STALE_MS 15min since→idle) where before
+// it had none, fixing the stuck-yellow bug (CC Stop inflight drift +
+// preserveSince → tab永黄). But the asymmetry is PRESERVED in NAMING:
+//   - SBI tick body references SBI_RUNNING_STALE_MS (30min, since) AND
+//     INTERRUPTED_RETENTION_MS (24h, since) — aggregation decay.
+//   - per-tab tick body references SINCE_STALE_MS (15min, since) for running
+//     decay only; does NOT reference SBI_RUNNING_STALE_MS nor
+//     INTERRUPTED_RETENTION_MS. The distinct name keeps the two decay
+//     surfaces grep-separable and preserves the v0.2.4 invariant below.
+// A future edit that collapsed per-tab running decay to use
+// SBI_RUNNING_STALE_MS (same threshold as SBI) would fail IIFE.46b; a refactor
+// that dropped running/interrupted decay from the SBI tick would fail IIFE.46.
 {
   // The SBI tick body is setInterval(... 500) inside the __ccsdSbiTimer
   // branch; the per-tab tick body is `var timer=setInterval(... 500)` further
@@ -702,11 +1164,37 @@ check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*
     'SBI tick should apply running-stale + interrupted-24h decay',
   );
   check(
-    'IIFE.46b per-tab tick body references NEITHER SBI_RUNNING_STALE_MS nor INTERRUPTED_RETENTION_MS (intentional divergence)',
+    'IIFE.46b per-tab tick body references NEITHER SBI_RUNNING_STALE_MS nor INTERRUPTED_RETENTION_MS (intentional divergence — per-tab running decay uses the distinct SINCE_STALE_MS constant)',
     !/SBI_RUNNING_STALE_MS/.test(perTabPart) && !/INTERRUPTED_RETENTION_MS/.test(perTabPart),
-    'per-tab tick should NOT decay running/interrupted (per-tab alert preserved)',
+    'per-tab tick should NOT reference SBI_RUNNING_STALE_MS nor INTERRUPTED_RETENTION_MS (uses SINCE_STALE_MS instead)',
+  );
+  // v0.2.6 round-1: lock the per-tab running decay branch — the visible
+  // symptom of the stuck-yellow bug was this branch missing entirely. The
+  // regex asserts: (1) per-tab tick references SINCE_STALE_MS; (2) the
+  // running branch renders idle.svg when now-since>SINCE_STALE_MS (since
+  // guard + future-timestamp guard `since<now`); (3) otherwise running.svg.
+  // A regression that dropped this decay (back to unconditional
+  // running.svg) would fail this assertion — surfacing the stuck-yellow bug.
+  check(
+    'IIFE.46c per-tab running decay uses SINCE_STALE_MS (since-based, v0.2.6 stuck-yellow fix)',
+    /SINCE_STALE_MS/.test(perTabPart) &&
+      /else if\s*\(\s*st\s*===\s*"running"\s*\)\s*\{\s*svg\s*=\s*\(\s*since\s*&&\s*\(\s*now\s*-\s*since\s*>\s*SINCE_STALE_MS\s*\)\s*&&\s*since\s*<\s*now\s*\)\s*\?\s*pth\.join\s*\(\s*RES\s*,\s*"claude-logo-idle\.svg"\s*\)\s*:\s*pth\.join\s*\(\s*RES\s*,\s*"claude-logo-running\.svg"\s*\)\s*\}/.test(
+        perTabPart,
+      ),
+    'per-tab running branch should decay to idle.svg when since>SINCE_STALE_MS',
   );
 }
+
+// v0.2.6 round-1: pin SINCE_STALE_MS value (15min = 900000ms). Accept either
+// the expression form (`15*60*1000`) or the computed numeric form (`900000`)
+// — the IIFE bytes carry whichever the template substitution produced.
+// Mirrors the sibling IIFE.37b2 / IIFE.37c value locks. NOT asserted by
+// test-contract-sync.mjs (reader-only; no writer-side equivalent), so this
+// is the single pinning site for the value.
+check(
+  'IIFE.46d SINCE_STALE_MS value (15*60*1000)',
+  /var\s+SINCE_STALE_MS\s*=\s*(?:15\s*\*\s*60\s*\*\s*1000|900000)/.test(iife),
+);
 
 // --- 19. Writer-hook content-hash gate (R3 architecture fix; mirrors IIFE.21b) ---
 // The writer hook (hooks/cc-status.js) carries a banner
@@ -719,7 +1207,7 @@ check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*
 // had a content hash.
 {
   const HOOK_SRC = path.join(ROOT, 'hooks', 'cc-status.js');
-  const SRC_HOOK_VERSION = 'v0.1.14'; // mirror HOOK_VERSION in patch.ts
+  const SRC_HOOK_VERSION = 'v0.2.0'; // mirror HOOK_VERSION in patch.ts
   const HOOK_HASH_LEN = 8;
   let hookSrc = '';
   try {
@@ -759,7 +1247,939 @@ check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*
   }
 }
 
+// --- 20. v0.2.4 token-stats SBI: creation, priority, click command, tick ----
+// Verify the IIFE bakes the v0.2.4 token-stats SBI (right side, -9995 priority)
+// wired to its own click command, plus the QuickPick panel + helpers. The
+// 4-light SBI (Left, -9996) must remain intact alongside it.
+check(
+  'IIFE.48 token SBI created at StatusBarAlignment.Right, -9995',
+  /vs\.window\.createStatusBarItem\s*\(\s*vs\.StatusBarAlignment\.Right\s*,\s*-9995\s*\)/.test(iife),
+);
+check('IIFE.49 token SBI stored to globalThis.__ccsdTokSbi', /globalThis\.__ccsdTokSbi\s*=\s*tsbi/.test(iife));
+check(
+  'IIFE.50 token SBI click command registered (ccStatusDot.tokClick)',
+  /vs\.commands\.registerCommand\s*\(\s*"ccStatusDot\.tokClick"/.test(iife),
+);
+check(
+  'IIFE.51 token SBI.command wired to ccStatusDot.tokClick',
+  /tsbi\.command\s*=\s*"ccStatusDot\.tokClick"/.test(iife),
+);
+// 4-light SBI MUST remain at Left -9996 (regression — token SBI pivot must
+// not have moved the existing SBI).
+check(
+  'IIFE.52 4-light SBI still at StatusBarAlignment.Left, -9996',
+  /vs\.window\.createStatusBarItem\s*\(\s*vs\.StatusBarAlignment\.Left\s*,\s*-9996\s*\)/.test(iife),
+);
+// Token SBI tick update: reads <activeSid>.json tokens field, formats as text.
+// v0.2.5 round-3 (code-style LOW fix): the cache-miss branch dropped its
+// redundant `var` keyword (the cache-probe slot `var tj=null;` declares tj
+// for the whole function scope — re-declaring with a second `var` inside the
+// `if(!tj){try{...}}` branch was a no-op). The regex now accepts BOTH the
+// legacy `var tj=JSON.parse(...)` form AND the cleaned `tj=JSON.parse(...)`
+// form so the test stays green on pre-v0.2.5 IIFE bodies (e.g. on-disk
+// installs that haven't been re-injected yet).
+check(
+  'IIFE.53 token SBI tick reads active sid JSON',
+  /(?:var\s+)?tj\s*=\s*JSON\.parse\s*\(\s*fs\.readFileSync\s*\(\s*pth\.join\s*\(\s*DIR\s*,\s*activeSid\s*\+\s*"\.json"\s*\)/.test(
+    iife,
+  ),
+);
+// Active-sid tracking in per-panel tick.
+check(
+  'IIFE.54 per-panel tick updates globalThis.__ccsdActiveSid from t.__ccsdSid',
+  /globalThis\.__ccsdActiveSid\s*=\s*sid/.test(iife),
+);
+// ANCHOR_A also publishes the active sid on every update_session_state fire.
+// (replA is added at patch time, NOT baked into buildIIFE — verify against
+// patch.ts source rather than the IIFE output.)
+{
+  const patchSrc = fs.readFileSync(path.join(ROOT, 'patch.ts'), 'utf8');
+  check(
+    'IIFE.55 ANCHOR_A replA publishes globalThis.__ccsdActiveSid=e.request.sessionId',
+    patchSrc.includes('globalThis.__ccsdActiveSid=e.request.sessionId'),
+  );
+}
+// fmtTok helper present.
+check('IIFE.56 fmtTok helper present (n>=1M → N.NM, n>=1k → N.Nk)', /function\s+fmtTok\s*\(/.test(iife));
+// fmtUsd helper present.
+check('IIFE.57 fmtUsd helper present (null → "", <0.01 → 3-decimal)', /function\s+fmtUsd\s*\(/.test(iife));
+// showTokQuickPick present (token SBI click handler).
+check('IIFE.58 showTokQuickPick function defined', /function\s+showTokQuickPick\s*\(/.test(iife));
+// QuickPick carries the standard sections (window / display / notify / actions).
+check('IIFE.59 QuickPick offers Statistics window selector', iife.includes('Statistics window: '));
+check('IIFE.60 QuickPick offers Display mode selector', iife.includes('Display: '));
+check('IIFE.61 QuickPick carries Copy token count action', iife.includes('Copy token count'));
+check('IIFE.62 QuickPick carries Reset session stats action', iife.includes('Reset session stats'));
+check('IIFE.63 QuickPick carries Open Settings action', iife.includes('Open Settings'));
+// onDidDispose teardown must dispose BOTH SBIs.
+check(
+  'IIFE.64 onDidDispose disposes token SBI on last-panel-out',
+  /if\s*\(\s*globalThis\.__ccsdTokSbi\s*\)\s*\{\s*try\s*\{\s*globalThis\.__ccsdTokSbi\.dispose\s*\(\s*\)/.test(iife),
+);
+// Threshold alert wired (warnThresholdUsd → fires alert notification).
+// v0.2.5: the alert BYPASSES the notify() completion/focus gates (the user
+// explicitly set a budget threshold — it should fire even with notify=false
+// or while VS Code is focused). Accept either the legacy notify("warn",...)
+// call or the new direct showWarningMessage + osascript path. v0.2.5
+// architecture dedup: the alert path now calls dispatchNotify() (shared
+// with notify()) instead of open-coding showWarningMessage + osascript.
+// v0.2.4 intra-version i18n: the alert message is now built via
+// tr("alCostAlertTpl").replace("{cost}", ...) instead of an inline literal,
+// so the dispatchNotify first-arg is tr(...) not a string. Accept BOTH the
+// pre-i18n literal form and the post-i18n tr("alCostAlertTpl") form so the
+// assertion stays green across the i18n pivot and on pre-i18n on-disk IIFEs.
+check(
+  'IIFE.65 threshold alert reads warnThresholdUsd and fires alert',
+  /cfg\.get\s*\(\s*"warnThresholdUsd"\s*,\s*0\s*\)/.test(iife) &&
+    /CC cost alert/.test(iife) &&
+    (/notify\s*\(\s*"warn"\s*,\s*"CC cost alert/.test(iife) ||
+      /showWarningMessage\s*\(\s*alertMsg/.test(iife) ||
+      /dispatchNotify\s*\(\s*"CC cost alert/.test(iife) ||
+      /dispatchNotify\s*\(\s*tr\(\s*"alCostAlertTpl"\s*\)/.test(iife)),
+);
+// Token SBI tick is INSIDE __ccsdSbiTimer (shares the 500ms tick — no new setInterval).
+check(
+  'IIFE.66 token SBI tick shares __ccsdSbiTimer (no new setInterval for token update)',
+  (iife.match(/setInterval/g) || []).length === 2, // one for __ccsdSbiTimer, one for per-panel timer
+);
+// Turn-running tooltip is present.
+// v0.2.4 intra-version i18n: the literal now lives in the I18N dict's en
+// value "Turn running: {secs}s" — substring "Turn running:" still matches.
+check('IIFE.67 turn-running tooltip rendered when state=running', iife.includes('Turn running:'));
+
+// --- 21. v0.2.4 intra-version i18n: LANG detection + I18N dict + t() ------
+// The QuickPick config panel + token SBI tooltip + threshold alert now route
+// every user-facing string through t(key). LANG follows vscode.env.language
+// (BCP-47 primary subtag: zh-cn→zh, pt-br→pt, unknown→en fallback). The dict
+// is baked via JSON.stringify(I18N_DICT) in patch.ts; every key must carry
+// all 8 languages (zh/en/ja/de/es/fr/pt/ru) or t() returns the key itself
+// (visibly broken). These assertions pin the i18n MECHANISM; per-key value
+// correctness is covered by the source-of-truth I18N_DICT in patch.ts.
+check(
+  'IIFE.68 LANG detection from vs.env.language (lowercase + primary subtag)',
+  /var\s+LANG\s*=\s*\(vs\.env\.language\s*\|\|\s*"en"\s*\)\.toLowerCase\(\)\.split\(\s*"-"\s*\)\[0\]/.test(iife),
+);
+check('IIFE.69 I18N dictionary baked into IIFE', /var\s+I18N\s*=\s*\{/.test(iife));
+check(
+  'IIFE.70 tr() helper with en fallback (I18N[k][LANG]→I18N[k].en→k)',
+  /function\s+tr\(\s*k\s*\)\s*\{\s*var\s+e\s*=\s*I18N\[k\]\s*;\s*return\s+e\s*&&\s*\(\s*e\[LANG\]\s*\|\|\s*e\.en\s*\)\s*\|\|\s*k/.test(
+    iife,
+  ),
+);
+// Every I18N dict key must carry all 8 languages. We extract the baked dict
+// from the IIFE and assert key-count × 8-lang completeness. This is the
+// strongest structural gate: a missing language on any key would make t()
+// return the key itself for that locale (visibly broken UI).
+{
+  // Locate `var I18N={...};` in the IIFE and extract the object literal.
+  const m = iife.match(/var\s+I18N\s*=\s*(\{[^;]*\})\s*;\s*function\s+tr\(/);
+  if (!m) {
+    check('IIFE.71 I18N dict extractable for completeness check', false);
+  } else {
+    let dict;
+    try {
+      dict = JSON.parse(m[1]);
+    } catch (e) {
+      check('IIFE.71 I18N dict is valid JSON', false);
+      dict = null;
+    }
+    if (dict) {
+      const LANGS = ['zh', 'en', 'ja', 'de', 'es', 'fr', 'pt', 'ru'];
+      const keys = Object.keys(dict);
+      // Sanity: the dict covers the known surface area (QuickPick + tooltip +
+      // feedback + alert). Pin a representative lower bound so a future
+      // refactor that accidentally drops a category fails loudly.
+      check('IIFE.71a I18N dict has >=40 keys (covers QuickPick+tooltip+feedback+alert)', keys.length >= 40);
+      // Every key must have all 8 languages with a non-empty string value.
+      let complete = true;
+      const missing = [];
+      for (const k of keys) {
+        for (const lang of LANGS) {
+          const v = dict[k] && dict[k][lang];
+          if (typeof v !== 'string' || v.length === 0) {
+            complete = false;
+            missing.push(k + '.' + lang);
+          }
+        }
+      }
+      check(
+        'IIFE.71b every I18N key has all 8 languages non-empty' +
+          (missing.length
+            ? ' (missing: ' + missing.slice(0, 5).join(', ') + (missing.length > 5 ? ', …' : '') + ')'
+            : ''),
+        complete,
+      );
+      // LANG fallback chain: t() returns e[LANG]||e.en||k. Verify the dict
+      // actually has an "en" entry for every key (otherwise fallback crashes).
+      check(
+        'IIFE.71c every I18N key has an "en" fallback entry',
+        keys.every((k) => typeof dict[k].en === 'string' && dict[k].en.length > 0),
+      );
+    }
+  }
+}
+// LANG detection normalizes regional variants to the primary subtag. The
+// regex above (IIFE.68) pins the IMPLEMENTATION; this assertion pins the
+// BEHAVIOR by evaluating the detection expression with stubbed inputs.
+{
+  const stub = (lang) => (lang || 'en').toLowerCase().split('-')[0];
+  check('IIFE.72a LANG(zh-cn) → zh (regional variant collapses)', stub('zh-cn') === 'zh');
+  check('IIFE.72b LANG(zh-tw) → zh (traditional also collapses)', stub('zh-tw') === 'zh');
+  check('IIFE.72c LANG(pt-br) → pt (Brazilian collapses to pt)', stub('pt-br') === 'pt');
+  check('IIFE.72d LANG(en-us) → en', stub('en-us') === 'en');
+  check('IIFE.72e LANG(ja) → ja', stub('ja') === 'ja');
+  check('IIFE.72f LANG(undef) → en (null/undefined falls back to en)', stub(undefined) === 'en');
+  check('IIFE.72g LANG(ko) → ko (unknown passes through; t() falls back to en value)', stub('ko') === 'ko');
+}
+// showTokQuickPick routes its placeHolder + every label/detail through tr().
+// Sample a few representative keys to confirm the wiring survived minification.
+check(
+  'IIFE.73 QuickPick placeHolder routed through tr("qpPlaceHolder")',
+  /showQuickPick\s*\(\s*items\s*,\s*\{\s*placeHolder\s*:\s*tr\(\s*"qpPlaceHolder"\s*\)/.test(iife),
+);
+check(
+  'IIFE.74 QuickPick Statistics-window label routed through tr("qpStatsWindowLabel")',
+  /tr\(\s*"qpStatsWindowLabel"\s*\)\s*\+\s*curWin/.test(iife),
+);
+check(
+  'IIFE.75 QuickPick item matching uses LOCALIZED label prefix (not English literal)',
+  /label\.indexOf\s*\(\s*tr\(\s*"qpStatsWindowLabel"\s*\)\s*\)\s*===\s*0/.test(iife),
+);
+// Token SBI tooltip routes Window/Session-total/partial through tr().
+check(
+  'IIFE.76 token SBI tooltip Window line via tr("ttWindowTpl")',
+  /tr\(\s*"ttWindowTpl"\s*\)\.replace\(\s*"\{win\}"\s*,\s*tWin\s*\)/.test(iife),
+);
+check(
+  'IIFE.77 token SBI tooltip partial-estimate note via tr("ttPartial")',
+  /ttip\.push\s*\(\s*tr\(\s*"ttPartial"\s*\)\s*\)/.test(iife),
+);
+// Threshold alert message routed through tr("alCostAlertTpl").
+check(
+  'IIFE.78 threshold alert message via tr("alCostAlertTpl").replace("{cost}",...)',
+  /dispatchNotify\s*\(\s*tr\(\s*"alCostAlertTpl"\s*\)\.replace\(\s*"\{cost\}"\s*,\s*fmtUsdApprox\s*\(\s*tok\.cost_24h\s*\)\s*\)/.test(
+    iife,
+  ),
+);
+// v0.2.4 intra-version i18n round-1: the 4-light SBI tooltip (§F per-tick
+// + §C creation-time zero-tooltip) now routes through tr("ttCountsTpl")
+// instead of the hardcoded English "Claude Code: N done, N running, N
+// pending, N interrupted" literal. Both sites fill {done}/{running}/
+// {pending}/{interrupted} via .replace() chains. Accept EITHER the pre-i18n
+// literal form OR the post-i18n tr("ttCountsTpl") form so the assertion
+// stays green on pre-i18n on-disk IIFEs too.
+check(
+  'IIFE.79 4-light SBI tooltip routed through tr("ttCountsTpl") (per-tick + creation)',
+  /tr\(\s*"ttCountsTpl"\s*\)\.replace\(\s*"\{done\}"\s*,\s*ag\.done\)/.test(iife) &&
+    /tr\(\s*"ttCountsTpl"\s*\)\.replace\(\s*"\{done\}"\s*,\s*0\)/.test(iife),
+);
+
+// --- 22. v0.2.5 problem 2: IIFE-side live delta (computeLiveDelta) ---------
+// The token SBI tick now reads the parent transcript's [sidecar.offset..
+// jsonl.size] tail directly so token counts update during CC streaming
+// (between hook fires). computeLiveDelta is a read-only helper with strict
+// invariants — every miss returns null and the tick falls back to
+// hook.tokens-only display (zero delta). Lock the helper signature +
+// integration so a refactor that drops the helper or the tick call-site
+// lights up these assertions.
+check(
+  'IIFE.80 computeLiveDelta(tj,sid,winMs) helper defined (round-3 MEDIUM: winMs param added for rolling-window filter)',
+  /function\s+computeLiveDelta\s*\(\s*tj\s*,\s*sid\s*,\s*winMs\s*\)\s*\{/.test(iife),
+);
+// Strict invariants — must skip when:
+//   - !tj.tokens (no baseline; hook MUST fire first to set sidecar.offset)
+//   - !tj.cwd (cannot locate jsonl)
+//   - tj.state !== 'running' (streaming only happens in running state)
+//   - sidecar.offset <= 0 (defensive; hook cursor has not advanced)
+// Each guard is documented in the helper JSDoc; lock them so a refactor
+// that silently drops any guard re-introduces a double-count or null-deref.
+check(
+  'IIFE.81 computeLiveDelta skip guards (no tokens / no cwd / not running / offset<=0)',
+  /if\s*\(\s*!tj\s*\|\|\s*!tj\.tokens\s*\|\|\s*!tj\.cwd\s*\|\|\s*!sid\s*\|\|\s*tj\.state\s*!==\s*"running"\s*\)\s*return\s+null/.test(
+    iife,
+  ) && /if\s*\(\s*offset\s*<=\s*0\s*\)\s*return\s+null/.test(iife),
+);
+// cache_creation dual-form (object vs scalar) — mirrors cc-status.js:1417-1425.
+// hasCcObj chooses the object form (ephemeral_5m_input_tokens + ephemeral_1h_input_tokens)
+// and zeroes the scalar (cache_creation_input_tokens); the inverse when no object.
+check(
+  'IIFE.82 computeLiveDelta mirrors hook cache_creation dual-form (hasCcObj)',
+  /var\s+hasCcObj\s*=\s*u\.cache_creation\s*&&\s*typeof\s+u\.cache_creation\s*===\s*"object"/.test(iife) &&
+    /d\.cc5\s*\+=\s*hasCcObj\s*\?\s*\(u\.cache_creation\.ephemeral_5m_input_tokens\s*\|\|\s*0\)\s*:\s*0/.test(iife) &&
+    /d\.cci\s*\+=\s*hasCcObj\s*\?\s*0\s*:\s*\(u\.cache_creation_input_tokens\s*\|\|\s*0\)/.test(iife),
+);
+// Hard cap toRead<=512KB bounds worst-case streaming catch-up so a multi-MB
+// tail (long streaming on a slow hook path) cannot stall the 500ms tick.
+// v0.2.5 round-3 (MEDIUM): previously the cap RETURNED null on >512KB,
+// silently freezing the displayed total. Now it READS the 512KB tail with
+// truncated=true so computeLiveDelta can signal partial-delta to callers
+// (the boolean is kept on the result even though the v0.2.5 tooltip no
+// longer surfaces it — the cap+tail read itself is the behavior locked here).
+check(
+  'IIFE.83 computeLiveDelta 512KB hard cap on tail read (round-3 MEDIUM: cap→tail+truncated, no silent null)',
+  /if\s*\(\s*toRead\s*>\s*524288\s*\)\s*\{[^}]*truncated\s*=\s*true/.test(iife),
+);
+// Partial-line safety: if the read buffer has no trailing '\n', the last
+// row may be a half-flushed byte stream — return null so the tick shows
+// no delta (next tick re-reads once the row completes).
+check(
+  'IIFE.84 computeLiveDelta partial-line guard (no \\n in buf → null)',
+  /var\s+lastNl\s*=\s*buf\.lastIndexOf\s*\(\s*0x0a\s*,\s*br\s*-\s*1\s*\)/.test(iife) &&
+    /if\s*\(\s*lastNl\s*<\s*0\s*\)\s*\{?\s*return\s+null/.test(iife),
+);
+// cwd→projects-dir escape rule: /[^a-zA-Z0-9._-]/g (verified against
+// ~/.claude/projects/ on disk — matches CC's escape for both ASCII and
+// non-ASCII paths; e.g. /Users/wangdong/.../vscode-cc-提示插件/... →
+// -Users-wangdong-...-vscode-cc------...).
+// v0.2.5 round-2 (MEDIUM): the escape rule is now a FALLBACK — the IIFE
+// prefers tj.transcript_path (authoritative, persisted by the hook on every
+// TOK_EVENT fire). The escape rule only runs for old <sid>.json files
+// written before the round-2 fix (no transcript_path field). Lock the
+// fallback stays in place so the IIFE can still locate the jsonl on stale
+// state files; the transcript_path-preferred path is locked by IIFE.93.
+check(
+  'IIFE.85 computeLiveDelta cwd escape rule /[^a-zA-Z0-9._-]/g (fallback path)',
+  /tj\.cwd\.replace\s*\(\s*\/\[\^a-zA-Z0-9\._-\]\/g\s*,\s*"-"s*\)/.test(iife),
+);
+// v0.2.5 round-2 (MEDIUM): the hook now persists status.transcript_path on
+// every TOK_EVENT fire (cc-status.js near line 1948), so the IIFE can
+// locate the parent jsonl AUTHORITATIVELY instead of reverse-deriving it
+// via the cwd-escape rule. The hook ITSELF distrusts the escape rule
+// (cc-status.js:1502-1507 — 'CC's cwd→projects-dir escape function is not
+// part of the public contract and has changed historically') and reads
+// payload.transcript_path directly; the IIFE previously re-derived the
+// path via the fragile rule while the hook held — but discarded — the
+// authoritative value. The fix is a 2-line change: hook persists it, IIFE
+// prefers it. Test pins both sides of the contract: (a) the IIFE prefers
+// tj.transcript_path when present; (b) the fallback to the escape rule
+// still runs for old state files. Behavioral coverage lives in the
+// computeLiveDelta fixture harness in test-iife.mjs §26.
+check(
+  'IIFE.93 computeLiveDelta prefers tj.transcript_path (authoritative) over cwd-escape',
+  /if\s*\(\s*typeof\s+tj\.transcript_path\s*===\s*"string"\s*&&\s*tj\.transcript_path\s*\)\s*\{\s*jsonlPath\s*=\s*tj\.transcript_path\s*\}\s*else\s*\{/.test(
+    iife,
+  ),
+  'round-2 MEDIUM: jsonl path must be tj.transcript_path when present (hook-persisted, authoritative) with the cwd-escape rule as a fallback for old <sid>.json files',
+);
+// §G tick calls computeLiveDelta and adds the delta to the displayed total.
+// The integration has 2 parts: (1) tokenLiveDeltaEnabled config gate,
+// (2) total = sumTok(w) + dSum. The v0.2.5 live-delta tooltip lines
+// (ttLiveDeltaTpl / ttLiveDeltaTruncated / ttTurnRunningTpl) were REMOVED
+// to make the tooltip static (stop hover flicker — the 500ms tick changed
+// tooltip content every cycle). The live delta itself is still computed
+// and added to the SBI text count + session-total tooltip line below.
+check(
+  'IIFE.86 §G tick gated by cfg.tokenLiveDeltaEnabled (default true)',
+  /cfg\.get\s*\(\s*"tokenLiveDeltaEnabled"\s*,\s*true\s*\)/.test(iife),
+);
+check(
+  'IIFE.87 §G tick total = sumTok(w) + dSum (live delta added to window total)',
+  /var\s+total\s*=\s*sumTok\s*\(\s*w\s*\)\s*\+\s*dSum/.test(iife),
+);
+check(
+  'IIFE.88 §G tick NO LONGER pushes ttLiveDeltaTpl tooltip (v0.2.5 static-tooltip fix: line removed)',
+  !/ttip\.push\s*\(\s*tr\s*\(\s*"ttLiveDeltaTpl"\s*\)/.test(iife),
+  'v0.2.5 static-tooltip: the live-delta tooltip push must be gone (it caused hover flicker); the delta still flows into total/sumTok(tok.total)+dSum',
+);
+// Session-total tooltip also includes dSum so the user sees the live delta
+// reflected in BOTH the per-window count and the session total.
+check(
+  'IIFE.89 §G session-total tooltip includes dSum (sumTok(tok.total)+dSum)',
+  /fmtTok\s*\(\s*sumTok\s*\(\s*tok\.total\s*\)\s*\+\s*dSum\s*\)/.test(iife),
+);
+
+// --- 23. v0.2.5 problem 3b: default window changed from '1h' to 'all' ------
+// Users were surprised by window "清零" — the rolling windows naturally
+// age out old turns, which felt like data loss. The 'all' window is
+// monotonic (per-session) and matches the "status bar shows my total usage"
+// mental model. The default is now 'all' in BOTH the QuickPick (showTokQuickPick)
+// and the §G tick. Lock the literal so a refactor that flips the default
+// back to '1h' (or any other window) lights up the assertion.
+check(
+  'IIFE.90 default window is "all" in §G tick (cfg.get tokenStatsWindow,"all")',
+  /cfg\.get\s*\(\s*"tokenStatsWindow"\s*,\s*"all"\s*\)/.test(iife),
+);
+{
+  // QuickPick default also "all" — read patch.ts source (showTokQuickPick
+  // is in the IIFE body but uses var curWin assignment; lock the literal).
+  const patchSrc = fs.readFileSync(path.join(ROOT, 'patch.ts'), 'utf8');
+  check(
+    'IIFE.91 default window is "all" in showTokQuickPick (patch.ts source)',
+    patchSrc.includes('var curWin=cfg.get("tokenStatsWindow","all")'),
+  );
+}
+
+// --- 24. v0.2.5 problem 2 → static-tooltip: ttLiveDeltaTpl i18n key REMOVED --
+// The live-delta tooltip line was localized via the I18N dict + tr() helper,
+// but v0.2.5 static-tooltip removed the tooltip push (hover flicker fix).
+// Lock the key is GONE from the dict so a stale push() or leftover key
+// fails loudly. (The live delta itself still flows into total + session-
+// total tooltip via sumTok(tok.total)+dSum — locked by IIFE.87/89 above.)
+check('IIFE.92 ttLiveDeltaTpl key REMOVED from I18N dict (v0.2.5 static-tooltip)', !/"ttLiveDeltaTpl"\s*:/.test(iife));
+
+// --- 25. v0.2.5 round-2 (MEDIUM): workflow gap tooltip + window labeling --
+// Two MEDIUM findings from round-2 window-workflow review:
+//   (1) The hook's own docstring (cc-status.js:1517-1535) admits pure
+//       workflow phases can leave the token count visually stalled with no
+//       user-visible caveat. The hook gives partial real-time visibility
+//       via scanSubagentTranscripts (fires on every parent TOK_EVENT), but
+//       a pure-workflow phase can keep the parent idle for an extended
+//       period (no PostToolUse/Stop/UserPromptSubmit firing). Surfacing a
+//       ttWorkflowGap tooltip line when tj.activeSubagents>0 closes the
+//       "stalled count with no explanation" UX gap.
+//   (2) qpStatsWindowDetail branded the WHOLE list "(rolling)" — including
+//       'all', which is cumulative, not rolling. That inverted the very
+//       clarification problem 3b was supposed to fix (users seeing "清零"
+//       for rolling windows thought 'all' would clear too). Lock the new
+//       rolling/cumulative distinction in both the detail label and the
+//       §G tooltip ttWindowTpl.
+check('IIFE.94 ttWorkflowGap key present in I18N dict', /"ttWorkflowGap"\s*:/.test(iife));
+check(
+  'IIFE.95 §G tick pushes ttWorkflowGap when tj.activeSubagents>0',
+  /if\s*\(\s*tj\.activeSubagents\s*&&\s*Number\s*\(\s*tj\.activeSubagents\s*\)\s*>\s*0\s*\)\s*ttip\.push\s*\(\s*tr\s*\(\s*"ttWorkflowGap"\s*\)\s*\)/.test(
+    iife,
+  ),
+  'round-2 MEDIUM: when subagents/workflow are in flight the tooltip must surface the settle-on-completion caveat — pre-fix the count visibly stalled with no explanation',
+);
+
+// v0.2.5 round-3 (MEDIUM) source locks: the §G tick still (a) passes winMs
+// derived from the baked TOK_WIN_MS map into computeLiveDelta so the
+// rolling-window filter is wired correctly. The v0.2.5 static-tooltip fix
+// REMOVED the ttLiveDeltaTruncated tooltip push + dict key (hover flicker
+// fix), but the truncated BOOLEAN is still computed by computeLiveDelta
+// (locked by IIFE.83/105) — it is just no longer surfaced via tooltip.
+// The behavioral correctness of the winMs filter is locked by IIFE.106-109
+// below; this regex lock guards the IIFE-side wiring so a future edit that
+// drops the wire fails loudly at the source level.
+check(
+  'IIFE.95a §G tick passes TOK_WIN_MS[tWin] as winMs to computeLiveDelta (round-3 MEDIUM: rolling-window filter wiring)',
+  /var\s+__winMs\s*=\s*TOK_WIN_MS\s*\[\s*tWin\s*\]\s*;\s*liveInfo\s*=\s*computeLiveDelta\s*\(\s*tj\s*,\s*activeSid\s*,\s*__winMs\s*\)/.test(
+    iife,
+  ),
+  'round-3 MEDIUM: the live-delta rolling-window filter requires the tick to pass the current window ms into computeLiveDelta; without this, all windows are treated as cumulative',
+);
+check(
+  'IIFE.95b §G tick NO LONGER pushes ttLiveDeltaTruncated tooltip (v0.2.5 static-tooltip: push removed; boolean still computed)',
+  !/ttip\.push\s*\(\s*tr\s*\(\s*"ttLiveDeltaTruncated"\s*\)/.test(iife),
+  'v0.2.5 static-tooltip: the truncated-tooltip push must be gone (caused hover flicker); the underlying truncated boolean on computeLiveDelta result is unchanged (IIFE.83/105)',
+);
+check(
+  'IIFE.95c ttLiveDeltaTruncated key REMOVED from I18N dict (v0.2.5 static-tooltip)',
+  !/"ttLiveDeltaTruncated"\s*:/.test(iife),
+);
+// TOK_WIN_MS baked into IIFE (single source of truth: patch.ts const,
+// pinned against the writer's TOK_WINDOWS by test-contract-sync.mjs).
+check(
+  'IIFE.95d TOK_WIN_MS map baked into IIFE preamble (round-3 MEDIUM: enables winMs lookup at tick)',
+  /var\s+TOK_WIN_MS\s*=\s*\{[^}]*"[^"]+"\s*:/.test(iife) && iife.includes('TOK_WIN_MS[tWin]'),
+);
+{
+  // qpStatsWindowDetail — lock the rolling/cumulative distinction so a
+  // future edit that re-brands 'all' as rolling re-fails this check.
+  // The new detail label explicitly contrasts "rolling" (5min..30d) with
+  // "all cumulative" in the same string, separated by a '/'. The prior
+  // label "(rolling): ... / all" branded the WHOLE list as rolling.
+  const patchSrc = fs.readFileSync(path.join(ROOT, 'patch.ts'), 'utf8');
+  check(
+    'IIFE.96 qpStatsWindowDetail distinguishes rolling (5min..30d) from cumulative (all)',
+    /rolling[\s\S]{0,200}all cumulative/.test(patchSrc) && !/Statistics window \(rolling\):/.test(patchSrc),
+    'round-2 MEDIUM: the prior detail labeled the whole list "(rolling)" — including all (cumulative). The new label distinguishes them.',
+  );
+}
+
+// --- 25b. v0.2.6 round-3 MEDIUM follow-up (cache-desync symmetry regression lock)
+// Round-3 added `globalThis.__ccsdTokSbiLastTip=null` to TWO of the THREE
+// §G-tick branches that transition AWAY from a good tip — the inner else
+// (ttNoDataTpl, activeSid present but no tok/windows[tWin]) and the outer
+// catch (ttUnavailableTpl, read threw). The OUTERMOST else (ttNoPanel —
+// activeSid is empty, user closed all CC panels) was missed, leaving a
+// cache-desync window: hold good tip X → ttNoPanel → return to SAME CC
+// session → recompute identical X → `__ccsdTokSbiLastTip!==__tip` is false →
+// tsbi.tooltip write skipped → tooltip stuck on "no panel" until any input
+// changes. The fix is symmetric: ALL THREE branches transitioning away from
+// a good tip must drop the cache so the next good tick re-writes. These
+// locks pin the symmetry so a future editor who drops any one branch fails
+// CI. Without the count lock, a refactor that collapsed two branches into
+// one would silently re-introduce the bug; without the position lock, the
+// count could be preserved while the ttNoPanel branch's reset was the one
+// dropped (the regression round-3 originally shipped).
+{
+  const RESET_PAT = 'globalThis.__ccsdTokSbiLastTip=null';
+  const occurrences = iife.split(RESET_PAT).length - 1;
+  check(
+    'IIFE.96a §G tick has exactly 3 __ccsdTokSbiLastTip=null reset branches (cache-desync symmetry)',
+    occurrences === 3,
+    'expected 3 reset branches (ttNoDataTpl + ttUnavailableTpl + ttNoPanel), found ' + occurrences,
+  );
+  // Position lock: one reset must sit INSIDE the ttNoPanel branch (the
+  // round-3 original miss). Anchor on the unique `tr("ttNoPanel")` string
+  // and assert a reset occurs AT OR AFTER it but BEFORE the §G tick's
+  // closing `}}}` (closes the else, the if(tsbi), and the outer try).
+  const noPanelIdx = iife.indexOf('tr("ttNoPanel")');
+  // Find the §G tick's closing `}}}catch(e){}` that immediately follows.
+  // The ttNoPanel branch ends with `}}}catch(e){}` — three closing braces
+  // then the outer catch.
+  const noPanelCloseIdx = iife.indexOf('}}}catch(e){}', noPanelIdx);
+  const firstResetAfterNoPanel = iife.indexOf(RESET_PAT, noPanelIdx);
+  check(
+    'IIFE.96b ttNoPanel branch contains __ccsdTokSbiLastTip=null reset (round-3 original miss)',
+    noPanelIdx >= 0 && noPanelCloseIdx >= 0 && firstResetAfterNoPanel >= 0 && firstResetAfterNoPanel < noPanelCloseIdx,
+    'noPanelIdx=' +
+      noPanelIdx +
+      ' firstResetAfterNoPanel=' +
+      firstResetAfterNoPanel +
+      ' noPanelCloseIdx=' +
+      noPanelCloseIdx,
+  );
+  // Negative regression pin: the ttNoDataTpl and ttUnavailableTpl resets
+  // must ALSO still be present (one could pass 96a with 3 resets if a
+  // refactor added 2 new resets in one branch and dropped another — this
+  // lock catches that by anchoring on each branch's unique signature).
+  const noDataIdx = iife.indexOf('tr("ttNoDataTpl")');
+  const noDataCloseIdx = iife.indexOf('globalThis.__ccsdTokSbiLastTip=null', noDataIdx);
+  check(
+    'IIFE.96c ttNoDataTpl branch contains __ccsdTokSbiLastTip=null reset (round-3 sibling)',
+    noDataIdx >= 0 && noDataCloseIdx >= 0,
+    'noDataIdx=' + noDataIdx + ' resetIdx=' + noDataCloseIdx,
+  );
+  const unavailIdx = iife.indexOf('tr("ttUnavailableTpl")');
+  const unavailCloseIdx = iife.indexOf('globalThis.__ccsdTokSbiLastTip=null', unavailIdx);
+  check(
+    'IIFE.96d ttUnavailableTpl branch contains __ccsdTokSbiLastTip=null reset (round-3 sibling)',
+    unavailIdx >= 0 && unavailCloseIdx >= 0,
+    'unavailIdx=' + unavailIdx + ' resetIdx=' + unavailCloseIdx,
+  );
+}
+
+// --- 26. v0.2.5 round-2 (MEDIUM): computeLiveDelta behavioral test harness --
+// IIFE.80-89 only regex-match the SOURCE STRING of computeLiveDelta — they
+// never execute the function. A logic bug (off-by-one in lastNl+1, wrong
+// field routed to d.in vs d.cr, accumulation into the wrong side of
+// hasCcObj) would pass every assertion. This block closes that hole: it
+// extracts the function from the baked IIFE, runs it against a tempdir
+// with fixture {sid}.jsonl + {sid}.offset sidecar, and asserts on the
+// returned delta. The double-count-avoidance contract (delta = bytes in
+// [hook.sidecar.offset..jsonl.size]) is the entire safety premise of the
+// feature and is now verified by execution.
+{
+  // Extract `function computeLiveDelta(tj,sid){...}` from the baked IIFE.
+  // The body uses only `fs`, `pth`, `os`, `Buffer`, and `JSON` — we provide
+  // all of them via the vm context. `Number.isFinite` is on globalThis.
+  const fnStart = iife.indexOf('function computeLiveDelta(');
+  if (fnStart < 0) {
+    check('IIFE.97 computeLiveDelta extractable for behavioral test', false);
+  } else {
+    // Brace-balanced extraction of the function body.
+    let depth = 0;
+    let i = iife.indexOf('{', fnStart);
+    const start = i + 1;
+    depth = 1;
+    i += 1;
+    while (i < iife.length && depth > 0) {
+      const c = iife[i];
+      if (c === '{') depth += 1;
+      else if (c === '}') depth -= 1;
+      i += 1;
+    }
+    const fnSrc = iife.slice(fnStart, i);
+    check('IIFE.97 computeLiveDelta extractable for behavioral test', fnSrc.length > 100);
+
+    // The function source closes over `fs`, `pth`, `os`, `Buffer`, `Number`,
+    // `JSON`, AND `DIR` (the STATE_DIR constant baked into the IIFE outer
+    // scope). Re-compile with all of them injected so the standalone
+    // extraction can run. This is the SAME shape the IIFE uses at runtime —
+    // DIR is captured from the IIFE's outer
+    // `var DIR=pth.join(os.homedir(),".claude","cc-tab-status")`.
+    // tmpdir used as a fake HOME so os.homedir() inside the function
+    // resolves to our fixture tree.
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccsd-delta-'));
+    const shimOs = { ...os, homedir: () => tmpHome };
+    const stateDir = path.join(tmpHome, '.claude', 'cc-tab-status');
+    fs.mkdirSync(stateDir, { recursive: true });
+    let fn = null;
+    try {
+      // eslint-disable-next-line no-new-func
+      fn = new Function('fs', 'pth', 'os', 'Buffer', 'Number', 'JSON', 'DIR', 'return ' + fnSrc)(
+        fs,
+        path,
+        shimOs,
+        Buffer,
+        Number,
+        JSON,
+        stateDir,
+      );
+      check('IIFE.98 computeLiveDelta compiles via new Function (behavioral harness, DIR injected)', true);
+    } catch (e) {
+      check('IIFE.98 computeLiveDelta compiles via new Function (behavioral harness, DIR injected)', false, e.message);
+    }
+
+    if (fn) {
+      // Fixture tree under tmpHome (already created stateDir above):
+      //   $tmpHome/.claude/projects/<escaped-cwd>/<sid>.jsonl   (CC transcript)
+      //   $tmpHome/.claude/cc-tab-status/<sid>.offset           (hook sidecar)
+      // Already created: tmpHome + stateDir. Build the projects dir + jsonl
+      // fixture per-case below.
+      const sid = 'test-sid-1234';
+      const cwd = '/fake/proj';
+      const escaped = cwd.replace(/[^a-zA-Z0-9._-]/g, '-');
+      const projDir = path.join(tmpHome, '.claude', 'projects', escaped);
+      fs.mkdirSync(projDir, { recursive: true });
+      const jsonlPath = path.join(projDir, sid + '.jsonl');
+
+      if (fn) {
+        // Helper: build an assistant jsonl row mirroring CC's format.
+        // v0.2.5 round-3 (MEDIUM): include `timestamp` so the row passes the
+        // IIFE's new finite-ts guard (mirrors hook cc-status.js:1411-1412).
+        // Default to 'now' (ISO 8601) so rows are inside any rolling window
+        // the test exercises. Tests that need OUT-of-window rows override ts.
+        const row = (opts) => {
+          const o = {
+            type: 'assistant',
+            timestamp: opts.ts || new Date().toISOString(),
+            message: {
+              model: opts.model || 'claude-sonnet-4-5-20250929',
+              usage: opts.usage || {},
+            },
+          };
+          return JSON.stringify(o);
+        };
+
+        // --- Case 1: skip invariants return null on bad inputs.
+        check('IIFE.99a computeLiveDelta(null,sid) → null (skip !tj)', fn(null, sid) === null);
+        check(
+          'IIFE.99b computeLiveDelta(tj with no tokens,sid) → null (skip !tj.tokens)',
+          fn({ cwd, state: 'running' }, sid) === null,
+        );
+        check(
+          'IIFE.99c computeLiveDelta(tj not running) → null (skip state!==running)',
+          fn({ cwd, tokens: { total: {} }, state: 'done' }, sid) === null,
+        );
+        check(
+          'IIFE.99d computeLiveDelta(tj no cwd) → null (skip !tj.cwd)',
+          fn({ tokens: { total: {} }, state: 'running' }, sid) === null,
+        );
+
+        // --- Case 2: skip when no sidecar (offset<=0).
+        // Write jsonl but NO sidecar → offset stays 0 → null.
+        const row1 = row({ usage: { input_tokens: 100, output_tokens: 50 } }) + '\n';
+        fs.writeFileSync(jsonlPath, row1);
+        // Ensure no sidecar
+        try {
+          fs.unlinkSync(path.join(stateDir, sid + '.offset'));
+        } catch {
+          /* fine */
+        }
+        check(
+          'IIFE.99e computeLiveDelta no sidecar (offset<=0) → null',
+          fn({ tokens: { total: {} }, cwd, state: 'running' }, sid) === null,
+        );
+
+        // --- Case 3: full happy path. Hook previously advanced sidecar.offset
+        //     to the end of row1; CC then streamed rows 2 and 3. IIFE must
+        //     read [offset..size] = rows 2+3 and sum their tokens. The
+        //     offset>0 invariant (round-1 fix) is what prevents the IIFE
+        //     from racing the hook's first-ever fire — pre-hook, offset is 0
+        //     and the IIFE correctly bails (Case 2 above).
+        const rows = [
+          row({ usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 200 } }),
+          row({ usage: { input_tokens: 30, output_tokens: 20 } }),
+          row({
+            usage: {
+              input_tokens: 10,
+              output_tokens: 5,
+              cache_creation: { ephemeral_5m_input_tokens: 80, ephemeral_1h_input_tokens: 40 },
+            },
+          }),
+        ];
+        // Write row1 first; advance sidecar.offset to its byte length (hook
+        // has absorbed it). Then append rows 2+3 (IIFE will see these).
+        fs.writeFileSync(jsonlPath, rows[0] + '\n');
+        const offset = fs.statSync(jsonlPath).size; // hook cursor after row1
+        fs.writeFileSync(jsonlPath, rows.map((r) => r + '\n').join(''));
+        // Sidecar: offset > 0 → IIFE reads [offset..size] = rows 2+3.
+        fs.writeFileSync(path.join(stateDir, sid + '.offset'), JSON.stringify({ offset }));
+
+        const r = fn({ tokens: { total: {} }, cwd, state: 'running' }, sid);
+        check(
+          'IIFE.100 computeLiveDelta happy path returns non-null delta',
+          r !== null && r.delta !== null,
+          'got ' + JSON.stringify(r),
+        );
+        if (r && r.delta) {
+          check(
+            'IIFE.101a delta.in sums input_tokens for UNREAD rows (30+10=40)',
+            r.delta.in === 40,
+            'got ' + r.delta.in,
+          );
+          check(
+            'IIFE.101b delta.out sums output_tokens for UNREAD rows (20+5=25)',
+            r.delta.out === 25,
+            'got ' + r.delta.out,
+          );
+          check(
+            'IIFE.101c delta.cr=0 for UNREAD rows (no cache_read in rows 2+3)',
+            r.delta.cr === 0,
+            'got ' + r.delta.cr,
+          );
+          check(
+            'IIFE.101d delta.cc5 sums ephemeral_5m_input_tokens (80, row3 only)',
+            r.delta.cc5 === 80,
+            'got ' + r.delta.cc5,
+          );
+          check(
+            'IIFE.101e delta.cc1 sums ephemeral_1h_input_tokens (40, row3 only)',
+            r.delta.cc1 === 40,
+            'got ' + r.delta.cc1,
+          );
+          // cache_creation OBJECT form zeroes cci (mirror of hook).
+          check(
+            'IIFE.101f delta.cci=0 when cache_creation object form present (mirror hook)',
+            r.delta.cci === 0,
+            'got ' + r.delta.cci,
+          );
+          check(
+            'IIFE.101g lastModel captured from last row',
+            r.lastModel === 'claude-sonnet-4-5-20250929',
+            'got ' + r.lastModel,
+          );
+        }
+
+        // --- Case 4: double-count avoidance. Advance sidecar.offset to
+        //     the END of all rows → next read returns no new bytes →
+        //     stat.size<=offset → null (NOT zero-count, just no new work).
+        const sz = fs.statSync(jsonlPath).size;
+        fs.writeFileSync(path.join(stateDir, sid + '.offset'), JSON.stringify({ offset: sz }));
+        const r2 = fn({ tokens: { total: {} }, cwd, state: 'running' }, sid);
+        check(
+          'IIFE.102 computeLiveDelta double-count avoidance (sidecar.offset==size → null)',
+          r2 === null,
+          'When the hook advances offset to size, the IIFE sees no new bytes and returns null — no double-count at any hook cadence. got ' +
+            JSON.stringify(r2),
+        );
+
+        // --- Case 5: partial-line guard. Sidecar.offset > 0 at start of
+        //     a full row0; append a half-row (no trailing newline) AFTER
+        //     the full row → the trailing partial bytes are excluded; the
+        //     leading full row IS counted.
+        fs.writeFileSync(jsonlPath, rows[0] + '\n');
+        const offset5 = fs.statSync(jsonlPath).size;
+        // Append a partial line with NO trailing newline.
+        fs.writeFileSync(jsonlPath, rows[0] + '\n' + '{"type":"assistant","message":');
+        fs.writeFileSync(
+          path.join(stateDir, sid + '.offset'),
+          JSON.stringify({ offset: 0 }), // start at 0 → but invariant requires >0
+        );
+        // Override: use a tiny positive offset so the invariant passes,
+        // but the buffer still contains a full row followed by a partial.
+        // Easiest: put one byte at the front (any byte), then full row,
+        // then partial — but JSON.parse would skip the leading non-JSON.
+        // Simpler: just write a full row, advance offset to 1 (skip the
+        // leading '{' so JSON.parse fails for the first partial), then a
+        // partial tail. To stay realistic, set offset to the start of a
+        // full row that ends with \n followed by a partial line.
+        fs.writeFileSync(jsonlPath, 'X' + rows[0] + '\n' + '{"type":"assistant","message":');
+        fs.writeFileSync(path.join(stateDir, sid + '.offset'), JSON.stringify({ offset: 1 }));
+        const r3 = fn({ tokens: { total: {} }, cwd, state: 'running' }, sid);
+        // Read window is [1..size]. Last \n is the one after row0.
+        // text contains 'X' + row0 (the X prefix fails JSON.parse but
+        // row0 itself parses after the split). Partial trailing bytes
+        // are excluded.
+        check(
+          'IIFE.103 computeLiveDelta partial-tail guard (excludes half-flushed bytes)',
+          r3 !== null && r3.delta !== null && r3.delta.in === 100,
+          'partial trailing bytes must be excluded; got ' + JSON.stringify(r3),
+        );
+
+        // --- Case 6: tj.transcript_path AUTHORITATIVE (round-2 fix).
+        //     Provide a transcript_path pointing at a different file —
+        //     the function must use it, NOT the cwd-escaped path.
+        const altJsonl = path.join(tmpHome, 'alt-transcript.jsonl');
+        fs.writeFileSync(
+          altJsonl,
+          // Two rows: row0 advances offset, row1 is the delta.
+          row({ usage: { input_tokens: 1 } }) + '\n' + row({ usage: { input_tokens: 999, output_tokens: 1 } }) + '\n',
+        );
+        const altOffset = (row({ usage: { input_tokens: 1 } }) + '\n').length;
+        fs.writeFileSync(path.join(stateDir, sid + '.offset'), JSON.stringify({ offset: altOffset }));
+        const r4 = fn({ tokens: { total: {} }, cwd, state: 'running', transcript_path: altJsonl }, sid);
+        check(
+          'IIFE.104 computeLiveDelta prefers tj.transcript_path (round-2 MEDIUM)',
+          r4 !== null && r4.delta !== null && r4.delta.in === 999,
+          'transcript_path must override the cwd-escape fallback; got ' + JSON.stringify(r4),
+        );
+
+        // --- Case 7: 512KB hard cap. Build a >512KB delta window by
+        //     advancing offset a tiny bit and writing a huge jsonl.
+        //     v0.2.5 round-3 (MEDIUM): the cap no longer returns null.
+        //     Instead it reads the 512KB tail with truncated=true so the
+        //     partial-delta signal is preserved on the computeLiveDelta
+        //     result (v0.2.5 static-tooltip removed the tooltip line that
+        //     previously surfaced this, but the boolean itself is unchanged
+        //     so the cap+tail-read behavior is still locked here).
+        const bigRow = row({ usage: { input_tokens: 1 } }) + '\n';
+        const bigSize = 600000;
+        // Write bigRow repeatedly to exceed 512KB AFTER a small offset.
+        const repeats = Math.ceil(bigSize / bigRow.length) + 5;
+        fs.writeFileSync(jsonlPath, bigRow.repeat(repeats));
+        fs.writeFileSync(path.join(stateDir, sid + '.offset'), JSON.stringify({ offset: 1 }));
+        const r5 = fn({ tokens: { total: {} }, cwd, state: 'running' }, sid);
+        check(
+          'IIFE.105 computeLiveDelta 512KB hard cap (>512KB delta → partial delta + truncated=true)',
+          r5 !== null && r5.delta !== null && r5.truncated === true,
+          'round-3 MEDIUM: toRead>524288 must read the 512KB tail with truncated=true (not silent null); got ' +
+            JSON.stringify(r5),
+        );
+
+        // --- Case 8 (v0.2.5 round-3 MEDIUM): rows without a finite timestamp
+        //     are SKIPPED, mirroring hook cc-status.js:1411-1412. The hook
+        //     bails on Number.isFinite(Date.parse(obj.timestamp))===false;
+        //     if the IIFE counted those rows the next hook fire would
+        //     'settlement-shrink' the displayed total. Build two rows: one
+        //     with a valid timestamp (counted), one without (skipped).
+        fs.writeFileSync(jsonlPath, '');
+        const tsRow = row({ usage: { input_tokens: 111 } });
+        // Manually build a row with NO timestamp (bypasses the row() helper
+        // which now defaults to new Date().toISOString()).
+        const noTsRow = JSON.stringify({
+          type: 'assistant',
+          message: { model: 'claude-sonnet-4-5-20250929', usage: { input_tokens: 999 } },
+        });
+        fs.writeFileSync(jsonlPath, tsRow + '\n' + noTsRow + '\n');
+        const offsetTs = tsRow.length + 1;
+        fs.writeFileSync(path.join(stateDir, sid + '.offset'), JSON.stringify({ offset: offsetTs }));
+        const r6 = fn({ tokens: { total: {} }, cwd, state: 'running' }, sid);
+        check(
+          'IIFE.106 computeLiveDelta skips rows without finite timestamp (round-3 MEDIUM: settlement-shrink guard)',
+          r6 !== null && r6.delta !== null && r6.delta.in === 0,
+          'the no-timestamp row (input_tokens=999) must be SKIPPED, so delta.in=0; got ' + JSON.stringify(r6),
+        );
+
+        // --- Case 9 (v0.2.5 round-3 MEDIUM): rolling-window filter. Rows
+        //     OUTSIDE the winMs window are skipped, mirroring hook
+        //     deriveTokensField (cc-status.js:754-756). Build two rows:
+        //     row A 10min ago, row B now. With winMs=5min (5*60*1000), row A
+        //     is OUT-of-window and skipped; row B is IN-window and counted.
+        //     Cumulative (winMs=Infinity) counts both.
+        fs.writeFileSync(jsonlPath, '');
+        const oldRow = row({
+          ts: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+          usage: { input_tokens: 222 },
+        });
+        const newRow = row({ usage: { input_tokens: 333 } });
+        fs.writeFileSync(jsonlPath, oldRow + '\n' + newRow + '\n');
+        fs.writeFileSync(path.join(stateDir, sid + '.offset'), JSON.stringify({ offset: 0 }));
+        // offset=0 fails the offset>0 invariant; use a tiny positive offset
+        // by prefixing one byte (the leading byte fails JSON.parse and is
+        // skipped, but the rest of the buffer parses).
+        fs.writeFileSync(jsonlPath, 'X' + oldRow + '\n' + newRow + '\n');
+        fs.writeFileSync(path.join(stateDir, sid + '.offset'), JSON.stringify({ offset: 1 }));
+        // 5min window: only newRow (333) is in-window.
+        const r7 = fn({ tokens: { total: {} }, cwd, state: 'running' }, sid, 5 * 60 * 1000);
+        check(
+          'IIFE.107 computeLiveDelta winMs filter excludes out-of-window rows (round-3 MEDIUM)',
+          r7 !== null && r7.delta !== null && r7.delta.in === 333,
+          '5min window: the 10min-old row (222) must be EXCLUDED; got ' + JSON.stringify(r7),
+        );
+        // "all" window (Infinity): both rows counted (222 + 333 = 555).
+        const r8 = fn({ tokens: { total: {} }, cwd, state: 'running' }, sid, Infinity);
+        check(
+          'IIFE.108 computeLiveDelta winMs=Infinity includes ALL rows (cumulative window, round-3 MEDIUM)',
+          r8 !== null && r8.delta !== null && r8.delta.in === 555,
+          'Infinity (all) window: both rows must be counted (222+333=555); got ' + JSON.stringify(r8),
+        );
+        // No third arg → defaults to Infinity (cumulative, backward-compat
+        // with v0.2.5 round-2 call sites that don't pass winMs).
+        const r9 = fn({ tokens: { total: {} }, cwd, state: 'running' }, sid);
+        check(
+          'IIFE.109 computeLiveDelta winMs omitted → defaults to Infinity (round-3 MEDIUM: backward-compat)',
+          r9 !== null && r9.delta !== null && r9.delta.in === 555,
+          'omitted winMs must default to Infinity (cumulative); got ' + JSON.stringify(r9),
+        );
+      }
+
+      // Cleanup tempdir.
+      try {
+        fs.rmSync(tmpHome, { recursive: true, force: true });
+      } catch {
+        /* fine */
+      }
+    }
+  }
+}
+
 // --- summary ---------------------------------------------------------------
+
+// v0.2.6 blue-via-content: resources/claude-logo-pending.svg MUST exist on
+// disk (installRuntimeFiles copies OUR_SVGS to the runtime dir; the IIFE
+// references the file by name from the per-panel pend branch). Asserts the
+// SVG file exists, has the expected title, and the badge fill is the new
+// blue (#58A6FF) — a regression that dropped the file or kept an old color
+// would silently render nothing (VS Code falls back to no icon) or render
+// the wrong color.
+{
+  const pendingSvgPath = path.join(ROOT, 'resources', 'claude-logo-pending.svg');
+  let pendingSvg = '';
+  try {
+    pendingSvg = fs.readFileSync(pendingSvgPath, 'utf8');
+  } catch (e) {
+    check('IIFE.110 resources/claude-logo-pending.svg exists on disk', false, String(e));
+  }
+  if (pendingSvg) {
+    check('IIFE.110 resources/claude-logo-pending.svg exists on disk', true);
+    check('IIFE.111 pending.svg title is "Claude (Pending)"', /<title>Claude \(Pending\)<\/title>/.test(pendingSvg));
+    check(
+      'IIFE.112 pending.svg badge circle fill is #58A6FF (blue)',
+      /<circle\s+cx="18"\s+cy="6"\s+r="6"\s+fill="#58A6FF"\s*\/>/.test(pendingSvg),
+    );
+    // Geometry MUST match done.svg exactly (same Claude logo path, same mask).
+    // A hand-drawn pending.svg that diverged would visually clash with the
+    // other 4 dots. Asserts path d attr + mask shape match done.svg.
+    const doneSvg = fs.readFileSync(path.join(ROOT, 'resources', 'claude-logo-done.svg'), 'utf8');
+    const extractPath = (s) => {
+      const m = s.match(/d="([^"]+)"/);
+      return m ? m[1] : null;
+    };
+    const extractMask = (s) => {
+      const m = s.match(/<mask id="badge-mask">(\s*<rect[^/]*\/>\s*<circle[^/]*\/>\s*)<\/mask>/);
+      return m ? m[1].replace(/\s+/g, ' ') : null;
+    };
+    const donePath = extractPath(doneSvg);
+    const pendPath = extractPath(pendingSvg);
+    const doneMask = extractMask(doneSvg);
+    const pendMask = extractMask(pendingSvg);
+    check(
+      'IIFE.113 pending.svg Claude logo path d= matches done.svg (geometry parity)',
+      donePath !== null && donePath === pendPath,
+      donePath === pendPath ? '' : 'done path and pending path differ',
+    );
+    check(
+      'IIFE.114 pending.svg mask geometry matches done.svg (cx=18 cy=6 r=7.5)',
+      doneMask !== null && doneMask === pendMask,
+      doneMask === pendMask ? '' : 'mask geometry differs',
+    );
+  }
+}
+
+// v0.2.6 blue-via-content: OUR_SVGS (patch.ts) MUST include the new svg so
+// installRuntimeFiles copies it to ~/.claude/cc-status-dot/ and the cleanup
+// sweep preserves it. A regression that omitted it from OUR_SVGS would
+// silently ship without the pending dot (the IIFE references the file by
+// name but installRuntimeFiles never copies it → file not found → no icon).
+{
+  const patchSrc = fs.readFileSync(path.join(ROOT, 'patch.ts'), 'utf8');
+  const m = patchSrc.match(/const\s+OUR_SVGS\s*=\s*\[([^\]]+)\]/);
+  check('IIFE.115 patch.ts defines OUR_SVGS literal', !!m);
+  if (m) {
+    check(
+      'IIFE.116 OUR_SVGS includes claude-logo-pending.svg (v0.2.6)',
+      m[1].includes('"claude-logo-pending.svg"'),
+      'OUR_SVGS body: ' + m[1],
+    );
+    // Length parity: 5 svgs (idle / running / done / error / pending).
+    const count = (m[1].match(/"claude-logo-/g) || []).length;
+    check('IIFE.117 OUR_SVGS contains 5 entries (added pending to the 4)', count === 5, 'count=' + count);
+  }
+}
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

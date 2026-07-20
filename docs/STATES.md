@@ -8,13 +8,14 @@
 
 ## 1. 状态枚举（4 态 + 1 原生）
 
-| state | 含义 | 颜色 (hex) | SVG 文件（项目 `resources/`） | 动效 |
-|---|---|---|---|---|
-| `idle` | 空闲（初始 / 无状态文件 / 完成超 5 分钟） | 灰 `#808080` | `claude-logo-idle.svg` | 静态 |
-| `running` | 运行中 | 黄 `#CCA700` | `claude-logo-running.svg` | 静态（无动画；v0.1.3 的 8 帧呼吸因 `iconPath` 切帧本质离散、读作闪烁，v0.1.4 回归静态） |
-| `done` | 完成 | 绿 `#3FB950` | `claude-logo-done.svg` | 静态；**reader 在 done 超 5 分钟后渲染为 idle** |
-| `interrupted` | 中断（限速 / 出错） | 红 `#F85149` | `claude-logo-error.svg` ↔ CC 默认 `claude-logo.svg` | 快闪（~500ms 切换，on/off） |
-| — (permission) | 待用户授权 | 蓝（CC 原生） | CC 原生 `claude-logo.svg`（permission 时由 CC 自己改色为蓝） | **reader 不覆盖**，CC 原生蓝点照常显示 |
+| state          | 含义                                      | 颜色 (hex)    | SVG 文件（项目 `resources/`）                                | 动效                                                                                    |
+| -------------- | ----------------------------------------- | ------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `idle`         | 空闲（初始 / 无状态文件 / 完成超 5 分钟） | 灰 `#808080`  | `claude-logo-idle.svg`                                       | 静态                                                                                    |
+| `running`      | 运行中                                    | 黄 `#CCA700`  | `claude-logo-running.svg`                                    | 静态（无动画；v0.1.3 的 8 帧呼吸因 `iconPath` 切帧本质离散、读作闪烁，v0.1.4 回归静态） |
+| `done`         | 完成                                      | 绿 `#3FB950`  | `claude-logo-done.svg`                                       | 静态；**reader 在 done 超 5 分钟后渲染为 idle**                                         |
+| `interrupted`  | 中断（限速 / 出错）                       | 红 `#F85149`  | `claude-logo-error.svg` ↔ CC 默认 `claude-logo.svg`          | 快闪（~500ms 切换，on/off）                                                             |
+| `pending` (v0.2.6) | 待用户输入（LLM 回复内容含"等你/你决定/请确认/let me know"等语义）      | 蓝 `#58A6FF`  | `claude-logo-pending.svg`                                    | 静态；**reader 在 `j.pending===true && st!=="idle"` 时渲染本蓝点**，优先于 state 的 running黄/done绿 |
+| — (permission) | 待用户授权                                | 蓝（CC 原生） | CC 原生 `claude-logo.svg`（permission 时由 CC 自己改色为蓝） | **reader 不覆盖**，CC 原生蓝点照常显示                                                  |
 
 > 设计决策：`permission` 态不纳入 per-tab 渲染——CC 已有原生蓝点处理 `hasPendingPermissions`，reader 在以下两种情况 `return`（不覆盖图标），CC 蓝点自然生效：
 >
@@ -25,29 +26,32 @@
 >
 > **v0.1.13/v0.1.14 双重性（dual-nature）**：pending 在 per-tab（本节）由 CC 原生蓝点表达（reader `__ccsdPending` yield）；但在 **底部 SBI 聚合**（§7）里以独立 🔵 蓝灯呈现，由 writer 新增的 `Notification` hook case 写 `pending:true`（§2），reader 聚合独立计数。**per-tab 不读 `pending` 字段**（避免重复造一套 waiting 态），**聚合不读 `__ccsdPending`**（那是 per-panel-live，无窗口级通道）——同一语义，两个通道，各管各的 UI 表面。（v0.1.13 用 commandCenter 作聚合载体但 reload 后不稳；v0.1.14 回退到单 SBI（emoji+数字分开）；v0.1.15 拆成 4 个彩色块 SBI（数字内置块里）；v0.1.16 恢复 emoji 球样式保留 4 SBI 固定位置结构，pending 通道不变。）
 >
-> **点几何（所有 SVG 统一）**：`viewBox 0 0 24 24`，状态点 `cx=18 cy=6 r=6`，mask 挖空 `r=7.5`（margin 1.5）。16px tab 渲染下点直径 8px，视觉占比 20%（竞品角标黄金比区间：macOS dock badge ~20-25%）。
+> **v0.2.6 blue-via-content 扩展（pending 第三通道）**：除 permission（CC 原生蓝点 yield）和 Notification（聚合 🔵）外，新增"**reader per-tab 直接读 `j.pending`**"通道——writer 在 `Stop` 事件读 `payload.last_assistant_message`（LLM 最后回复纯文本），若含"待用户决策"语义（中英 idiom：`等你/你决定/请确认/告诉我/let me know/your call/please confirm` 等；或末行 ≤60 字符的独立问句 `需要继续吗？/Should I proceed?`），写 `pending:true`，reader per-tab tick 命中 `pend && st!=="idle"` 即渲染蓝色 `claude-logo-pending.svg`，**优先于 state 的 running-黄 / done-绿**。这覆盖了用户的核心场景："CC 回复'等你测试反馈'但 background_tasks 漂移导致 state=running 卡黄"——现在 reader 看到 `j.pending=true` 直接渲染蓝点，stuck-running 解决。**绿逻辑（done=绿）完全不动**：neutral 完成消息（"已完成。所有测试通过。" / "Done. Shipped."）→ `pending:false` → done 分支照常绿。**关键词精准设计**（高 precision 优先于 recall，假蓝比假绿更刺眼）：中文用"你"作用户锚点，干净区分"等你"(用户) vs "等待加载"(技术)；英文用多词 idiom（"let me know" 而非 "decided"），LLM 自述"我已决定"不命中。代码块（```fenced``` 和 `inline`）匹配前剥离，防 `letMeKnow` 标识符误判。`stop_hook_active=true` 时跳过（CC 防死循环）。
+>
+> **点几何（所有 SVG 统一）**：`viewBox 0 0 24 24`，状态点 `cx=18 cy=6 r=6`，mask 挖空 `r=7.5`（margin 1.5）。16px tab 渲染下点直径 8px，视觉占比 20%（竞品角标黄金比区间：macOS dock badge ~20-25%）。pending.svg 与 done.svg 几何完全一致（同 Claude logo path + 同 mask），仅状态圆 fill 从 `#3FB950` 换为 `#58A6FF`、title 改为 `Claude (Pending)`。
 
 ---
 
 ## 2. 事件 → 状态映射（writer 的 case 集 ＝ patcher 的 `HOOK_EVENTS` 接线集，二者必须逐一对齐）
 
-| CC hook 事件 | → 写入 state | 说明 |
-|---|---|---|
-| `UserPromptSubmit` | `running` + 清 `pending` | 新一轮开始；`activeSubagents` 用 payload `background_tasks` 纠正，**否则重置 0**（防止上轮漂移 bleed 进新轮；`Stop` 才是工作是否剩余的权威——见 regression test 12 / bug e434c0a2）。**v0.1.13 起同时写 `pending:false`**——新 prompt 表示用户已答完之前的权限/问询，🔵 SBI 蓝灯应熄灭 |
-| `PreToolUse` | `running` + 清 `pending` | 心跳，刷新 `since`；`activeSubagents` 同 `UserPromptSubmit` 规则（payload 优先，否则 0）。**v0.1.13 清 `pending`**——tool 心跳表示用户已答 prompt，turn 重新推进 |
-| `PostToolUse` | `running` + 清 `pending` | 心跳，刷新 `since`；同上 |
-| `SubagentStart` | `running` + **保持 `cur.pending`** | **早信号**：subagent 一 spawn 即黄；`activeSubagents` 优先用 `background_tasks` 纠正，否则 +1。**v0.1.13 review round-2 改为保持 `cur.pending`**：subagent spawn 是 **background 事件**，对父会话的 permission/question prompt 是否仍开着无信号——若在 Notification 弹窗期间 spawn helper 却清 `pending`，🔵 SBI 蓝灯会假熄灭直到下一次 Notification/用户事件。仅用户/turn 驱动的事件（UserPromptSubmit / Pre/PostToolUse / Stop / StopFailure）真正清 `pending` |
-| `SubagentStop` | `running`（若仍有在飞任务）/ **保持 cur.state（归零时不抢断，写回 activeSubagents:0）** + **保持 `cur.pending`** | `activeSubagents` 优先用 `background_tasks` 纠正，否则 −1（clamp 0）；**始终写回**（落盘递减后的计数 + cur.state，cur.state 限定为 writer 实际会写的三态 running/done/interrupted，其它含默认 'idle' 一律降级 'running'，永不把 'idle' 落盘）。归零时不抢断终态、交 `Stop` 裁定；**且当 cur.state 已是 done/interrupted 且 next===0 时保留 cur.since 不刷新**（reader notify 去重以终态 since 为键，刷新会重复弹通知并重置 done→idle 5 分钟倒计时）。**v0.1.13 review round-2 改为保持 `cur.pending`**——同 `SubagentStart` 理由：subagent 收尾是 background 事件，不应误清父会话 prompt 的 pending 标志 |
-| `Notification`（v0.1.13 新增） | **保持 cur.state + cur.since，写 `pending:true`** | CC Notification hook = permission / question / elicit prompt。**不改 state/since**——pending 与 state 正交（一轮 running 可同时是 pending），reader 聚合独立计数（§7 蓝灯）。cur 为默认（无前文件）时降级 state='running' + since=now 写一个 coherent 文件。**仅此事件写 `pending:true`**；用户/turn 驱动事件（UserPromptSubmit / Pre/PostToolUse / Stop / StopFailure）清零；SubagentStart/Stop **保持**（见上） |
-| `Stop` | `done`，**除非** payload `background_tasks.length > 0` → `running`；payload 缺字段（inflight=null）也落 `done` 并清零计数；**清 `pending`** | 权威裁定：workflow 后台跑期间不假绿（v2.1.145+）；`Stop` **绝不读盘上 activeSubagents**（counter 可能漂移），只信 payload——缺 payload 也算"无在飞任务"，落 done + 清零 |
-| `StopFailure` | `interrupted` + 清 `pending` | 记 `error` 枚举（`rate_limit`/`overloaded`/…）；缺 error 或非字符串一律写 `"interrupted"`（与 reader 兜底文案对齐）；中断优先，保留 `activeSubagents` |
-| `SessionEnd` | （删除该 session 状态文件） | 清理——pending 字段随文件消失，无残留 |
+| CC hook 事件                   | → 写入 state                                                                                                                                | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UserPromptSubmit`             | `running` + 清 `pending`                                                                                                                    | 新一轮开始；`activeSubagents` 用 payload `background_tasks` 纠正，**否则重置 0**（防止上轮漂移 bleed 进新轮；`Stop` 才是工作是否剩余的权威——见 regression test 12 / bug e434c0a2）。**v0.1.13 起同时写 `pending:false`**——新 prompt 表示用户已答完之前的权限/问询，🔵 SBI 蓝灯应熄灭                                                                                                                                                                                                                                                                                                                    |
+| `PreToolUse`                   | `running` + 清 `pending`                                                                                                                    | 心跳，刷新 `since`；`activeSubagents` 同 `UserPromptSubmit` 规则（payload 优先，否则 0）。**v0.1.13 清 `pending`**——tool 心跳表示用户已答 prompt，turn 重新推进                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `PostToolUse`                  | `running` + 清 `pending`                                                                                                                    | 心跳，刷新 `since`；同上                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `SubagentStart`                | `running` + **保持 `cur.pending`**                                                                                                          | **早信号**：subagent 一 spawn 即黄；`activeSubagents` 优先用 `background_tasks` 纠正，否则 +1。**v0.1.13 review round-2 改为保持 `cur.pending`**：subagent spawn 是 **background 事件**，对父会话的 permission/question prompt 是否仍开着无信号——若在 Notification 弹窗期间 spawn helper 却清 `pending`，🔵 SBI 蓝灯会假熄灭直到下一次 Notification/用户事件。仅用户/turn 驱动的事件（UserPromptSubmit / Pre/PostToolUse / Stop / StopFailure）真正清 `pending`                                                                                                                                         |
+| `SubagentStop`                 | `running`（若仍有在飞任务）/ **保持 cur.state（归零时不抢断，写回 activeSubagents:0）** + **保持 `cur.pending`**                            | `activeSubagents` 优先用 `background_tasks` 纠正，否则 −1（clamp 0）；**始终写回**（落盘递减后的计数 + cur.state，cur.state 限定为 writer 实际会写的三态 running/done/interrupted，其它含默认 'idle' 一律降级 'running'，永不把 'idle' 落盘）。归零时不抢断终态、交 `Stop` 裁定；**且当 cur.state 已是 done/interrupted 且 next===0 时保留 cur.since 不刷新**（reader notify 去重以终态 since 为键，刷新会重复弹通知并重置 done→idle 5 分钟倒计时）。**v0.1.13 review round-2 改为保持 `cur.pending`**——同 `SubagentStart` 理由：subagent 收尾是 background 事件，不应误清父会话 prompt 的 pending 标志 |
+| `Notification`（v0.1.13 新增） | **保持 cur.state + cur.since，写 `pending:true`**                                                                                           | CC Notification hook = permission / question / elicit prompt。**不改 state/since**——pending 与 state 正交（一轮 running 可同时是 pending），reader 聚合独立计数（§7 蓝灯）。cur 为默认（无前文件）时降级 state='running' + since=now 写一个 coherent 文件。**仅此事件写 `pending:true`**；用户/turn 驱动事件（UserPromptSubmit / Pre/PostToolUse / Stop / StopFailure）清零；SubagentStart/Stop **保持**（见上）                                                                                                                                                                                        |
+| `Stop`                         | `done`，**除非** payload `background_tasks.length > 0` → `running`；payload 缺字段（inflight=null）也落 `done` 并清零计数；**清 `pending`，除 v0.2.6 例外** | 权威裁定：workflow 后台跑期间不假绿（v2.1.145+）；`Stop` **绝不读盘上 activeSubagents**（counter 可能漂移），只信 payload——缺 payload 也算"无在飞任务"，落 done + 清零。**v0.2.6 blue-via-content**：若 `payload.last_assistant_message`（LLM 最后回复纯文本）含"待用户决策"语义（`AWAIT_USER_RE` 匹配中英 idiom `等你/你决定/请确认/let me know/your call/please confirm` 等，或末行 ≤60 字符的独立问句 `需要继续吗？/Should I proceed?`）→ 改写 **`pending:true`**（reader 蓝点优先于 done-绿/running-黄，底部 🔵 也计）。`stop_hook_active=true` 时跳过（CC 防死循环门）。neutral 完成（"已完成"/"Done."）→ `pending:false`（绿逻辑不动）。代码块在匹配前剥离防 `letMeKnow` 误判。stuck-running（luceo）：inflight>0 + "等你测试反馈" → state=running + pending=true → reader 蓝（用户核心场景） |
+| `StopFailure`                  | `interrupted` + 清 `pending`                                                                                                                | 记 `error` 枚举（`rate_limit`/`overloaded`/…）；缺 error 或非字符串一律写 `"interrupted"`（与 reader 兜底文案对齐）；中断优先，保留 `activeSubagents`                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `SessionEnd`                   | （删除该 session 状态文件）                                                                                                                 | 清理——pending 字段随文件消失，无残留                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 **第二个 writer-side 删除触发（v0.1.14 R3 文档加固，见 cc-status.js `Bounded GC`）**：`UserPromptSubmit` 在写当前 session 文件之前，会扫描整个 STATE_DIR，**删除**所有 mtime > `INTERRUPTED_RETENTION_MS`（24h）且 `state !== "interrupted"` 的 `.json` 文件——这是跨 session 的全局清理（一个 session X 的 UserPromptSubmit 可能 unlink 另一个 session Y 的陈旧文件）。理由：崩溃 / 被杀的 CC 进程不发 SessionEnd，没有这层全局扫描 `~/.claude/cc-tab-status/` 会无界增长。**例外**：`state === "interrupted"` 的文件**不删**（即使 >24h）——保留诊断价值，与下文 §7.5 "中断态文件不删（保留诊断价值）" 契约一致；聚合层也已经把它们降级为 idle 不计入 🔴。当前 session 文件也跳过（即将被覆写）。
 
 **故 `HOOK_EVENTS` = `["UserPromptSubmit","PreToolUse","PostToolUse","SubagentStart","SubagentStop","Notification","Stop","StopFailure","SessionEnd"]`**（9 个，v0.1.13 加入 `Notification`）。
 
 **故意不接的事件**（及原因，防止死接线）：
+
 - `SessionStart`：writer 无对应 case（接了也是死接线，audit F-5）。
 
 > **hook 命令格式（实测约定）**：patcher 写入 `~/.claude/settings.json` 的每个 hook 形如 `"<absoluteNodeBin> <INSTALL_DIR>/hooks/cc-status.js  # cc-status-dot-managed"`，全部 9 事件用 `matcher:""`。两点依赖 CC 当前实测行为：(1) CC 以 shell 解析 hook 行，故末尾 `# ...` shell 注释可用作幂等标记；(2) `matcher:""` 在 CC 的 regex 语义下表示"匹配一切事件实例"（含 SubagentStart 的 `agent_type` 维度）——空串目前等价 catch-all。若未来 CC 改用 `execFile` 直 spawn 或将空 matcher 改为"匹配空"语义，这条链会静默断（writer 不写文件、reader 永停末帧）。届时改为 `matcher:".*"` 或把标记挪进 hook 脚本自报即可。
@@ -68,10 +72,10 @@
 
 ### 3a. `~/.claude/` 路径地图（两个目录，勿混淆）
 
-| 目录 | 内容 | 由谁创建 | `--revert` 是否清理 |
-|---|---|---|---|
-| `~/.claude/cc-tab-status/` | **状态 IPC 文件**（本节 §3，每 session 一个 `<sid>.json`） | writer（hook）首次写入 | **否**（用户数据，保留） |
-| `~/.claude/cc-status-dot/`（`INSTALL_DIR`） | **运行时副本**：`resources/*.svg`（4 个 = idle + running + done + error，reader 引用）+ `hooks/cc-status.js`（settings.json 接线的 hook 目标） | patcher 安装时从项目源复制（幂等覆盖） | **是**（删整个目录） |
+| 目录                                        | 内容                                                                                                                                           | 由谁创建                               | `--revert` 是否清理      |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------ |
+| `~/.claude/cc-tab-status/`                  | **状态 IPC 文件**（本节 §3，每 session 一个 `<sid>.json`）                                                                                     | writer（hook）首次写入                 | **否**（用户数据，保留） |
+| `~/.claude/cc-status-dot/`（`INSTALL_DIR`） | **运行时副本**：`resources/*.svg`（4 个 = idle + running + done + error，reader 引用）+ `hooks/cc-status.js`（settings.json 接线的 hook 目标） | patcher 安装时从项目源复制（幂等覆盖） | **是**（删整个目录）     |
 
 > **持久化设计（v0.2）**：reader（注入 IIFE）的 `RES` 与 settings.json 接线的 hook 命令都指向 `INSTALL_DIR` 的**绝对路径**，而非项目源目录。这样即使用户删除项目目录或 npx 缓存被清，已 patch 的扩展仍能照常渲染。安装一行：`npx vscode-claude-code-status-dot`。`PROJECT_ROOT` 仅用于"复制源"（安装时读一次），编译后从 `dist/patch.js` 运行时自动回溯到包根目录。
 
@@ -79,10 +83,10 @@
 
 ## 4. reader 渲染逻辑（patch.ts 注入 IIFE，每 500ms 一帧）
 
-> **reader 只读 `state`（仍四态）+ `since` + `error`**；`activeSubagents` 是 writer 内部记账字段，reader 不读、不渲染。workflow 跑期间保持 running 完全由 writer 在 `Stop`/`SubagentStop` 时改写 `state` 实现。v0.1.4 起 running 渲染为**静态黄点** `#CCA700`（v0.1.3 的 8 帧正弦呼吸因 `iconPath` 切帧本质离散、帧间不连续，肉眼读作闪烁而非渐变，故回归静态；和 idle/done/error 一样无动画）。500ms 定时器仍在跑——interrupted 的 `flashSeq%2` 快闪需要它，静态态每 tick 重新赋同一个路径（廉价 no-op）。
+> **reader 只读 `state`（仍四态）+ `since` + `error` + `pending`（v0.2.6 新增）**；`activeSubagents` 是 writer 内部记账字段，reader 不读、不渲染。workflow 跑期间保持 running 完全由 writer 在 `Stop`/`SubagentStop` 时改写 `state` 实现。v0.1.4 起 running 渲染为**静态黄点** `#CCA700`（v0.1.3 的 8 帧正弦呼吸因 `iconPath` 切帧本质离散、帧间不连续，肉眼读作闪烁而非渐变，故回归静态；和 idle/done/error 一样无动画）。500ms 定时器仍在跑——interrupted 的 `flashSeq%2` 快闪需要它，静态态每 tick 重新赋同一个路径（廉价 no-op）。
 
 ```
-读 <sid>.json → state, since, error
+读 <sid>.json → state, since, error, pend(v0.2.6=j.pending===true)
 # notify 去重（v0.1.5+：以终态 since 时间戳为键，旧的 prevSt 转换检查已废弃）：
 if !seeded:
   seeded = true
@@ -90,6 +94,10 @@ if !seeded:
 else if state ∈ {done, interrupted} && since !== lastTermSince:
   lastTermSince = since;  notify(state, error)              # 见 §4b
 if __ccsdPending (rename_tab hasPendingPermissions=true):  return（不覆盖，让 CC 原生蓝点显示）  # v0.1.8
+# v0.2.6 blue-via-content: writer 在 Stop 时若 last_assistant_message 命中 AWAIT_USER_RE
+# 写 pending:true, reader per-tab 直接读 j.pending 渲染蓝点（优先于 state）：
+if pend && st !== "idle":  视为 pending                       # v0.2.6（优先级在 __ccsdPending yield 之后、state if-chain 之前）
+  RES/claude-logo-pending.svg  # 静态蓝 #58A6FF（无动画）；return
 if state == "done" and now - since > 5min:  视为 idle
 switch state:
   running:     RES/claude-logo-running.svg   # 静态黄 #CCA700（无动画）
@@ -99,6 +107,8 @@ switch state:
   其它/无文件:  return（不覆盖，让 CC 原生图标显示）
 flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 ```
+
+> **v0.2.6 blue-via-content 优先级链**（高 → 低）：(1) `t.__ccsdPending`（CC 原生 permission 蓝点）→ `return` 让 CC 蓝点显示；(2) `pend && st!=="idle"`（reader 直接读 `j.pending`，writer 由 Notification 或 Stop last-message 语义匹配写入）→ 渲染蓝色 `claude-logo-pending.svg`，`return`；(3) 按 state 渲染 running/done/interrupted/idle。即"**蓝优先 state**"——stuck-running 场景（state=running 漂移 + last_message"等你"→ pending=true）下 reader 渲染蓝而非黄。**绿逻辑（done=绿）完全不动**：pending=false 时 done 分支照常走 → 绿。
 
 > **为什么 v0.1.4 回归静态**：VSCode 的 `tab.iconPath` 在每次赋值后触发一次图标重渲染，帧间没有插值/过渡——所以"呼吸动画"本质是一串离散静态图被快速切换，相邻帧色差再小也读作闪烁（flicker），而非连续渐变（fade）。静态黄点和 idle/done/error 视觉语言一致，最干净。interrupted 保留快闪是因为它携带真实的"告警"语义（出错 / 限速），值得打破静态。`flashSeq` 仍保留并每 tick 自增，仅供 interrupted 的 `flashSeq%2` 判定。
 
@@ -112,14 +122,15 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 
 **渲染通道与焦点正交**——IIFE 的实际分支以 `os.platform()` 选渲染通道，以 `vs.window.state.focused` × `notifyWhenFocused` 决定是否抑制：
 
-| 平台 | VSCode 前台 + `notifyWhenFocused:true`（默认） | 前台 + `notifyWhenFocused:false` / 后台 |
-|---|---|---|
+| 平台                                    | VSCode 前台 + `notifyWhenFocused:true`（默认）                                                                                                                                                      | 前台 + `notifyWhenFocused:false` / 后台                    |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **macOS**（`os.platform()==="darwin"`） | osascript 系统通知（屏幕右上角下拉，带声音，无按钮，几秒自动消失）；osascript 异步或同步失败时**回落 VSCode `showInformation/WarningMessage`**（防权限被拒/二进制缺失/转义 bug 让通知功能彻底静默） | 后台同左（osascript）；前台+`notifyWhenFocused:false` 抑制 |
-| **Windows / Linux**（无 osascript） | VSCode `showInformationMessage`（done）/ `showWarningMessage`（interrupted），右下角 toast | 同左 |
+| **Windows / Linux**（无 osascript）     | VSCode `showInformationMessage`（done）/ `showWarningMessage`（interrupted），右下角 toast                                                                                                          | 同左                                                       |
 
 **消息文案**：末尾追加 `[<panel 当前 title>]`——`__ccsdTitle` 由 `update_session_state`（Anchor A）首次写入，并由 `rename_tab`（Anchor B）每次刷新（CC 可能多次 rename），保证通知里展示的是当前 tab 标题而非陈旧值。`done` → `Claude Code: turn complete [<title>]`；`interrupted` → 按 error 映射（`rate_limit`→"rate limit reached"、`overloaded`→"server overloaded"、其它→原值；writer 缺 error 字段或非字符串时双方兜底都为 `"interrupted"`）。
 
 **配置项**（VSCode settings.json `ccStatusDot.*`）：
+
 - `ccStatusDot.notify`（bool，默认 true）：总开关
 - `ccStatusDot.notifyWhenFocused`（bool，默认 true）：前台时也通知（"聚焦于 VSCode 窗口"≠"盯着 CC tab"，原默认 `false` 让通知在最常见场景下永远不触发，等同于功能失效）。设 `false` 仅后台时通知。
 - `ccStatusDot.notifySound`（string，默认 `"Glass"`）：macOS 系统通知声音（`done` 与 `interrupted` 共用，矩阵不区分声音；`""`=静音；可选 Basso/Ping/Hero 等）。
@@ -163,6 +174,7 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 > **v0.1.17 关键变化：单 SBI 紧凑拼接**——回到 1 个 SBI（`globalThis.__ccsdSbi`，单个 `createStatusBarItem(StatusBarAlignment.Left, -9996)`），但 text 是 4 个 `<球><数字>` token 拼接（v0.1.17 紧贴无分隔；**v0.1.18 起每两个 token 之间加一个空格** —— `parts.join(" ")`，让 4 灯之间有清晰的小间隙，仍远紧凑于 v0.1.16 的 4-SBI 6-16px 空白；dim 球为 ⚪，v0.1.19 reverted v0.1.17 ⚪→🟤 pivot 回到灰球，见 §7.5）。整行宽度从 v0.1.16 的 ~120px（4 块 × 25-30px + 3 个 ~6-16px item 间隔 ≈ 48px 空白）压到 ~75px（含 3 个 token 间空格，无框架空白），4 个圆点视觉上紧贴成"一串彩色珠子"。
 >
 > **位置稳定性（"数字不位移"）的根因彻底澄清**：
+>
 > - **VSCode `statusbarpart.css` 给所有状态栏 item 强制 `font-variant-numeric: tabular-nums`**（源码实证 `microsoft/vscode` 仓库）→ ASCII 数字 0-9 在**任何字体**下都是等宽 OpenType tabular figures。这是"数字宽度变化导致整行位移"问题的**根治**：`cap()` 把 0-3 → 1 字符、4+ → `N`（也是 1 字符），无论计数怎么变化，每灯的"数字部分"宽度永远恒定 1 字符。
 > - **dim 球用 ⚪（U+26AA）**（v0.1.19 现状）。历史上 v0.1.17 曾 pivot 到 🟤（U+1F7E4，与 🟢🟡 同属 Geometric Shapes Extended 块）以"用 Unicode 块级分配保证等宽"；v0.1.19 因用户偏好灰球而 revert（commit 55e18b4）。**当前现实**：5 球分属 3 个 Unicode 块（Geometric Shapes Extended: 🟢🟡；Miscellaneous Symbols And Pictographs: 🔵🔴；Miscellaneous Symbols: ⚪）——**实测现代 emoji 字体**（Apple Color Emoji / Noto Color Emoji / Segoe UI Emoji）把所有 emoji 渲染成 1em 正方形 glyph，跨块宽度一致，理论风险在主流字体上不显现（详见 §7.5）。
 > - **数字部分的等宽由 VSCode CSS 强制保证**，独立于 emoji 字体——所以"数字不位移"这一**显式需求**得到 100% 满足，与 emoji 渲染无关。
@@ -198,10 +210,10 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 - **复用窗口级单例定时器** `globalThis.__ccsdSbiTimer`（500ms，`TICK_MS`；v0.1.13 时是 `__ccsdCcTimer`，v0.1.14 重命名为 SBI 语义）——P 个 CC panel 共享一个 timer，每 500ms 触发**一次**聚合（O(S) 文件读，S = 会话数），不再 v0.1.10 的 O(P×S) 读放大。
 - 每 tick `fs.readdirSync(DIR)` 列 `~/.claude/cc-tab-status/*.json`，逐文件 `JSON.parse` 读 `state` + `since` + `pending` 字段，**先应用与 per-tab 一致的渲染规则再分桶**：
   1. `state === "done"` 且 `now - since > DONE_TO_IDLE_MS`（5 分钟）→ **不计入 🟢 done**（idle 不算绿，避免陈旧完成永远占绿——只有活跃 done 计绿）。
-  2. `state === "running"` 且 `mtime > SBI_RUNNING_STALE_MS`（30 分钟，见 §7.5）→ **不计入 🟡 running**（崩溃/被杀未发 SessionEnd 的会话治理）。
-  3. `state === "interrupted"` 且 `mtime > INTERRUPTED_RETENTION_MS`（24 小时，v0.1.13 review fix，见 §7.5）→ **不计入 🔴 interrupted**（🔴 灯不再随累积的 abandoned 中断会话单调增长；文件不删，保留诊断价值）。
+  2. `state === "running"` 且 `since > SBI_RUNNING_STALE_MS`（30 分钟，见 §7.5）→ **不计入 🟡 running**（崩溃/被杀未发 SessionEnd 的会话治理；**v0.2.6：decay key 从 mtime 改为 `since`**——Stop preserveSince 路径 cc-status.js:390-401 在 inflight>0 时保留 cur.since 但 writeJsonAtomic 每次都刷新 mtime，CC 对漂移 inflight workflow 重复 fire Stop → mtime 永远新、mtime-decay 永不触发；`since` 是 *→running 的真实转移时间，被 preserveSince 保留（不刷新），故 since-decay 在同路径下正常触发。与规则 1（done since>5min）/ 规则 3（interrupted since>24h）对称）。
+  3. `state === "interrupted"` 且 `since > INTERRUPTED_RETENTION_MS`（24 小时，v0.1.13 review fix，v0.2.4 round-2 since-key 修正，见 §7.5）→ **不计入 🔴 interrupted**（🔴 灯不再随累积的 abandoned 中断会话单调增长；文件不删，保留诊断价值。**decay key 是 `since`**——orphan SubagentStop/Notification 写刷新 mtime 但保留 since cc-status.js preserveSince/preserveError 路径，mtime-decay 永不触发）。
   4. 其余按字面 `state` 分桶（`running`/`done`/`interrupted`；`idle` 不参与任何灯——既不算绿也不算黄）。
-  5. **`pending` 独立计数 + 同款 GC**（v0.1.13 review fix）：`j.pending === true && st !== "idle"` → `ag.pending++`。`st` 是上面 3 条 decay 规则**已修正过**的值——崩溃/killed 会话（无论原 state 是 running/done/interrupted，只要 mtime 触发 decay 即降级为 idle）的 pending 自动被跳过。这关掉了"🔵 永久粘在 1"的假阳性（一个在权限弹窗时被强杀的会话 state=running/pending=true，running 桶被规则 2 治理但 pending 仍被计入——review 发现并修复）。**与 state 正交**：一个活会话（st 非 idle）可同时计入 🟡 running AND 🔵 pending（典型：running turn 卡在权限弹窗）。
+  5. **`pending` 独立计数 + 同款 GC**（v0.1.13 review fix）：`j.pending === true && st !== "idle"` → `ag.pending++`。`st` 是上面 3 条 decay 规则**已修正过**的值——崩溃/killed 会话（无论原 state 是 running/done/interrupted，只要 `since` 触发 decay 即降级为 idle；v0.2.6 running decay key 从 mtime 改 since）的 pending 自动被跳过。这关掉了"🔵 永久粘在 1"的假阳性（一个在权限弹窗时被强杀的会话 state=running/pending=true，running 桶被规则 2 治理但 pending 仍被计入——review 发现并修复）。**与 state 正交**：一个活会话（st 非 idle）可同时计入 🟡 running AND 🔵 pending（典型：running turn 卡在权限弹窗）。
 - 4 个计数各自 `cap(n)` 截顶到 4，组 `counts=[cd,cr,cp,ci]`，IIFE **遍历 `CFG`（4 元素配置表）拼接 4 段 token 到单 SBI 的 `.text`**（`parts.push((n===0?DIM_EM:CFG[k].em)+(n>=4?"N":""+n))` 4 次 + `parts.join(" ")` → `🟢3 🟡1 ⚪0 ⚪0`；⚪ 为 v0.1.19 reverted v0.1.17 ⚪→🟤 pivot 后的 dim 球；token 间空格为 v0.1.18 引入）+ `.tooltip`（共享）+ `.show()`。**仅 mutate text**——v0.1.17 不再触碰 `.color` / `.backgroundColor`（球 emoji 自带色，无需主题块/白字）。**直接赋值**——无 setContext 中介，无 when-clause 切换，无 reload 韧性问题（reload 后第一个 CC panel 打开即重建单 SBI + timer，首 tick 即推真实计数）。
 - 失败文件 try/catch 跳过（与 reader 一贯风格，不崩扩展）。
 
@@ -213,27 +225,28 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 
 ### 7.4 与 per-tab 四态点的关系（共存，不替代）
 
-| 维度 | per-tab 四态色点（§1 / §4） | 底部 SBI 4 灯（本节） |
-|---|---|---|
-| 位置 | 每个 CC tab 图标 + Open Editors 视图 | 状态栏左侧（near-center），全局唯一 |
-| 灯数 | 4（idle/running/done/interrupted，permission 走 CC 原生蓝） | 4（🟢done 🟡running 🔵pending 🔴interrupted），固定显示 |
-| 粒度 | 单 session | 全部 session 汇总计数（0-3+N 封顶） |
-| 渲染 | `panelTab.iconPath`（SVG） | 单 SBI `text`（4 段 `<球><数字>` 拼接，直接 mutate `.text`——无 `.color`/`.backgroundColor`） |
-| 中断闪烁 | 红色快闪（`flashSeq%2`） | 仅静态彩球+数字（不闪） |
-| 颜色保真 | SVG 嵌入 hex，跨平台稳定 | emoji 球自带色，依赖 OS emoji 字体栈（v0.1.17 沿用 v0.1.16 的 emoji 路径） |
-| permission 处理 | `__ccsdPending` yield→CC 原生蓝点（per-panel-live） | 🔵 pending 灯（writer 写 `pending:true`，reader 聚合独立计数） |
-| 陈旧 running 治理（>30min mtime） | **不应用**——tab 保持 🟡 黄提醒"此会话可能已死" | **应用 §7.2 启发式**——不计 🟡，避免单个崩溃会话永久占黄 1（两者计数因此可能差 1） |
-| 陈旧 interrupted 治理（>24h mtime） | **不应用**——tab 保持 🔴 红快闪提醒"此会话被中断过" | **应用 §7.2 规则 3**——不计 🔴，避免累积的 abandoned 中断会话让 🔴 单调增长（两者计数因此可能差 N） |
-| done>5min 归 idle | 应用（§4） | 应用（§7.2，不计 🟢） |
-| 刷新来源 | 每 panel 一个 per-tab `setInterval`（500ms） | 窗口级单例 `setInterval`（500ms） |
-| 失败隔离 | per-tab setInterval 的 `p.iconPath=` 单行 try/catch；onDidDispose 注册也在 try/catch 内 | SBI 创建 + SBI timer 创建 + aggregation body + onDidDispose 各自独立 try/catch（§7.5） |
-| reload 韧性 | 高（per-tab 渲染不依赖 window-scoped state） | **高（v0.1.14 改进，v0.1.17 沿用）**——SBI 直接 mutate text，无 setContext key 在 reload 后丢失的问题 |
+| 维度                                      | per-tab 四态色点（§1 / §4）                                                                                                                                                                                                                                                | 底部 SBI 4 灯（本节）                                                                                                                                                                                                                                                                 |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 位置                                      | 每个 CC tab 图标 + Open Editors 视图                                                                                                                                                                                                                                       | 状态栏左侧（near-center），全局唯一                                                                                                                                                                                                                                                   |
+| 灯数                                      | 4（idle/running/done/interrupted，permission 走 CC 原生蓝）                                                                                                                                                                                                                | 4（🟢done 🟡running 🔵pending 🔴interrupted），固定显示                                                                                                                                                                                                                               |
+| 粒度                                      | 单 session                                                                                                                                                                                                                                                                 | 全部 session 汇总计数（0-3+N 封顶）                                                                                                                                                                                                                                                   |
+| 渲染                                      | `panelTab.iconPath`（SVG）                                                                                                                                                                                                                                                 | 单 SBI `text`（4 段 `<球><数字>` 拼接，直接 mutate `.text`——无 `.color`/`.backgroundColor`）                                                                                                                                                                                          |
+| 中断闪烁                                  | 红色快闪（`flashSeq%2`）                                                                                                                                                                                                                                                   | 仅静态彩球+数字（不闪）                                                                                                                                                                                                                                                               |
+| 颜色保真                                  | SVG 嵌入 hex，跨平台稳定                                                                                                                                                                                                                                                   | emoji 球自带色，依赖 OS emoji 字体栈（v0.1.17 沿用 v0.1.16 的 emoji 路径）                                                                                                                                                                                                            |
+| permission 处理                           | `__ccsdPending` yield→CC 原生蓝点（per-panel-live）                                                                                                                                                                                                                        | 🔵 pending 灯（**v0.2.5：OR 两源**——`<sid>.json.pending` 异步写盘跨窗口覆盖 + `globalThis.__ccsdPendingSet` 由 Anchor B 从 `rename_tab.hasPendingPermissions` 同步刷新本窗口覆盖；底部聚合 `files[i].slice(0,-5)` 去掉 `.json` 后缀作 set key；decay `st!=="idle"` 在 OR 之后仍生效） |
+| 陈旧 running 治理（>30min since，v0.2.6） | **应用 SINCE_STALE_MS（15min since）decay**——tab 从 🟡 黄切 ⚪ idle 灰，向用户暴露"此会话已 15min 未真正 running"（v0.2.6 round-1 stuck-yellow 修复；用户实测反馈"黄卡 2h 但 CC 早已等输入"——原"保持黄提醒可能死了"的辩护理由对 2h+ 陈旧会话无操作价值，故废弃该有意分歧） | **应用 §7.2 启发式（30min since）**——不计 🟡，避免单个崩溃会话永久占黄 1（阈值比 per-tab 宽一倍：聚合层一瞥读、容忍更长窗口；per-tab 是用户直视的 UI、更激进阈值更早暴露漂移。两者计数因此仍可能差 1，但仅在 15-30min 窗口内）                                                        |
+| 陈旧 interrupted 治理（>24h since）       | **不应用**——tab 保持 🔴 红快闪提醒"此会话被中断过"                                                                                                                                                                                                                         | **应用 §7.2 规则 3**——不计 🔴，避免累积的 abandoned 中断会话让 🔴 单调增长（两者计数因此可能差 N）                                                                                                                                                                                    |
+| done>5min 归 idle                         | 应用（§4）                                                                                                                                                                                                                                                                 | 应用（§7.2，不计 🟢）                                                                                                                                                                                                                                                                 |
+| 刷新来源                                  | 每 panel 一个 per-tab `setInterval`（500ms）                                                                                                                                                                                                                               | 窗口级单例 `setInterval`（500ms）                                                                                                                                                                                                                                                     |
+| 失败隔离                                  | per-tab setInterval 的 `p.iconPath=` 单行 try/catch；onDidDispose 注册也在 try/catch 内                                                                                                                                                                                    | SBI 创建 + SBI timer 创建 + aggregation body + onDidDispose 各自独立 try/catch（§7.5）                                                                                                                                                                                                |
+| reload 韧性                               | 高（per-tab 渲染不依赖 window-scoped state）                                                                                                                                                                                                                               | **高（v0.1.14 改进，v0.1.17 沿用）**——SBI 直接 mutate text，无 setContext key 在 reload 后丢失的问题                                                                                                                                                                                  |
 
 **互补**：tab 点告诉你"是哪个会话在跑/停了"；SBI 4 灯告诉你"全局总共有几个在跑/停/等输入/中断了"，不用数 tab。
 
 ### 7.5 异常安全 + 已知限制（v0.1.11；v0.1.12 加固；v0.1.13 沿用；v0.1.14 重组；v0.1.15 4-SBI 适配；v0.1.16 emoji-ball 切换；v0.1.17 单 SBI 紧凑拼接）
 
 **异常安全（v0.1.17 当前层次）**：v0.1.12 给 SBI 创建 + SBI 单例 timer 创建各加一层独立 try/catch（v0.1.13 重组为 Cc 单例 timer，v0.1.14 重组回 SBI 创建 + SBI 单例 timer，v0.1.15 把单 SBI 创建改为 4-SBI 创建循环，v0.1.16 在此基础上移除了 `.color`/`.backgroundColor` 的赋值，v0.1.17 把 4-SBI 循环合并回单 SBI 创建——同时去掉了 v0.1.15 round-4 的 length-guarded 重建 + commit-atomic 提交 + partial-failure cleanup 三层保护，因为单 SBI 创建只有一次 `createStatusBarItem` 调用，不存在部分失败的中间状态——timer 创建 + aggregation body + onDidDispose 注册的 try/catch 模式完整沿用）。当前结构（自内向外）：
+
 1. **单 SBI 创建 try/catch**（v0.1.12 沿用，v0.1.15 适配为循环，v0.1.16 简化为只设 text/tooltip/command/show，v0.1.17 合并回单 SBI 单次 create）：吞单次 `createStatusBarItem` / `.command=` / `.show()` 的抛出（disposed host、API 暂态失败），让 IIFE 继续走到 per-tab tick + onDidDispose 注册。
 2. **SBI 单例 timer 创建 try/catch**（v0.1.12 沿用）：吞掉 `setInterval` 注册的抛出，让 IIFE 继续走到 per-tab tick + onDidDispose 注册。
 3. **Aggregation body try/catch**（v0.1.11）：包住 readdirSync/statSync/JSON.parse/单 SBI text mutate 等所有 filesystem + JSON + SBI-mutate 操作。
@@ -251,14 +264,162 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
   - 维护契约：`SBI_DIM_EM` 改动时需同步 patch.ts JSDoc（SBI_LIGHTS_CFG + SBI_DIM_EM）+ buildIIFE 注释 + test-iife.mjs 镜像常量 + 本节 §7.1/§7.5。
 - **SBI 位置受状态栏拥挤度影响（v0.1.17 改善：碰撞窗口从 4 单位缩到 1 单位）**：单 SBI priority `-9996`（v0.1.17 从 v0.1.16 的 `-9996..-9999` 4 单位区间缩到 1 单位点）让 SBI 在 Left 项里最靠右、最接近可见中心，但 VSCode StatusBarItem API 无真正的"居中"槽位——若用户装了大量其它 Left 项 SBI，或其它扩展声明了恰好 `-9996` 的 priority（无所有权/命名空间机制），SBI 可能被高优 Left 项**挤到角落**。**v0.1.17 的单 SBI 架构消除了 v0.1.16 的"行被外部分隔"失败模式**（v0.1.16 的 4 个独立 SBI 可能被其它扩展的 SBI 插入 done 与 interrupted 之间劈开成两半；v0.1.17 整行是一个 SBI，外部插入只能插到整行两侧，不会把 4 灯拆开）。VSCode StatusBarItem.priority 无所有权/命名空间，碰撞完全静默，`--status` 也不检测——若见到被高优项挤到角落的情况，请在 issue 里上报。这是 API 限制，无法绕开。
 - **click command 需 IIFE 注册**：reload 后若用户未打开 CC panel，`ccStatusDot.sbiClick` 未注册，此时点 SBI 不响应（VSCode 静默 no-op）。但 SBI 本身也未创建（IIFE 仅由 panel 打开触发），所以一致性 OK。
-- **30-min 陈旧 running 启发式对单工具 >30min 假阳性（v0.1.14 R3 文档加固）**：`PreToolUse`/`PostToolUse` 只在工具调用前后各触发一次——单个工具执行期间 writer 没有 heartbeat，状态文件 mtime 停在 PreToolUse 时刻。任何执行超过 30 分钟的单一工具（长 Bash 命令、慢 MCP 工具、长视频渲染、大测试套件、用户故意写的 `sleep 1800`）期间，聚合层会把该会话从 🟡 running 误判为 idle 并降级，黄色灯熄灭，即便 CC 仍在真实工作。这是 **聚合层** 的偏差——per-tab 仍保持 🟡 黄（§7.4 表"陈旧 running 治理"行的有意分歧恰好兜底：用户看到 tab 黄就知道该会话还活着，只是 SBI 不计它）。缓解措施：(a) 30min 阈值覆盖了绝大多数真实工具调用；(b) 下一次 PreToolUse/PostToolUse（多步工具链的下一步）会刷新 mtime 并让聚合重新计入；(c) 阈值若上调（如 60min）可在 `SBI_RUNNING_STALE_MS` 一处改 + 同步本文档 §7.2 即可。未来若引入工具执行中 heartbeat 可根治。这是 v0.1.10 引入该启发式时遗漏的已知反例，并非新缺陷。
-- **崩溃/被杀 CC 会话的残留状态文件治理（v0.1.13 review 加固，v0.1.14 沿用）**：`SessionEnd` 删除文件是 writer 契约（§2），但 CC 崩溃 / 被强杀 / hook pipe 断裂不发 `SessionEnd` 的 session，其 `<sid>.json` 会残留。v0.1.13 review 前只治理 🟡 running（§7.2 的 30-min mtime 启发式）和 🟢 done（§4 的 5-min 规则），🔵 pending 与 🔴 interrupted 都有缺口；review 后补齐为完整四态 GC（聚合层，不动 per-tab 渲染）：
-  - 🟡 running：30-min mtime 启发式（§7.2 规则 2）→ idle，不计黄。**仅聚合**——per-tab 保持 🟡 黄提醒"此会话可能已死"（见 §7.4 表"陈旧 running 治理"行的有意分歧）。
+- **30-min 陈旧 running 启发式对单工具 >30min 假阳性（v0.1.14 R3 文档加固；v0.2.6 decay key 由 mtime 改为 since）**：`PreToolUse`/`PostToolUse` 只在工具调用前后各触发一次——单个工具执行期间 writer 没有 heartbeat，状态文件 `since`（v0.2.6 前：mtime）停在 PreToolUse 时刻。任何执行超过 30 分钟的单一工具（长 Bash 命令、慢 MCP 工具、长视频渲染、大测试套件、用户故意写的 `sleep 1800`）期间，聚合层会把该会话从 🟡 running 误判为 idle 并降级，黄色灯熄灭，即便 CC 仍在真实工作。**v0.2.6 之前 per-tab 仍保持 🟡 黄作为兜底**（§7.4 表"陈旧 running 治理"行的有意分歧）；**v0.2.6 起 per-tab 也应用同款 decay（15min SINCE_STALE_MS）**——故此假阳性现在同时影响聚合与 per-tab：长工具执行 >15min 会让 tab 也转 ⚪ idle 灰。缓解措施：(a) 15min/30min 阈值覆盖了绝大多数真实工具调用；(b) 下一次 PreToolUse/PostToolUse（多步工具链的下一步）会刷新 `since`（不是 mtime——PreToolUse 也走 *→running 转移路径写 since=now）并让聚合 + per-tab 都重新计入；(c) 阈值若上调（如聚合 60min、per-tab 30min）可在 `SBI_RUNNING_STALE_MS` / `SINCE_STALE_MS` 各一处改 + 同步本文档 §7.2 / §7.4 即可。未来若引入工具执行中 heartbeat 可根治。**为何 mtime→since**：mtime 被 cc-status.js:390-401 Stop preserveSince 路径污染（inflight>0 时 cur.since 保留、mtime 每次 Stop heartbeat 都刷新），CC 对漂移 inflight workflow 重复 fire Stop → mtime 永远新、mtime-decay 永不触发（用户实测 stuck-yellow 2h 的根因）；`since` 在同路径下被保留不刷新，decay 正常工作。这是 v0.1.10 引入该启发式时遗漏的 mtime-decay 缺陷，v0.2.6 修正。
+- **崩溃/被杀 CC 会话的残留状态文件治理（v0.1.13 review 加固，v0.1.14 沿用；v0.2.6 decay key 改 since）**：`SessionEnd` 删除文件是 writer 契约（§2），但 CC 崩溃 / 被强杀 / hook pipe 断裂不发 `SessionEnd` 的 session，其 `<sid>.json` 会残留。v0.1.13 review 前只治理 🟡 running（§7.2 的 30-min mtime 启发式）和 🟢 done（§4 的 5-min 规则），🔵 pending 与 🔴 interrupted 都有缺口；review 后补齐为完整四态 GC（聚合层；v0.2.6 起 per-tab 也应用 running decay，见下文每条注解）：
+  - 🟡 running：30-min since 启发式（§7.2 规则 2；v0.2.6：原 mtime-key 改为 since-key——Stop preserveSince 路径刷 mtime 不刷 since，导致 stuck-yellow bug）→ idle，不计黄。**v0.2.6 起 per-tab 也应用 decay（15min SINCE_STALE_MS）**——原"per-tab 保持黄提醒可能死了"的有意分歧废弃（见 §7.4 表"陈旧 running 治理"行）；阈值比聚合层激进（15 vs 30min）因 per-tab 是用户直视 UI，更早暴露漂移更有操作价值。
   - 🟢 done：5-min since 规则（§4 / §7.2 规则 1）→ idle，不计绿。**聚合 + per-tab 都应用**（一致）。
-  - 🔵 pending（**v0.1.13 review 新增**）：`j.pending===true && st!=="idle"` → 复用上面 running/done decay 已算出的 `st`。一个在权限弹窗期间被强杀的会话（state=running、pending=true、mtime>30min）在 🟡 不计（规则 2 降级 idle）的同时，🔵 也不计（`st==="idle"` 跳过 pending）。死会话的 pending 标志对用户零价值（用户根本不知道它存在），无"需保持可见"的辩护理由——故与 🟡/🟢 同款治理。
-  - 🔴 interrupted（**v0.1.13 review 新增**）：mtime > `INTERRUPTED_RETENTION_MS`（24 小时）→ idle，不计红。文件**不删**（保留诊断价值，用户可手动检查 `~/.claude/cc-tab-status/<sid>.json` 或清理）。阈值 24h 是"今天的 🔴 保持可见"（原 v0.1.13 设计意图："中断态需保持可见以提醒用户"）与"长期 abandoned 中断会话不应让 🔴 单调增长"的折衷；比 SBI_RUNNING_STALE_MS(30min) 大得多，因为 interrupted 是终态、用户可能想事后检查，而 running 是 live heartbeat、staleness 信号明确。**仅聚合**——per-tab 保持 🔴 红快闪提醒（见 §7.4 表"陈旧 interrupted 治理"行的有意分歧，与 🟡 running 同款）。
-  - **per-tab vs 聚合的有意分歧仍存两项**（🟡 running 与 🔴 interrupted，见 §7.4 表对应两行）：tab 保持黄/红提醒、聚合不计——用户看到该状态的 tab 可手动检查并关闭。聚合层 GC 的正当性恰建立在 per-tab **有**独立呈现这一事实上：用户可以肉眼看到哪个 tab 是黄/红并自行处理，聚合灯只需反映"还有多少 live session 处于该态"，故把崩溃/陈旧的会话从聚合计数剔除不引入可见不一致。🔵 pending 是第三种态但**无此分歧**——pending 的 decay 复用 running/done 的 `st`（`j.pending===true && st!=="idle"`），与 per-tab 的 `__ccsdPending` yield→CC 原生蓝点同步降级。
+  - 🔵 pending（**v0.1.13 review 新增**）：`j.pending===true && st!=="idle"` → 复用上面 running/done decay 已算出的 `st`。一个在权限弹窗期间被强杀的会话（state=running、pending=true、since>30min）在 🟡 不计（规则 2 降级 idle）的同时，🔵 也不计（`st==="idle"` 跳过 pending）。死会话的 pending 标志对用户零价值（用户根本不知道它存在），无"需保持可见"的辩护理由——故与 🟡/🟢 同款治理。
+  - 🔴 interrupted（**v0.1.13 review 新增；v0.2.4 round-2 decay key 改 since**）：`since` > `INTERRUPTED_RETENTION_MS`（24 小时）→ idle，不计红。文件**不删**（保留诊断价值，用户可手动检查 `~/.claude/cc-tab-status/<sid>.json` 或清理）。阈值 24h 是"今天的 🔴 保持可见"（原 v0.1.13 设计意图："中断态需保持可见以提醒用户"）与"长期 abandoned 中断会话不应让 🔴 单调增长"的折衷；比 SBI_RUNNING_STALE_MS(30min) 大得多，因为 interrupted 是终态、用户可能想事后检查，而 running 是 live heartbeat、staleness 信号明确。decay key 用 since（非 mtime）因 orphan SubagentStop/Notification 写刷新 mtime 但保留 since，mtime-decay 在 orphan 写下永不触发。**仅聚合**——per-tab 保持 🔴 红快闪提醒（见 §7.4 表"陈旧 interrupted 治理"行的有意分歧）。
+  - **per-tab vs 聚合的有意分歧 v0.2.6 起仅剩一项**（🔴 interrupted；见 §7.4 表对应行）：tab 保持红提醒、聚合不计——用户看到该状态的 tab 可手动检查并关闭。聚合层 GC 的正当性恰建立在 per-tab **有**独立呈现这一事实上：用户可以肉眼看到哪个 tab 是红并自行处理，聚合灯只需反映"还有多少 live session 处于该态"，故把崩溃/陈旧的会话从聚合计数剔除不引入可见不一致。🟡 running 的分歧已废弃（v0.2.6 per-tab 也 decay）；🔵 pending 是第三种态但**无此分歧**——pending 的 decay 复用 running/done 的 `st`（`j.pending===true && st!=="idle"`），与 per-tab 的 `__ccsdPending` yield→CC 原生蓝点同步降级。
   - 如需手动清理可删 `~/.claude/cc-tab-status/<sid>.json`，或下次 `Stop`/`SessionEnd` 触发 writer 重写/删除该文件。
 - **聚合 vs per-tab 的 permission 一致性（v0.1.13 改进，v0.1.14 沿用）**：v0.1.10-v0.1.12 时聚合对 permission-pending 期间计为 🟡 running（无窗口级通道读 pending），per-tab 显示 CC 原生蓝点——同一会话两处 UI 不同色，是有意分歧。**v0.1.13 通过 writer 新增 `Notification` 写 `pending:true` 解决**（v0.1.14 沿用）：聚合现在独立计 🔵 pending 灯，与 per-tab CC 原生蓝点**语义一致**（都表示"该会话在等用户输入"），只是颜色载体不同（emoji vs CC 原生 SVG）。
 - **聚合刷新定时器的"第一 panel 闭包"绑定**：单例定时器由第一个 CC panel 的 IIFE 创建，闭包捕获该 panel 的 `DIR`/`fs`/`vs` 等局部（这些值在所有 panel 间是确定的、无 panel-specific 状态，故无泄漏问题）。最后 panel 关闭时 `clearInterval` 释放定时器 + `dispose()` 释放 SBI；新 panel 打开时由其 IIFE 重建，首 tick 即推真实计数。
 - **SBI 点击反馈轻量**：点 SBI 只弹一句 `InformationMessage`（当前 tooltip = 4 灯计数明细），不打开 modal、不切 tab、不跳 CC——和"统计指示器"的角色一致。如需操作，用户回到对应 CC tab 处理。
+
+---
+
+## 8. Token 统计 SBI（v0.2.4 右下角 token/cost 显示）
+
+> v0.2.4 在 §7 的 4 灯聚合 SBI（左下角）之外，新增了第二个 SBI 显示当前激活 CC panel 的 token 用量与 USD 估算，位于右下角 `StatusBarAlignment.Right` 优先级 `-9995`。两者完全独立（独立 SBI 实例、独立 text/tooltip、独立 click 命令），共享同一个 500ms tick（`__ccsdSbiTimer`）不新增 setInterval。
+
+### 8.1 数据源与状态文件 schema 扩展
+
+**唯一 token 权威源**：`~/.claude/projects/<escaped-cwd>/<sid>.jsonl`，每条 assistant 行的 `message.usage` 100% 携带 `input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens`（标量，GLM 等第三方模型）+ 可选 `cache_creation.{ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`（对象，Anthropic 原生）。top-level `usage` 在 15082 文件采样中 0 次出现 → **必须读 `message.usage`**。
+
+**派生缓存**（`~/.claude/cc-tab-status/<sid>.offset`，writer 维护）：
+
+```jsonc
+{
+  "offset": 12345678,        // 字节偏移
+  "lastTs": 1721410203000,   // 最后处理的 timestamp（毫秒，去重 key）
+  "lastSize": 12345678,      // 上次 stat.size（bug #9188 检测）
+  "totals": { "in":.., "out":.., "cr":.., "cc5":.., "cc1":.., "cci":.. },  // 全量累计
+  "buckets": [ { "ts":.., "in":.., "out":.., "cr":.., "cc5":.., "cc1":.., "cci":.., "model":".." }, ... ],  // 时间序列（≤1000，超则 5min 折叠）
+  "perTurn": [ { "ts":.., "model":.., "in":.., "out":.., "cr":.., "cc5":.., "cc1":.., "cci":.., "src":"main|sub:<8hex>" }, ... ]  // ≤400（FIFO）
+}
+```
+
+**主状态文件 `<sid>.json` 扩展（向后兼容，老 reader 忽略新字段）**：
+
+```jsonc
+{
+  // 现有字段（不变）
+  "state": "running", "since": .., "error": null,
+  "activeSubagents": 0, "pending": null,
+  // v0.2.4 新增
+  "cwd": "/path/to/project",  // payload.cwd 透传
+  "tokens": {
+    "total": { "in":.., "out":.., "cr":.., "cc5":.., "cc1":.., "cci":.. },
+    "windows": {
+      "5min": {..}, "10min": {..}, "1h": {..}, "24h": {..}, "3d": {..},
+      "7d": {..}, "30d": {..}, "all": {..}
+    },
+    "cost": null,             // USD 或 null（未知 model 隐藏 $）
+    "cost_5min": .., "cost_10min": .., "cost_1h": .., "cost_24h": .., "cost_3d": .., "cost_7d": .., "cost_30d": .., "cost_all": ..,
+    "last_ts": ..,            // 最近一条 assistant 行的 timestamp
+    "last_model": "glm-5.2",  // 最近一条 assistant 行的 model
+    "turn_count": ..          // perTurn 长度（≤400）
+  }
+}
+```
+
+### 8.2 Writer 触发与增量读
+
+writer (`hooks/cc-status.js`) 在以下 5 个事件触发 token 增量读：
+
+| 事件               | 来源标签     | 用途                                                                                                          |
+| ------------------ | ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `PostToolUse`      | `main`       | 主 heartbeat——每个工具调用后 CC 落盘 assistant 行                                                             |
+| `PreToolUse`       | `main`       | 副 heartbeat——工具调用前补充捕获                                                                              |
+| `Stop`             | `main`       | 终态校准（注意 R2：可能漏最后一行，UserPromptSubmit 兜底）                                                    |
+| `UserPromptSubmit` | `main`       | R2 兜底——捕获上一轮 Stop 漏掉的尾巴 + 新轮预热                                                                |
+| `SubagentStop`     | `sub:<8hex>` | 用 `payload.agent_transcript_path` 读子代理 transcript，归并到父 sid 的 buckets（用户为 subagent token 付费） |
+
+`Notification` / `SessionStart` / `SessionEnd` / `SubagentStart` / `StopFailure` 不触发增量读（无新 assistant flush）；非 token 事件保留 `cur.tokens` 字段（"carry-forward"）让 IIFE 显示不闪烁。
+
+**首火预热**：若 offset=0 且 stat.size > 256KB，只读尾部 256KB（避免 33MB 大文件首次 fire 阻塞）。代价：历史 totals 不全；优点：用户 < 100ms 见到反馈。后续增量读逐步补齐。
+
+**Bug #41310**（早火 transcript 不存在）→ `fs.statSync` 失败 → return null 静默跳过。
+**Bug #9188**（`claude --continue` 陈旧 sid+path）→ 若 `mtimeMs < lastTs - 60s` 且 size 无增长 → 跳过本轮不归零。
+**Size shrank**（CC compacted）→ 重置 offset=0 全量重读。
+**cache_creation 双形式兼容**：`u.cache_creation?.ephemeral_5m_input_tokens || 0` + `u.cache_creation?.ephemeral_1h_input_tokens || 0` + `u.cache_creation_input_tokens || 0`。
+**sidechain 跳过**：父 transcript 中的 sidechain 行（实测 15082 文件 0 次出现，但代码防御性跳过）；子代理 token 通过 `SubagentStop + agent_transcript_path` 单独归并。
+**synthetic 过滤**：`<synthetic>` model 行（CC 内部合成）不计费。
+
+### 8.3 Cost 估算（`token-rates.json` 热更）
+
+`~/.claude/cc-status-dot/token-rates.json`：
+
+```jsonc
+{
+  "_default": null, // 未知 model → cost=null → SBI 隐藏 $
+  "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
+  "claude-opus-*": { "in": 5, "out": 25, "cacheRead": 0.5, "cacheCreate5m": 6.25, "cacheCreate1h": 10 },
+  "claude-haiku-*": { "in": 1, "out": 5, "cacheRead": 0.1, "cacheCreate5m": 1.25, "cacheCreate1h": 2 },
+  // cacheRead/cacheCreate5m/cacheCreate1h 可省——writer 按 Anthropic 官方比例自动派生（0.1x / 1.25x / 2x input）
+}
+```
+
+**用户机器（glm-5.2）**：无匹配条目 → `_default: null` → `cost=null` → SBI 显示 `$(clock) X tok`（无 $）。用户可在 settings.json 加 `"ccStatusDot.pricing": { "glm-*": { "in": 0.5, "out": 1.5 } }` 或直接编辑 `token-rates.json`（热更，无需重 patch；writer 按 mtime 缓存重读）。
+
+writer 按 mtime cache `loadRates()`，每 fire 重读一次（mtime 不变则用缓存）。
+
+### 8.4 SBI 渲染
+
+**位置**：`StatusBarAlignment.Right`，优先级 `-9995`（右下角最靠右，紧邻可见中心）。与 §7 的 4 灯 SBI（Left -9996）分占状态栏两侧——"左 = 会话，右 = 成本"。
+
+**文本格式**（依赖 `ccStatusDot.tokenDisplayMode`，默认 `both`）：
+
+- `token`：`$(clock) 12.3k tok`
+- `cost`：`$(pulse) $0.42`（cost=null 时回退 `$(clock) —`）
+- `both`：`$(clock) 12.3k tok · $0.42`（cost=null 时省略 $ 段）
+
+**无激活 panel**：`$(clock) —` + tooltip "no active CC panel"。
+
+**Tooltip**（多行）：Window / Session total / Session cost / 24h / 7-day / 30-day / Last model / Project / Turn running (when state=running) / `(click to configure)`。
+
+**QuickPick 配置面板**（点击 SBI 触发，跟随 VSCode 界面语言 zh/en/ja/de/es/fr/pt/ru，未知语言 fallback en）：
+
+- Statistics window 选择（5min/10min/1h/24h/3d/7d/30d/all）
+- Display 模式（token/cost/both）
+- Token SBI visible 开关
+- Notify on completion / Notify when focused 开关
+- Sound 选择（15 种 macOS 系统音）
+- 当次会话统计（Session total / 24h / 7-day / 30-day / Turn running）
+- 快速命令（Copy token count / Reset session stats / Open state dir / Open Settings）
+
+> i18n 机制：IIFE 顶部检测 `vs.env.language`，取 BCP-47 主子标签（zh-cn→zh、pt-br→pt、en-us→en），通过 `t(key)` helper 查 `I18N` 字典（8 语言齐全，断言于 test-iife.mjs IIFE.68-78）；未知语言走 `e[LANG]||e.en||k` fallback 链。配置值（5min/all/token/cost/both/声音名）与 SBI text 符号（`$(clock)`/emoji/tok/$）跨语言统一不译。
+
+### 8.5 限额告警
+
+`ccStatusDot.warnThresholdUsd`（默认 0=禁用）→ 当 session cost 估算跨过阈值时触发一次通知（`notify("warn", "CC cost alert: ~$X.XX")`）。每跨一次只通知一次（`globalThis.__ccsdLastWarnTs` 去重），cost 跌破后再次跨越会重新触发。
+
+### 8.6 Active sid 跟踪
+
+IIFE 维护 `globalThis.__ccsdActiveSid`（窗口级"当前激活 CC panel 的 sid"）：
+
+1. ANCHOR_A `update_session_state` handler 每次 fire 都更新（CC 切 panel 会触发）。
+2. 每 panel 的 per-panel tick 在 `panelTab.active===true`（或 active 字段 undefined 时无条件）时更新。
+
+token SBI tick（共享 `__ccsdSbiTimer`）每 500ms 读 `globalThis.__ccsdActiveSid` 对应的 `<sid>.json`。
+
+### 8.7 持久化与 GC
+
+- `<sid>.offset` 与 `<sid>.json` 同生命周期：`SessionEnd` 同步 unlink（writer DELETE 分支）。
+- writer GC（UserPromptSubmit，10min throttle）扫 `.offset` 文件：mtime > 24h 且对应 `.json` 已被 prune 或也是 stale（且非 interrupted-preserve）则一并 unlink。
+- 用户删 `<sid>.offset` → 下次 hook fire 全量重读 jsonl（首火延迟 ~100ms 可接受）。
+- 用户删 `<sid>.json` → IIFE 显示 `$(clock) —`，writer 下次 fire 重建。
+
+### 8.8 与 §7 4 灯 SBI 的共存（零冲突核对）
+
+| 维度       | §7 4 灯 SBI                                   | §8 token SBI                                |
+| ---------- | --------------------------------------------- | ------------------------------------------- |
+| 位置       | Left -9996                                    | Right -9995                                 |
+| SBI 实例   | `globalThis.__ccsdSbi`                        | `globalThis.__ccsdTokSbi`                   |
+| Click 命令 | `ccStatusDot.sbiClick`                        | `ccStatusDot.tokClick`                      |
+| Tick       | 共享 `__ccsdSbiTimer`（500ms）                | 同上（不新增 setInterval）                  |
+| Tooltip    | 4 灯计数明细                                  | token + cost + 历史 $                       |
+| Dispose    | last-panel-out dispose                        | last-panel-out dispose（同一 onDidDispose） |
+| 失败隔离   | 独立 try/catch（创建/tick/teardown 各自包裹） | 独立 try/catch（同款分层）                  |
+
+两者完全独立，token SBI 失败不会影响 4 灯 SBI；反之亦然。

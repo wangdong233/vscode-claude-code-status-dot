@@ -9,7 +9,7 @@
 
 **See every Claude Code session's status at a glance — without cycling through tabs.**
 
-🟡 running · 🟢 done · 🔵 permission · 🔴 interrupted flashes · ⚪ idle — plus a one-glance bottom bar, system notifications, and self-healing after Claude Code updates.
+🟡 running · 🟢 done · 🔵 awaiting your input (CC permission prompt, or CC's reply says "let me know / your call") · 🔴 interrupted flashes — **tab five-state dots + bottom 4-light aggregate (🟢🟡🔵🔴, no gray — idle isn't counted at the bottom) + completion/interruption notifications + self-healing after CC updates + real-time token refresh / $ cost estimate on the right side (workflow subagent tokens included) + QuickPick config panel that follows VSCode's UI language (zh/en/ja/de/es/fr/pt/ru)**
 
 [简体中文](README.md) | **English** | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
@@ -75,7 +75,7 @@ The bottom of the window carries a single block with four lights, each followed 
 
 **🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted**
 
-Three sessions working and two waiting on you? The bar reads `🟡3 🔵2` and you instantly know two sessions need your input. The four slots are fixed in place — counts changing never shifts the layout.
+Three sessions working and two waiting on you? The bar reads `🟡3 🔵2` and you instantly know two sessions need your input. The four slots are fixed in place — counts changing never shifts the layout. Idle (gray) is intentionally not counted in the bottom aggregate — idle means no active session, so there is nothing to aggregate.
 
 ### 3. Notifications when a turn ends
 
@@ -88,9 +88,39 @@ You can mute while focused, go silent, or change the sound — see [Configuratio
 
 ### 4. Pending state for "your move" moments
 
-The blue 🔵 light catches anything where Claude Code is waiting on you — a permission request, a question, or an input elicitation. The moment it happens, the bottom bar's blue count ticks up, so nothing stalls silently.
+The bottom bar's 🔵 light ticks up and the tab turns blue the moment Claude Code is waiting on you — **two triggers**:
 
-When CC pops its native authorization prompt, the reader **gracefully yields** the icon so CC's own blue dot shows — we never override it.
+**(a) CC pops an authorization dialog** (permission / question / elicit) — the reader **gracefully yields** the tab icon so CC's own native blue dot shows (we never override it), and the bottom status bar independently counts it as pending. One glance tells you how many sessions are stalled waiting on you.
+
+**(b) CC's final reply clearly awaits your decision / feedback** — e.g. CC finishes with `waiting for your test feedback`, `you decide whether to continue`, `let me know`, `your call`, `please confirm`, `Should I proceed?` — the tab automatically turns blue (overriding the running-yellow / done-green). **You don't have to stare at the tab guessing "is it actually done, or is it waiting on me to say something?"** — this is the single most-requested pain point (CC falsely reporting "done" when it's really waiting on input); now the tab just tells you.
+
+**How we tell neutral completion apart from "awaiting your reply"**:
+
+- Neutral completion (`Done.`, `Shipped.`, `All tests pass.`) → tab stays 🟢 green
+- Awaiting your decision / feedback (EN idioms `let me know` / `your call` / `please confirm` / `what do you think` / `over to you`, ZH idioms `等你` / `你决定` / `请确认` / `告诉我` / `听你的`, or a short standalone closing question like `Should I proceed?` / `需要继续吗?`) → tab turns 🔵 blue
+
+**Won't false-trigger**: code-block identifiers like `letMeKnow()` are stripped before matching; rhetorical / informational questions (`Why?`, `什么意思?`, `效果如何?`) don't trigger either — so CC talking to itself never goes falsely blue.
+
+### 4.5. 🪙 Right-side token / $ cost
+
+A second status bar item on the **right side** of the status bar shows the token usage and (optional) USD cost estimate for the currently active CC panel:
+
+```
+$(clock) 12.3k tok · $0.42
+```
+
+- **Token grows in real time while CC is streaming** — it doesn't wait for the reply to finish; every tick reads the transcript tail for the delta. Tooltip stays static (no flicker, already optimized). On perf-sensitive machines you can disable `tokenLiveDeltaEnabled`.
+- **Default window is `all` (cumulative, never resets)** — pick from 5min / 10min / 1h / 24h / 3d / 7d / 30d / all. `all` is whole-session cumulative (monotonically grows at the session level, like a ledger that only goes up); `5min..30d` are rolling windows (old turns slide out when they expire, which can look like the count "resetting" — useful for "how much have I spent in the last X").
+- **Workflow subagent tokens are included** — tokens burned by background subagents / teammates are merged into the parent session's stats (what you paid for them won't be "invisible").
+- USD estimate runs off the `token-rates.json` hot-reload pricing table (Anthropic official prices preset; unknown models like GLM auto-hide the `$` and show tokens only).
+- Tooltip shows the current session's total / 24h / 7d / 30d cumulative `$` + model + project + how long this turn has been running.
+- Click the SBI for a QuickPick config panel: window switch / display mode (token / cost / both) / notify toggle / sound pick / copy token count / reset stats / open state dir / open settings.
+- **The QuickPick config panel + tooltip follow VSCode's UI language** (zh/en/ja/de/es/fr/pt/ru, unknown falls back to en) — VSCode in Chinese → panel in Chinese. Config values (5min / all / token / cost / both / sound names) are language-neutral and never translated.
+- Threshold alert: `ccStatusDot.warnThresholdUsd` fires a notification when crossed (disabled by default).
+
+**Data source**: CC's transcript jsonl is the single authoritative source (each `assistant` row's `message.usage` carries 100% of input/output/cache_read/cache_creation). The writer hook reads it incrementally via a byte-offset sidecar (a 33MB file still costs < 100ms). CC `/resume` reuses the same sid → stats carry over naturally; a fresh session starts from 0.
+
+See [USAGE.md §3.6](docs/USAGE.md) and [STATES.md §8](docs/STATES.md) for details.
 
 ### 5. Self-healing after Claude Code updates
 
@@ -100,7 +130,11 @@ Claude Code auto-updates, and each update used to wipe this patch. **Since v0.2.
 
 The runtime lives in `~/.claude/cc-status-dot/` — outside CC's extension directory. Deleting this project, purging the npx cache, or a CC auto-update won't break the dots.
 
-### 7. Safe and fully reversible
+### 7. No false green while a workflow is running
+
+While a subagent / background task is in flight, the main session's tab **stays yellow** (no false "done") — the `Stop` hook only trusts the `background_tasks` count in the payload, never drifts. It only turns green when the work is actually finished.
+
+### 8. Safe and fully reversible
 
 Every patch is preceded by a syntax check (we never ship a broken `extension.js`), written atomically, and tagged with `INJECT_VERSION` so stale injections get refreshed automatically. One command — `--revert` — fully restores the original.
 
@@ -113,10 +147,10 @@ Every patch is preceded by a syntax check (we never ship a broken `extension.js`
 | Color | Meaning | Trigger |
 |---|---|---|
 | 🟡 Yellow `#CCA700` (**static**, no animation) | Running | Prompt submitted, around tool calls (heartbeat), subagent spawn |
-| 🟢 Green `#3FB950` (static) | Turn done | CC fires `Stop` (**turns gray after 5 min**) |
+| 🟢 Green `#3FB950` (static) | Turn done (not awaiting user) | CC fires `Stop` and the final reply is a neutral completion (`Done.` / `Shipped.`); **auto-turns gray after 5 min** |
 | 🔴 Red `#F85149` (fast flash) | Interrupted / errored | CC fires `StopFailure` (rate limit, overload, etc.) |
 | ⚪ Gray `#808080` (static) | Idle | Initial / done > 5 min ago / no state file |
-| 🔵 Blue | Awaiting your input | **Tab:** CC's native blue dot on permission yield (reader steps aside, never overrides). **Bottom bar:** 🔵 pending light counts permission / question / elicit events from the Notification hook |
+| 🔵 Blue `#58A6FF` (static) | Awaiting your input (two triggers) | (a) **CC pops an authorization dialog**: reader yields the icon to CC's native blue dot (**never overrides**); (b) **CC's final reply carries an "awaiting your decision" semantic** (`let me know` / `your call` / `please confirm` / `等你` / `你决定` etc.) → reader renders the blue `claude-logo-pending.svg` (overrides running-yellow / done-green). The bottom 🔵 light counts both triggers. |
 
 > Running is a static yellow dot (no animation); interrupted flashes red as an alert. Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](docs/STATES.md).
 
@@ -124,9 +158,21 @@ Every patch is preceded by a syntax check (we never ship a broken `extension.js`
 
 ## 🛠️ Capability details
 
+### 🟡 Five-state tab icon dots
+
+Each Claude Code session's tab icon is colored by its state, **shown in both the top tab bar and the top-left "Open Editors" view**. running / idle / done are static color dots, interrupted flashes red, and on permission the reader gracefully yields the icon to CC's native blue dot (**never overrides** it).
+
 ### 📊 Bottom status bar 4-light aggregate
 
-One `StatusBarItem` on the bottom status bar (left half, near the center) renders four emoji lights separated by small spaces: 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted. Each light is a `<ball><count>` pair; counts cap at `0/1/2/3/N` (`N` for 4+). When a count is `0`, both the ball (gray ⚪) and the digit go dim; when non-zero, the ball takes its color and the digit lights up. 🔵 = awaiting user input (permission / question / elicit, fed by the Notification hook). VSCode's status bar applies `tabular-nums`, so digits 0–9 are equal-width regardless of font — counts changing never shifts the layout.
+One `StatusBarItem` on the bottom status bar (left half, near the center) renders four emoji lights separated by small spaces: 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted. Each light is a `<ball><count>` pair; counts cap at `0/1/2/3/N` (`N` for 4+). When a count is `0`, both the ball (gray ⚪) and the digit go dim; when non-zero, the ball takes its color and the digit lights up.
+
+**The four slots are fixed in place — counts changing never shifts the layout.** VSCode's status bar CSS applies `font-variant-numeric: tabular-nums` to every item, so digits 0–9 are equal-width regardless of font.
+
+🔵 pending is an independent dimension (decoupled from state), and **both triggers count**: (a) CC pops a permission / question / elicit dialog (the `Notification` hook writes `pending:true`); (b) CC's final reply carries an "awaiting your decision" semantic (the `Stop` hook reads the last assistant message, matches keywords like `let me know` / `your call` / `等你`, and writes `pending:true`). **The bottom aggregate counts both sources** — CC's real-time pending flag (synced within this window) + the on-disk `<sid>.json.pending` (async across windows) — so the moment a permission dialog pops, the light goes on, with no undercounting. The tab icon (a) yields to CC's native blue dot (no override), and (b) renders the blue dot directly (overrides yellow / green).
+
+**3-stage GC** prevents count drift: done > 5 min → idle (green −1) / running unchanged > 30 min → idle (reclaims crashed sessions) / interrupted > 24 h → idle; pending GCs on the `st` field (a crashed pending goes idle, simultaneously decrementing both yellow and blue).
+
+The whole block is rendered via **one runtime StatusBarItem + concatenated text** (an IIFE directly mutates the SBI's text every 500ms) — no need to patch CC's `package.json`, no ThemeColor block needed.
 
 ### 🔔 Completion / interruption notifications
 
@@ -209,7 +255,14 @@ Add to VSCode's `settings.json` (skip to keep defaults):
 {
   "ccStatusDot.notify": true,
   "ccStatusDot.notifyWhenFocused": true,
-  "ccStatusDot.notifySound": "Glass"
+  "ccStatusDot.notifySound": "Glass",
+
+  "ccStatusDot.tokenStatsWindow": "all",
+  "ccStatusDot.tokenDisplayMode": "both",
+  "ccStatusDot.tokenSbiVisible": true,
+  "ccStatusDot.tokenLiveDeltaEnabled": true,
+  "ccStatusDot.showCost": true,
+  "ccStatusDot.warnThresholdUsd": 0
 }
 ```
 
@@ -218,6 +271,22 @@ Add to VSCode's `settings.json` (skip to keep defaults):
 | `ccStatusDot.notify` | `true` | Master notification switch |
 | `ccStatusDot.notifyWhenFocused` | `true` | Also fire the notification when VSCode is focused (notifications fire in both foreground and background by default; set `false` to mute while focused) |
 | `ccStatusDot.notifySound` | `"Glass"` | macOS notification sound (used for both done & interrupted; `""` for silent; options: Basso/Ping/Hero, etc.) |
+| `ccStatusDot.tokenStatsWindow` | `"all"` | Time window for the right-side token SBI. `all` = cumulative (whole session, never resets, default); `5min/10min/1h/24h/3d/7d/30d` = rolling windows (old turns slide out, which can look like the count "resetting"). |
+| `ccStatusDot.tokenDisplayMode` | `"both"` | token SBI display mode: `token` (tokens only) / `cost` ($ only) / `both` (both) |
+| `ccStatusDot.tokenSbiVisible` | `true` | Show / hide the token SBI |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | During streaming, the IIFE reads the transcript tail every tick so token counts update between hook fires; set `false` on perf-sensitive machines |
+| `ccStatusDot.showCost` | `true` | Show `$` (unknown models auto-hide; requires a matching entry in `token-rates.json`) |
+| `ccStatusDot.warnThresholdUsd` | `0` | Cross-threshold cost notification (0 = disabled; positive number = USD threshold, fires once per crossing) |
+
+> **Custom model pricing**: `~/.claude/cc-status-dot/token-rates.json` is a hot-reload pricing table — by default it covers Anthropic's official prices; unmatched models like GLM auto-hide the `$`. Add a glob to display `$` for them:
+
+```jsonc
+{
+  "_default": null,
+  "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
+  "glm-*":           { "in": 0.5, "out": 1.5 }
+}
+```
 
 ---
 

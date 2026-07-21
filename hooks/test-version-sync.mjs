@@ -250,6 +250,7 @@ if (cVer && pVer) {
     'ccStatusDot.tokenLiveDeltaEnabled',
     'ccStatusDot.warnThresholdUsd',
     'ccStatusDot.notifySound',
+    'ccStatusDot.rateDisplayMode',
   ];
   const missingFromSchema = iifeCfgKeys.filter((k) => !companionKeys.includes(k));
   check(

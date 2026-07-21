@@ -119,6 +119,7 @@ $(clock) 12.3k tok · $0.42
 - L'info-bulle affiche les `$` cumulés pour la session courante (total / 24h / 7j / 30j) + modèle + projet + depuis combien de temps ce tour tourne
 - Un clic sur le SBI ouvre le panneau QuickPick : changement de fenêtre / mode d'affichage (token / cost / both) / interrupteur notification / choix du son / copier le compte de tokens / réinitialiser les stats / ouvrir le répertoire d'état / ouvrir les paramètres
 - **Le panneau QuickPick + l'info-bulle suivent la langue de l'interface VSCode** (zh/en/ja/de/es/fr/pt/ru ; langue inconnue → repli en) — VSCode en français → panneau en français ; les valeurs de configuration (5min / all / token / cost / both / noms de son) restent identiques d'une langue à l'autre
+- **v0.3.0 nouveauté : débit tok/s + mini-graphique Unicode** —— à chaque tick de 500ms on échantillonne les tokens input+output (cache_read/cache_creation exclu exprès ; les pics de cache donneraient des lectures absurdes en millions de tok/s) ; les 8 derniers échantillons (4s) rendent en mini-graphique `▁▂▃▄▅▆▇█`, fenêtre glissante de 5s pour `tok/s`. `ccStatusDot.rateDisplayMode` (`off|numeric|sparkline|both`, par défaut `both`) contrôle le rendu ; bascule sur `numeric` ou `off` si la barre d'état est saturée
 - Alerte de seuil : `ccStatusDot.warnThresholdUsd` déclenche une notification au franchissement (désactivé par défaut)
 
 **Source de données** : le jsonl de transcription CC est la source autoritative unique (chaque ligne `assistant` porte `message.usage`), lu de façon incrémentale par le hook writer (byte-offset sidecar, un fichier de 33 Mo reste < 100 ms). CC `/resume` réutilise le même sid → les statistiques se prolongent naturellement ; une nouvelle session démarre à 0.
@@ -151,13 +152,13 @@ Avant d'écrire le `extension.js`, le patcher valide le fichier complet de 2,6 M
 
 ## 🎨 Couleurs d'état
 
-| Couleur | Signification | Déclencheur |
-|---|---|---|
-| 🟡 Jaune `#CCA700` (**statique**, pas d'animation) | En cours | Prompt envoyé, avant/après un appel d'outil (heartbeat), spawn de subagent |
-| 🟢 Vert `#3FB950` (statique) | Tour terminé (n'attend pas l'utilisateur) | CC déclenche `Stop` avec une dernière réponse neutre (`terminé`/`Done.`) ; **au-delà de 5 min → retour au gris** |
-| 🔴 Rouge `#F85149` (clignotement rapide) | Interruption / erreur | CC déclenche `StopFailure` (limite de débit, surcharge, etc.) |
-| ⚪ Gris `#808080` (statique) | Inactif | Initial / terminé depuis > 5 min / aucun fichier d'état |
-| 🔵 Bleu `#58A6FF` (statique) | En attente d'entrée utilisateur (deux types de déclencheurs) | (a) **CC affiche une boîte d'autorisation** : le reader cède l'icône au point bleu natif de CC (**sans le recouvrir**) ; (b) **la dernière réponse de CC contient une sémantique « attends ta décision »** (`attends toi`/`tu décides`/`confirme`/`let me know`/`your call` etc.) → le reader rend le bleu `claude-logo-pending.svg` (par-dessus running-jaune / done-vert). La boule 🔵 en bas compte les deux types |
+| Couleur                                            | Signification                                                | Déclencheur                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🟡 Jaune `#CCA700` (**statique**, pas d'animation) | En cours                                                     | Prompt envoyé, avant/après un appel d'outil (heartbeat), spawn de subagent                                                                                                                                                                                                                                                                                                                                            |
+| 🟢 Vert `#3FB950` (statique)                       | Tour terminé (n'attend pas l'utilisateur)                    | CC déclenche `Stop` avec une dernière réponse neutre (`terminé`/`Done.`) ; **au-delà de 5 min → retour au gris**                                                                                                                                                                                                                                                                                                      |
+| 🔴 Rouge `#F85149` (clignotement rapide)           | Interruption / erreur                                        | CC déclenche `StopFailure` (limite de débit, surcharge, etc.)                                                                                                                                                                                                                                                                                                                                                         |
+| ⚪ Gris `#808080` (statique)                       | Inactif                                                      | Initial / terminé depuis > 5 min / aucun fichier d'état                                                                                                                                                                                                                                                                                                                                                               |
+| 🔵 Bleu `#58A6FF` (statique)                       | En attente d'entrée utilisateur (deux types de déclencheurs) | (a) **CC affiche une boîte d'autorisation** : le reader cède l'icône au point bleu natif de CC (**sans le recouvrir**) ; (b) **la dernière réponse de CC contient une sémantique « attends ta décision »** (`attends toi`/`tu décides`/`confirme`/`let me know`/`your call` etc.) → le reader rend le bleu `claude-logo-pending.svg` (par-dessus running-jaune / done-vert). La boule 🔵 en bas compte les deux types |
 
 > running = point jaune statique (pas d'animation) ; interrupted = clignotement rapide d'alerte rouge. Le contrat d'état complet (événements / SVG / IPC / notifications) se trouve dans [`docs/STATES.md`](docs/STATES.md).
 
@@ -232,20 +233,22 @@ L'icône d'onglet d'un `WebviewPanel` VSCode (`iconPath`) est définie de façon
 <details>
 <summary>📖 Aperçu des commandes</summary>
 
-| Commande | Rôle |
-|---|---|
-| `npx vscode-claude-code-status-dot` | Installer (patch `extension.js` + câbler hooks + installer companion, idempotent ; nettoie automatiquement les résidus de l'ancienne version) |
-| `npx vscode-claude-code-status-dot --revert` | Restaurer (depuis `.bak` + retirer les hooks + supprimer INSTALL_DIR, conserve les données utilisateur) |
-| `npx vscode-claude-code-status-dot --status` | dry-run diagnostic, ne modifie aucun fichier |
+| Commande                                     | Rôle                                                                                                                                          |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npx vscode-claude-code-status-dot`          | Installer (patch `extension.js` + câbler hooks + installer companion, idempotent ; nettoie automatiquement les résidus de l'ancienne version) |
+| `npx vscode-claude-code-status-dot --revert` | Restaurer (depuis `.bak` + retirer les hooks + supprimer INSTALL_DIR, conserve les données utilisateur)                                       |
+| `npx vscode-claude-code-status-dot --status` | dry-run diagnostic, ne modifie aucun fichier                                                                                                  |
 
 En mode développement, remplacez la commande par `npx tsx patch.ts` (mêmes paramètres).
 
 Depuis la source (mode développement) :
+
 ```bash
 git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
 cd vscode-claude-code-status-dot
 npx tsx patch.ts
 ```
+
 Les deux méthodes sont équivalentes et idempotentes. L'IIFE et les hooks référencent le chemin absolu de `INSTALL_DIR` — **supprimer la source du projet / vider le cache npx n'affecte pas l'extension déjà patchée**.
 
 </details>
@@ -276,17 +279,17 @@ Les deux méthodes sont équivalentes et idempotentes. L'IIFE et les hooks réf�
 }
 ```
 
-| Clé | Défaut | Description |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | Interrupteur général des notifications |
-| `ccStatusDot.notifyWhenFocused` | `true` | Notifier aussi quand VSCode est au premier plan (notification système macOS / message VSCode sous Windows/Linux) ; `false` pour ne notifier qu'en arrière-plan |
-| `ccStatusDot.notifySound` | `"Glass"` | Son de notification système macOS (partagé entre done et interruption ; `""` pour muet ; Basso / Ping / Hero etc. possibles) |
-| `ccStatusDot.tokenStatsWindow` | `"all"` | Fenêtre temporelle du SBI de tokens à droite. `all` = cumulatif (toute la session, jamais remis à zéro, par défaut) ; `5min/10min/1h/24h/3d/7d/30d` = fenêtres glissantes (les anciens turns expirent et sortent de la fenêtre, ce qui peut donner l'impression d'un « reset ») |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | Mode d'affichage du SBI de tokens : `token` (tokens seulement) / `cost` ($ seulement) / `both` (les deux) |
-| `ccStatusDot.tokenSbiVisible` | `true` | Afficher / masquer le SBI de tokens |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | Pendant le streaming, l'IIFE lit la queue du transcript à chaque tick pour que les tokens se mettent à jour entre les déclenchements du hook ; mettre à `false` sur les machines sensibles aux performances |
-| `ccStatusDot.showCost` | `true` | Afficher `$` (les modèles inconnus sont masqués automatiquement ; nécessite une entrée correspondante dans `token-rates.json`) |
-| `ccStatusDot.warnThresholdUsd` | `0` | Notification de franchissement de seuil (0 = désactivé ; nombre positif = seuil USD, se déclenche une fois par franchissement) |
+| Clé                                 | Défaut    | Description                                                                                                                                                                                                                                                                     |
+| ----------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.notify`                | `true`    | Interrupteur général des notifications                                                                                                                                                                                                                                          |
+| `ccStatusDot.notifyWhenFocused`     | `true`    | Notifier aussi quand VSCode est au premier plan (notification système macOS / message VSCode sous Windows/Linux) ; `false` pour ne notifier qu'en arrière-plan                                                                                                                  |
+| `ccStatusDot.notifySound`           | `"Glass"` | Son de notification système macOS (partagé entre done et interruption ; `""` pour muet ; Basso / Ping / Hero etc. possibles)                                                                                                                                                    |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`   | Fenêtre temporelle du SBI de tokens à droite. `all` = cumulatif (toute la session, jamais remis à zéro, par défaut) ; `5min/10min/1h/24h/3d/7d/30d` = fenêtres glissantes (les anciens turns expirent et sortent de la fenêtre, ce qui peut donner l'impression d'un « reset ») |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`  | Mode d'affichage du SBI de tokens : `token` (tokens seulement) / `cost` ($ seulement) / `both` (les deux)                                                                                                                                                                       |
+| `ccStatusDot.tokenSbiVisible`       | `true`    | Afficher / masquer le SBI de tokens                                                                                                                                                                                                                                             |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`    | Pendant le streaming, l'IIFE lit la queue du transcript à chaque tick pour que les tokens se mettent à jour entre les déclenchements du hook ; mettre à `false` sur les machines sensibles aux performances                                                                     |
+| `ccStatusDot.showCost`              | `true`    | Afficher `$` (les modèles inconnus sont masqués automatiquement ; nécessite une entrée correspondante dans `token-rates.json`)                                                                                                                                                  |
+| `ccStatusDot.warnThresholdUsd`      | `0`       | Notification de franchissement de seuil (0 = désactivé ; nombre positif = seuil USD, se déclenche une fois par franchissement)                                                                                                                                                  |
 
 > **Tarification personnalisée par modèle** : `~/.claude/cc-status-dot/token-rates.json` est une table de prix à rechargement à chaud — par défaut elle couvre les prix officiels d'Anthropic ; les modèles non reconnus comme GLM masquent automatiquement le `$`. Ajoutez un glob pour afficher le `$` :
 
@@ -294,7 +297,7 @@ Les deux méthodes sont équivalentes et idempotentes. L'IIFE et les hooks réf�
 {
   "_default": null,
   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
-  "glm-*":           { "in": 0.5, "out": 1.5 }
+  "glm-*": { "in": 0.5, "out": 1.5 },
 }
 ```
 
@@ -316,6 +319,7 @@ C'est probablement que vous avez interrompu CC avec Esc (CC ne déclenche pas `S
 
 **`npx` ne se connecte pas ?**
 Solution de repli — installation globale :
+
 ```bash
 npm i -g vscode-claude-code-status-dot
 vscode-claude-code-status-dot        # lancez directement la commande après installation
@@ -353,9 +357,9 @@ Si vscode-claude-code-status-dot vous est utile, offrez un café à l'auteur ☕
 
 <div align="center">
 
-WeChat | Alipay
-:-: | :-:
-<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
+|                                WeChat                                |                                Alipay                                |
+| :------------------------------------------------------------------: | :------------------------------------------------------------------: |
+| <img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay"> |
 
 </div>
 

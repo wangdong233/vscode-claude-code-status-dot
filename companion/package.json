@@ -2,7 +2,7 @@
   "name": "cc-status-dot-companion",
   "displayName": "cc-status-dot Companion",
   "description": "Detects Claude Code extension auto-updates and silently re-applies the cc-status-dot patch. Ships inside the vscode-claude-code-status-dot npm package — install via: npx vscode-claude-code-status-dot",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,
@@ -96,6 +96,17 @@
           "type": "number",
           "default": 0,
           "description": "Notify when the session cost estimate crosses this USD threshold (0 = disabled). Fires once per crossing."
+        },
+        "ccStatusDot.rateDisplayMode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "numeric",
+            "sparkline",
+            "both"
+          ],
+          "default": "both",
+          "description": "How to render the live tok/s suffix on the token status bar item: 'off' hides it (for crowded bars / perf-sensitive machines), 'numeric' shows only '1.2k/s', 'sparkline' shows only '▂▄▆█', 'both' (default) shows both."
         }
       }
     }

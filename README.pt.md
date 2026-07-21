@@ -119,6 +119,7 @@ $(clock) 12.3k tok · $0.42
 - A tooltip mostra o total/24h/7 dias/30 dias + model + project + tempo decorrido da rodada atual
 - Clique no SBI abre o painel QuickPick: troca de janela / modo de exibição (token / cost / both) / toggle de notificação / escolha de som / copiar contagem / resetar stats / abrir diretório de estado / abrir configurações
 - **O painel QuickPick + a tooltip seguem o idioma da interface do VSCode** (zh/en/ja/de/es/fr/pt/ru; idiomas desconhecidos caem para en) — VSCode em português → painel em português; os valores de configuração (5min/all/token/cost/both/nomes de som) são neutros por idioma, nunca traduzidos
+- **v0.3.0 novo: taxa tok/s + mini-gráfico Unicode** —— a cada tick de 500ms amostra tokens input+output (exclui cache_read/cache_creation de propósito; senão spikes de cache davam leituras sem sentido de milhões de tok/s); últimos 8 samples (4s) viram mini-gráfico `▁▂▃▄▅▆▇█`, janela móvel de 5s para `tok/s`. `ccStatusDot.rateDisplayMode` (`off|numeric|sparkline|both`, padrão `both`) controla a renderização; troca para `numeric` ou `off` se a barra de status estiver lotada
 - Alerta de limite: `ccStatusDot.warnThresholdUsd` dispara uma notificação ao cruzar o limite (desativado por padrão)
 
 **Fonte dos dados**: o jsonl de transcrição do CC é a fonte autoritativa única (cada linha `assistant` em `message.usage`); o hook writer lê de forma incremental (byte-offset sidecar, mesmo um arquivo de 33MB fica < 100ms). CC `/resume` reutiliza o mesmo sid → a estatística continua naturalmente; sessão nova começa em 0.
@@ -151,13 +152,13 @@ Antes de escrever o `extension.js`, roda `node --check` no arquivo completo de 2
 
 ## 🎨 Cores de estado
 
-| Cor | Significado | Gatilho |
-|---|---|---|
-| 🟡 Amarelo `#CCA700` (**estático**, sem animação) | Em execução | Envio de prompt, antes/depois de chamada de ferramenta (heartbeat), spawn de subagent |
-| 🟢 Verde `#3FB950` (estático) | Rodada concluída (não espera usuário) | O CC dispara `Stop` e a última resposta é conclusão neutra (`concluído`/`Done.`); **após 5 minutos vira cinza automaticamente** |
-| 🔴 Vermelho `#F85149` (pisca rápido) | Interrompido / erro | O CC dispara `StopFailure` (rate limit, overload etc.) |
-| ⚪ Cinza `#808080` (estático) | Ocioso | Inicial / concluído há mais de 5 minutos / sem arquivo de estado |
-| 🔵 Azul `#58A6FF` (estático) | Aguardando entrada do usuário (dois gatilhos) | (a) **O CC abre a caixa de autorização**: o leitor cede o ícone ao ponto azul nativo do CC (**não sobrescreve**); (b) **A última resposta do CC contém semântica "aguardando sua decisão"** (`等你`/`你决定`/`请确认`/`let me know`/`your call` etc.) → o leitor renderiza o `claude-logo-pending.svg` azul (sobrescreve o amarelo-running / verde-done). A luz 🔵 inferior conta os dois casos |
+| Cor                                               | Significado                                   | Gatilho                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🟡 Amarelo `#CCA700` (**estático**, sem animação) | Em execução                                   | Envio de prompt, antes/depois de chamada de ferramenta (heartbeat), spawn de subagent                                                                                                                                                                                                                                                                                                           |
+| 🟢 Verde `#3FB950` (estático)                     | Rodada concluída (não espera usuário)         | O CC dispara `Stop` e a última resposta é conclusão neutra (`concluído`/`Done.`); **após 5 minutos vira cinza automaticamente**                                                                                                                                                                                                                                                                 |
+| 🔴 Vermelho `#F85149` (pisca rápido)              | Interrompido / erro                           | O CC dispara `StopFailure` (rate limit, overload etc.)                                                                                                                                                                                                                                                                                                                                          |
+| ⚪ Cinza `#808080` (estático)                     | Ocioso                                        | Inicial / concluído há mais de 5 minutos / sem arquivo de estado                                                                                                                                                                                                                                                                                                                                |
+| 🔵 Azul `#58A6FF` (estático)                      | Aguardando entrada do usuário (dois gatilhos) | (a) **O CC abre a caixa de autorização**: o leitor cede o ícone ao ponto azul nativo do CC (**não sobrescreve**); (b) **A última resposta do CC contém semântica "aguardando sua decisão"** (`等你`/`你决定`/`请确认`/`let me know`/`your call` etc.) → o leitor renderiza o `claude-logo-pending.svg` azul (sobrescreve o amarelo-running / verde-done). A luz 🔵 inferior conta os dois casos |
 
 > Em execução é amarelo estático (sem animação); interrompido mantém o pisca vermelho rápido de alerta. O contrato completo de estados (eventos / SVG / IPC / notificações) está em [`docs/STATES.md`](docs/STATES.md).
 
@@ -232,20 +233,22 @@ O ícone da aba de `WebviewPanel` do VSCode (`iconPath`) é definido **exclusiva
 <details>
 <summary>📖 Lista de comandos</summary>
 
-| Comando | O que faz |
-|---|---|
-| `npx vscode-claude-code-status-dot` | Instala (patcheia extension.js + liga hooks + instala companion, idempotente; limpa resíduos de versões antigas) |
-| `npx vscode-claude-code-status-dot --revert` | Restaura (recupera do `.bak` + remove hooks + apaga INSTALL_DIR, preserva dados de usuário) |
-| `npx vscode-claude-code-status-dot --status` | Relatório de diagnóstico dry-run, não altera nenhum arquivo |
+| Comando                                      | O que faz                                                                                                        |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `npx vscode-claude-code-status-dot`          | Instala (patcheia extension.js + liga hooks + instala companion, idempotente; limpa resíduos de versões antigas) |
+| `npx vscode-claude-code-status-dot --revert` | Restaura (recupera do `.bak` + remove hooks + apaga INSTALL_DIR, preserva dados de usuário)                      |
+| `npx vscode-claude-code-status-dot --status` | Relatório de diagnóstico dry-run, não altera nenhum arquivo                                                      |
 
 Em modo dev troque o comando por `npx tsx patch.ts` (com os mesmos parâmetros).
 
 Ou a partir do código-fonte (modo dev):
+
 ```bash
 git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
 cd vscode-claude-code-status-dot
 npx tsx patch.ts
 ```
+
 Os dois caminhos são equivalentes e idempotentes. O IIFE e os hooks referenciam o caminho absoluto do `INSTALL_DIR` — **apagar o código / limpar o cache npx não afeta a extensão já patcheada**.
 
 </details>
@@ -276,17 +279,17 @@ Escreva no `settings.json` do VSCode (sem configurar, os padrões se aplicam):
 }
 ```
 
-| Opção | Padrão | Descrição |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | Chave geral das notificações |
-| `ccStatusDot.notifyWhenFocused` | `true` | Também notifica quando o VSCode está em primeiro plano (notificação do sistema no macOS / mensagem VSCode no Win/Linux); `false` = só notifica em segundo plano |
-| `ccStatusDot.notifySound` | `"Glass"` | Som da notificação do sistema no macOS (compartilhado entre done e interrupção; `""` silencia; opções: Basso / Ping / Hero etc.) |
-| `ccStatusDot.tokenStatsWindow` | `"all"` | Janela de tempo do SBI de tokens no canto inferior direito. `all` = cumulativo (sessão inteira, não zera, padrão); `5min/10min/1h/24h/3d/7d/30d` = janelas móveis (turns antigos saem da janela automaticamente, parece que "zera") |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | Modo de exibição do SBI de tokens: `token` (só tokens) / `cost` (só $) / `both` (ambos) |
-| `ccStatusDot.tokenSbiVisible` | `true` | Mostrar / ocultar o SBI de tokens |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | Durante o streaming, o IIFE lê o final do transcript a cada tick para que os tokens se atualizem entre disparos do hook; defina `false` em máquinas sensíveis a desempenho |
-| `ccStatusDot.showCost` | `true` | Mostrar `$` (modelos desconhecidos são ocultados automaticamente; requer entrada correspondente em `token-rates.json`) |
-| `ccStatusDot.warnThresholdUsd` | `0` | Notificação ao cruzar limite de custo (0 = desativado; número positivo = limite USD, dispara uma vez por cruzamento) |
+| Opção                               | Padrão    | Descrição                                                                                                                                                                                                                           |
+| ----------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.notify`                | `true`    | Chave geral das notificações                                                                                                                                                                                                        |
+| `ccStatusDot.notifyWhenFocused`     | `true`    | Também notifica quando o VSCode está em primeiro plano (notificação do sistema no macOS / mensagem VSCode no Win/Linux); `false` = só notifica em segundo plano                                                                     |
+| `ccStatusDot.notifySound`           | `"Glass"` | Som da notificação do sistema no macOS (compartilhado entre done e interrupção; `""` silencia; opções: Basso / Ping / Hero etc.)                                                                                                    |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`   | Janela de tempo do SBI de tokens no canto inferior direito. `all` = cumulativo (sessão inteira, não zera, padrão); `5min/10min/1h/24h/3d/7d/30d` = janelas móveis (turns antigos saem da janela automaticamente, parece que "zera") |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`  | Modo de exibição do SBI de tokens: `token` (só tokens) / `cost` (só $) / `both` (ambos)                                                                                                                                             |
+| `ccStatusDot.tokenSbiVisible`       | `true`    | Mostrar / ocultar o SBI de tokens                                                                                                                                                                                                   |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`    | Durante o streaming, o IIFE lê o final do transcript a cada tick para que os tokens se atualizem entre disparos do hook; defina `false` em máquinas sensíveis a desempenho                                                          |
+| `ccStatusDot.showCost`              | `true`    | Mostrar `$` (modelos desconhecidos são ocultados automaticamente; requer entrada correspondente em `token-rates.json`)                                                                                                              |
+| `ccStatusDot.warnThresholdUsd`      | `0`       | Notificação ao cruzar limite de custo (0 = desativado; número positivo = limite USD, dispara uma vez por cruzamento)                                                                                                                |
 
 > **Preços personalizados por modelo**: `~/.claude/cc-status-dot/token-rates.json` é uma tabela de preços com recarga quente — por padrão cobre os preços oficiais da Anthropic; modelos não correspondidos como GLM ocultam `$` automaticamente. Adicione um glob para mostrar `$` neles:
 
@@ -294,7 +297,7 @@ Escreva no `settings.json` do VSCode (sem configurar, os padrões se aplicam):
 {
   "_default": null,
   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
-  "glm-*":           { "in": 0.5, "out": 1.5 }
+  "glm-*": { "in": 0.5, "out": 1.5 },
 }
 ```
 
@@ -316,6 +319,7 @@ Provavelmente você interrompeu o CC com Esc (o CC não dispara Stop/StopFailure
 
 **`npx` não conecta?**
 Plano B — instalação global:
+
 ```bash
 npm i -g vscode-claude-code-status-dot
 vscode-claude-code-status-dot        # depois de instalar, rode o comando direto
@@ -353,9 +357,9 @@ Se o vscode-claude-code-status-dot te ajudou, considere pagar um café para o au
 
 <div align="center">
 
-WeChat | Alipay
-:-: | :-:
-<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
+|                                WeChat                                |                                Alipay                                |
+| :------------------------------------------------------------------: | :------------------------------------------------------------------: |
+| <img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay"> |
 
 </div>
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.1:4153997e*/
+/*cc-status-dot-hook:v0.2.1:8d1a0788*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -2122,25 +2122,36 @@ async function main() {
           // marker would otherwise linger forever). Same mtime rule as .offset.
           const isOffset = !isTokens && !isJson && !isTmp && name.endsWith('.offset');
           const isForceReread = !isTokens && !isJson && !isTmp && !isOffset && name.endsWith(TOK_FORCEREREAD_EXT);
+          // v0.3.0 (lane D): GC <sid>.rate sidecar (IIFE-owned; cross-reload
+          // ring buffer snapshot for the tok/s sparkline + chart webview).
+          // NO collision risk with .json/.tokens.json (extension is literally
+          // ".rate", not a double-suffix), but we mirror the strict-order
+          // discipline of isTokens/isOffset for consistency + future-proofing
+          // (a hypothetical ".rate.json" later would still need the order).
+          // Pure mtime rule — same as .offset/.forcereread/.tokens.json (7d).
+          // The IIFE is the sole writer (atomic tmp+rename at most every 2s
+          // when state==='running'); the hook GCs but never reads this file.
+          const isRate = !isTokens && !isJson && !isTmp && !isOffset && !isForceReread && name.endsWith('.rate');
           // v0.2.4 round-2 (data-logic LOW): the prior `if (name === '.gc')
           // continue;` was unreachable dead code — `.gc` does not end with
           // .json/.tmp/.offset/.forcereread, so the line above already
           // `continue`s past it. Even `.gc.json` / `.gc.tmp` would not match
           // the strict `name === '.gc'` equality check. Removed: the suffix
           // filter is the authoritative gate.
-          if (!isTokens && !isJson && !isTmp && !isOffset && !isForceReread) continue;
+          if (!isTokens && !isJson && !isTmp && !isOffset && !isForceReread && !isRate) continue;
           const p = path.join(STATE_DIR, name);
           // v0.2.4: also skip the current session's .offset sidecar AND
           // .forcereread marker (we may be about to consume/re-write either).
           // The skip check uses the basename without extension so all of
           // `<sid>.json` / `<sid>.offset` / `<sid>.forcereread` /
-          // `<sid>.tokens.json` map to the same logical session.
+          // `<sid>.tokens.json` / `<sid>.rate` map to the same logical session.
           // v0.2.7: regex now also strips the `.tokens.json` suffix — note the
           // .tokens.json branch must be greedy over `.json` (regex alternation
           // tries left-to-right, so .tokens.json|json ordering matters: the
           // alternation below lists .tokens.json BEFORE .json so a full match
           // strips both extensions and leaves the bare sid).
-          const baseName = name.replace(/\.(tokens\.json|json|offset|forcereread|tmp)$/, '');
+          // v0.3.0: alternation extended with `.rate` (IIFE-owned sidecar).
+          const baseName = name.replace(/\.(tokens\.json|json|offset|forcereread|rate|tmp)$/, '');
           const currentBase = sid;
           if (baseName === currentBase) continue; // never prune the file we're about to write OR its sidecars
           try {
@@ -2216,6 +2227,17 @@ async function main() {
               // tiny marker files written by QuickPick reset; if the user
               // resets then closes CC before the next hook fire consumes the
               // marker, it lingers — reap on the same 7d schedule.
+              if (st.mtimeMs >= cutoff) continue;
+            } else if (isRate) {
+              // v0.3.0 (lane D): <sid>.rate GC = pure mtime rule. IIFE-owned
+              // sidecar (atomic tmp+rename at most every 2s when running),
+              // NOT read by the hook — sole purpose here is disk hygiene.
+              // Cross-reload continuity is a nice-to-have: losing this just
+              // means the sparkline/rate restarts from 0 next session, which
+              // is semantically correct (rate is a "now" metric, not a
+              // cumulative). Reap on the same 7d schedule as .offset /
+              // .tokens.json / .forcereread for unified post-SessionEnd
+              // survivor discipline.
               if (st.mtimeMs >= cutoff) continue;
             } else {
               // .tmp orphan: reap only if older than GC_TMP_AGE_MS (a legitimate

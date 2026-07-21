@@ -109,9 +109,12 @@ CC 跑完或被限速中断时弹**系统通知**——前台后台都弹：
 状态栏**右下角**第二个 SBI 显示当前激活 CC panel 的 token 用量与可选 USD 估算：
 
 ```
-$(clock) 12.3k tok · $0.42
+$(clock) 12.3k tok ▂▄▆█ 1.2k/s · $0.42
 ```
 
+- **v0.3.0 新：瞬时 tok/s 速率 + unicode sparkline**——每 500ms tick 采样 input+output token（故意排除 cache_read/cache_creation，否则 cache spike 会产出无意义的数十 M tok/s），最近 8 个采样点（4s）渲染为 `▁▂▃▄▅▆▇█` 8 块迷你图，5 秒滑动窗口算 `tok/s`。`ccStatusDot.rateDisplayMode`（`off|numeric|sparkline|both`，默认 `both`）控制呈现；状态栏拥挤时切 `numeric` 或 `off`
+- **v0.3.0 新：点击 SBI → `$(graph) Show live rate chart`**——弹 webview 大图面板，累计 token 折线（蓝）+ 瞬时速率柱状（橙）双 series，pure-SVG 零依赖，严格 CSP `default-src 'none'`
+- **v0.3.0 新：单位 B/T**——`fmtTok` 从 {k, M} 扩到 {k, M, B, T} 4-sig-fig 自适应。1.5B 显 "1.50B" 而非 "1500.0M"；796M 显 "796M" 而非 "796.0M"
 - **CC 流式输出时 token 实时增长**——不等回复结束，每 tick 读 transcript 尾部增量；tooltip 静态不闪。性能敏感机器可关 `tokenLiveDeltaEnabled`
 - **默认窗口 `all`（累积，不清零）**——可选 5min / 10min / 1h / 24h / 3d / 7d / 30d / all。`all` 是全程累积（会话级单调增长，跟账本一样只增不减）；`5min..30d` 是滚动窗口（旧 turn 到期滑出，看起来像"清零"，适合看"最近多久花了多少"）
 - **workflow 子代理 token 也算进来**——后台 spawn 的 subagent / teammate 跑出的 token 归并到父会话统计（你为它们付的费不会"隐形"）

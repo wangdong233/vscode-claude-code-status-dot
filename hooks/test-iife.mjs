@@ -358,7 +358,7 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-check('IIFE.21c banner carries v0.2.9 stamp', /\/\*cc-status-dot-injected:v0\.2\.9:/.test(iife));
+check('IIFE.21c banner carries v0.3.0 stamp', /\/\*cc-status-dot-injected:v0\.3\.0:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -1335,7 +1335,15 @@ check(
   );
 }
 // fmtTok helper present.
-check('IIFE.56 fmtTok helper present (n>=1M → N.NM, n>=1k → N.Nk)', /function\s+fmtTok\s*\(/.test(iife));
+// v0.3.0 (lane E): regex unchanged (format-agnostic — only asserts the
+// function name exists). Descriptive label updated to reflect the new
+// k/M/B/T 4-sig-fig adaptive format. Sample outputs verified at 1234→
+// "1.23k", 1234567→"1.23M", 1234567890→"1.23B", 796007504→"796M",
+// 1500000000→"1.50B" (the user complaint case), 1e12→"1T".
+check(
+  'IIFE.56 fmtTok helper present (v0.3.0: k/M/B/T 4-sig-fig adaptive, trailing-zero strip)',
+  /function\s+fmtTok\s*\(/.test(iife),
+);
 // fmtUsd helper present.
 check('IIFE.57 fmtUsd helper present (null → "", <0.01 → 3-decimal)', /function\s+fmtUsd\s*\(/.test(iife));
 // showTokQuickPick present (token SBI click handler).
@@ -1372,10 +1380,14 @@ check(
       /dispatchNotify\s*\(\s*"CC cost alert/.test(iife) ||
       /dispatchNotify\s*\(\s*tr\(\s*"alCostAlertTpl"\s*\)/.test(iife)),
 );
-// Token SBI tick is INSIDE __ccsdSbiTimer (shares the 500ms tick — no new setInterval).
+// Token SBI tick is INSIDE __ccsdSbiTimer (shares the 500ms tick — no new setInterval for token update).
+// v0.3.0: a 3rd setInterval was added inside showRateChart for the webview
+// postMessage refresh (form C chart panel) — it is conditionally created
+// (only when the user opens the chart), NOT a token-update timer. Bump the
+// expected count from 2 to 3.
 check(
-  'IIFE.66 token SBI tick shares __ccsdSbiTimer (no new setInterval for token update)',
-  (iife.match(/setInterval/g) || []).length === 2, // one for __ccsdSbiTimer, one for per-panel timer
+  'IIFE.66 token SBI tick shares __ccsdSbiTimer (no new setInterval for token update; v0.3.0 chart-panel timer exempt)',
+  (iife.match(/setInterval/g) || []).length === 3, // __ccsdSbiTimer + per-panel timer + chart-panel msg timer
 );
 // Turn-running tooltip is present.
 // v0.2.4 intra-version i18n: the literal now lives in the I18N dict's en
@@ -1722,67 +1734,89 @@ check(
   );
 }
 
-// --- 25b. v0.2.6 round-3 MEDIUM follow-up (cache-desync symmetry regression lock)
-// Round-3 added `globalThis.__ccsdTokSbiLastTip=null` to TWO of the THREE
-// §G-tick branches that transition AWAY from a good tip — the inner else
-// (ttNoDataTpl, activeSid present but no tok/windows[tWin]) and the outer
-// catch (ttUnavailableTpl, read threw). The OUTERMOST else (ttNoPanel —
-// activeSid is empty, user closed all CC panels) was missed, leaving a
-// cache-desync window: hold good tip X → ttNoPanel → return to SAME CC
-// session → recompute identical X → `__ccsdTokSbiLastTip!==__tip` is false →
-// tsbi.tooltip write skipped → tooltip stuck on "no panel" until any input
-// changes. The fix is symmetric: ALL THREE branches transitioning away from
-// a good tip must drop the cache so the next good tick re-writes. These
-// locks pin the symmetry so a future editor who drops any one branch fails
-// CI. Without the count lock, a refactor that collapsed two branches into
-// one would silently re-introduce the bug; without the position lock, the
-// count could be preserved while the ttNoPanel branch's reset was the one
-// dropped (the regression round-3 originally shipped).
+// --- 25b. v0.3.0 round-1 MEDIUM (tooltip IPC dedup): all 4 §G-tick branches
+// use the SAME __ccsdTokSbiLastTip dedup gate (REPLACES the prior round-3
+// __ccsdTokSbiLastTip=null reset pattern).
+//
+// History — round-3 cache-desync symmetry fix (v0.2.6): added
+// `globalThis.__ccsdTokSbiLastTip=null` to all 3 non-success branches
+// (ttNoDataTpl + ttUnavailableTpl + ttNoPanel) to fix a cache-desync bug:
+// hold good tip X → ttNoPanel → return to SAME CC session → recompute
+// identical X → `__ccsdTokSbiLastTip!==__tip` was false → tsbi.tooltip write
+// skipped → tooltip stuck on "no panel". The null-reset dropped the cache so
+// the next good tick re-wrote.
+//
+// v0.2.9 Q5 Fix 2 then added __ccsdTokSbiLastText dedup to tsbi.text in all
+// 4 branches (text dedup), but the matching tsbi.tooltip dedup was only
+// applied to the SUCCESS branch — the 3 non-success branches still assigned
+// tsbi.tooltip UNCONDITIONALLY every 500ms tick even when the string was
+// byte-identical, leaking ~2 redundant IPC writes/sec to the renderer. The
+// ttNoPanel case was the most persistent: a user with VS Code open but no CC
+// panel leaked ~2 tooltip IPC writes/sec indefinitely.
+//
+// v0.3.0 round-1 MEDIUM fix: wrap all 3 non-success branches' tsbi.tooltip
+// assignment in the SAME dedup gate the success branch uses, and REMOVE the
+// now-redundant __ccsdTokSbiLastTip=null resets. The dedup naturally re-fires
+// on branch transitions because the tooltip strings differ across branches
+// (success tip X !== ttNoPanel tip, etc.), so the cache-desync symmetry is
+// preserved by STRING DIFFERENCE instead of by null-reset. See patch.ts
+// "v0.3.0 round-1 MEDIUM" comments at each branch for the full per-branch
+// rationale.
+//
+// These locks pin: (96a) exactly 4 gates total (one per branch), (96b) NO
+// null resets remain (negative regression pin against re-introducing the old
+// pattern alongside the gate), (96c-e) each non-success branch has its own
+// gate (position-locked on the branch's unique signature string). Without
+// 96b, a future editor could re-add the null-reset "for safety" beside the
+// gate, signalling they misunderstood the branch-transition reasoning.
 {
+  const GATE_PAT =
+    'if(globalThis.__ccsdTokSbiLastTip!==__tip){globalThis.__ccsdTokSbiLastTip=__tip;tsbi.tooltip=__tip;}';
+  const gateOccurrences = iife.split(GATE_PAT).length - 1;
+  check(
+    'IIFE.96a §G tick has exactly 4 __ccsdTokSbiLastTip dedup gates (v0.3.0 round-1: success + 3 non-success branches)',
+    gateOccurrences === 4,
+    'expected 4 dedup gates (success + ttNoDataTpl + ttUnavailableTpl + ttNoPanel), found ' + gateOccurrences,
+  );
+  // Negative regression pin: the old __ccsdTokSbiLastTip=null reset pattern
+  // must be COMPLETELY ABSENT. The dedup gate makes the null resets redundant
+  // (branch transitions re-fire the gate naturally because the tooltip strings
+  // differ across branches). A non-zero count here means someone re-introduced
+  // the old pattern alongside the gate — both redundant and a signal that the
+  // branch-transition reasoning was misunderstood.
   const RESET_PAT = 'globalThis.__ccsdTokSbiLastTip=null';
-  const occurrences = iife.split(RESET_PAT).length - 1;
+  const resetOccurrences = iife.split(RESET_PAT).length - 1;
   check(
-    'IIFE.96a §G tick has exactly 3 __ccsdTokSbiLastTip=null reset branches (cache-desync symmetry)',
-    occurrences === 3,
-    'expected 3 reset branches (ttNoDataTpl + ttUnavailableTpl + ttNoPanel), found ' + occurrences,
+    'IIFE.96b §G tick has NO __ccsdTokSbiLastTip=null resets (v0.3.0 round-1 replaced all with dedup gate)',
+    resetOccurrences === 0,
+    'expected 0 null-reset branches (all replaced by dedup gate), found ' + resetOccurrences,
   );
-  // Position lock: one reset must sit INSIDE the ttNoPanel branch (the
-  // round-3 original miss). Anchor on the unique `tr("ttNoPanel")` string
-  // and assert a reset occurs AT OR AFTER it but BEFORE the §G tick's
-  // closing `}}}` (closes the else, the if(tsbi), and the outer try).
+  // Position locks: each non-success branch must contain its own dedup gate.
+  // Anchor on each branch's unique signature string and assert a gate occurs
+  // AT OR AFTER it. The gates appear in source order (success → ttNoDataTpl →
+  // ttUnavailableTpl → ttNoPanel), so the first gate after each signature is
+  // that branch's gate. Without these locks, IIFE.96a could pass with 4 gates
+  // all clustered in one branch.
   const noPanelIdx = iife.indexOf('tr("ttNoPanel")');
-  // Find the §G tick's closing `}}}catch(e){}` that immediately follows.
-  // The ttNoPanel branch ends with `}}}catch(e){}` — three closing braces
-  // then the outer catch.
-  const noPanelCloseIdx = iife.indexOf('}}}catch(e){}', noPanelIdx);
-  const firstResetAfterNoPanel = iife.indexOf(RESET_PAT, noPanelIdx);
+  const noPanelGateIdx = iife.indexOf(GATE_PAT, noPanelIdx);
   check(
-    'IIFE.96b ttNoPanel branch contains __ccsdTokSbiLastTip=null reset (round-3 original miss)',
-    noPanelIdx >= 0 && noPanelCloseIdx >= 0 && firstResetAfterNoPanel >= 0 && firstResetAfterNoPanel < noPanelCloseIdx,
-    'noPanelIdx=' +
-      noPanelIdx +
-      ' firstResetAfterNoPanel=' +
-      firstResetAfterNoPanel +
-      ' noPanelCloseIdx=' +
-      noPanelCloseIdx,
+    'IIFE.96c ttNoPanel branch contains dedup gate (v0.3.0 round-1: closes the most persistent IPC leak — no-panel state)',
+    noPanelIdx >= 0 && noPanelGateIdx >= 0,
+    'noPanelIdx=' + noPanelIdx + ' gateIdx=' + noPanelGateIdx,
   );
-  // Negative regression pin: the ttNoDataTpl and ttUnavailableTpl resets
-  // must ALSO still be present (one could pass 96a with 3 resets if a
-  // refactor added 2 new resets in one branch and dropped another — this
-  // lock catches that by anchoring on each branch's unique signature).
   const noDataIdx = iife.indexOf('tr("ttNoDataTpl")');
-  const noDataCloseIdx = iife.indexOf('globalThis.__ccsdTokSbiLastTip=null', noDataIdx);
+  const noDataGateIdx = iife.indexOf(GATE_PAT, noDataIdx);
   check(
-    'IIFE.96c ttNoDataTpl branch contains __ccsdTokSbiLastTip=null reset (round-3 sibling)',
-    noDataIdx >= 0 && noDataCloseIdx >= 0,
-    'noDataIdx=' + noDataIdx + ' resetIdx=' + noDataCloseIdx,
+    'IIFE.96d ttNoDataTpl branch contains dedup gate (v0.3.0 round-1: no-data state IPC dedup)',
+    noDataIdx >= 0 && noDataGateIdx >= 0,
+    'noDataIdx=' + noDataIdx + ' gateIdx=' + noDataGateIdx,
   );
   const unavailIdx = iife.indexOf('tr("ttUnavailableTpl")');
-  const unavailCloseIdx = iife.indexOf('globalThis.__ccsdTokSbiLastTip=null', unavailIdx);
+  const unavailGateIdx = iife.indexOf(GATE_PAT, unavailIdx);
   check(
-    'IIFE.96d ttUnavailableTpl branch contains __ccsdTokSbiLastTip=null reset (round-3 sibling)',
-    unavailIdx >= 0 && unavailCloseIdx >= 0,
-    'unavailIdx=' + unavailIdx + ' resetIdx=' + unavailCloseIdx,
+    'IIFE.96e ttUnavailableTpl branch contains dedup gate (v0.3.0 round-1: read-threw state IPC dedup)',
+    unavailIdx >= 0 && unavailGateIdx >= 0,
+    'unavailIdx=' + unavailIdx + ' gateIdx=' + unavailGateIdx,
   );
 }
 
@@ -2436,6 +2470,172 @@ check(
   'IIFE.132 v0.2.9 Q4: no vs.Uri.file CALL outside ccuri definition (defense: every iconPath uses cache)',
   // The only vs.Uri.file call remaining is INSIDE the ccuri definition itself.
   (iife.match(/vs\.Uri\.file\(/g) || []).length === 1,
+);
+
+// === v0.3.0 (lane D+E): tok/s rate sampling, sparkline, webview chart ===
+
+// IIFE.133 fmtTok now scales to B/T (the v0.2.9 fmtTok ceiling was M, which
+// rendered 1.5B as "1500.0M" — the explicit user complaint at the 796M→1B
+// threshold). The new tiers (1e9→B, 1e12→T) must both be present.
+check('IIFE.133 v0.3.0 fmtTok scales to B (1e9 tier)', /\["B",1e9\]/.test(iife));
+check('IIFE.134 v0.3.0 fmtTok scales to T (1e12 tier)', /\["T",1e12\]/.test(iife));
+
+// IIFE.135 fmtTok trailing-zero strip regex (clears "796.0M" → "796M").
+// The IIFE contains s.replace(/\.0+$/,"") — match the literal form.
+check('IIFE.135 v0.3.0 fmtTok trailing-zero strip regex', /s\.replace\(\/\\\.0\+\$\/,""\)/.test(iife));
+
+// IIFE.136 rate sampling core: __ccsdRateSample function present. Per-sid
+// ring buffer keyed on globalThis.__ccsdRateBuf; samples {ts,d,total}.
+check(
+  'IIFE.136 v0.3.0 __ccsdRateSample function present',
+  /function\s+__ccsdRateSample\s*\(\s*sid\s*,\s*realNow\s*,\s*totalNow\s*,\s*isRunning\s*,\s*nowMs\s*\)/.test(iife),
+);
+
+// IIFE.137 ring buffer cap constant (16 entries = 8s @ 500ms tick).
+check('IIFE.137 v0.3.0 RATE_BUF_CAP=16 (8s @ 500ms tick)', /var\s+RATE_BUF_CAP=16/.test(iife));
+
+// IIFE.138 sparkline chars present (▁▂▃▄▅▆▇█ U+2581..U+2588).
+check('IIFE.138 v0.3.0 sparkline chars ▁▂▃▄▅▆▇█ (U+2581..U+2588)', iife.includes('▁▂▃▄▅▆▇█'));
+
+// IIFE.139 §G tick calls __ccsdRateSample (rate sampling wired into the
+// 500ms token SBI tick).
+check(
+  'IIFE.139 v0.3.0 §G tick calls __ccsdRateSample',
+  /var\s+rateInfo\s*=\s*__ccsdRateSample\s*\(\s*activeSid\s*,\s*realNow\s*,\s*total\s*,\s*isRunning\s*,\s*Date\.now\(\s*\)\s*\)/.test(
+    iife,
+  ),
+);
+
+// IIFE.140 rate gated by cfg.rateDisplayMode (off|numeric|sparkline|both).
+// Default "both" shows sparkline + numeric tok/s suffix.
+check(
+  'IIFE.140 v0.3.0 §G tick reads cfg.rateDisplayMode (default both)',
+  /cfg\.get\s*\(\s*"rateDisplayMode"\s*,\s*"both"\s*\)/.test(iife),
+);
+
+// IIFE.141 rate sampling uses INPUT+OUTPUT only (lane D R2 critical): cache_read
+// at 85% of a 796M session would produce meaningless multi-M tok/s spikes.
+// Verify realNow formula = (w.in+w.out) + (dIn+dOut), NOT including dCr/dCc5/dCc1/dCci.
+check(
+  'IIFE.141 v0.3.0 rate samples INPUT+OUTPUT only (excludes cache per lane D R2)',
+  /var\s+realNow\s*=\s*\(\s*\(\s*w\.in\|\|0\s*\)\s*\+\s*\(\s*w\.out\|\|0\s*\)\s*\)\s*\+\s*dIn\s*\+\s*dOut/.test(iife),
+);
+
+// IIFE.142 sparkline renderer function present.
+check(
+  'IIFE.142 v0.3.0 __ccsdRateSpark renderer present',
+  /function\s+__ccsdRateSpark\s*\(\s*arr\s*,\s*peak\s*\)/.test(iife),
+);
+
+// IIFE.143 sidecar flush (atomic tmp+rename, throttled 2s).
+check(
+  'IIFE.143 v0.3.0 __ccsdRateFlush atomic tmp+rename (throttled 2s)',
+  /fs\.renameSync\s*\(\s*tmpPath\s*,\s*finalPath\s*\)/.test(iife) && /RATE_FLUSH_MS\s*=\s*2000/.test(iife),
+);
+
+// IIFE.144 sidecar load (one-shot via __ccsdRateLoaded) for cross-reload.
+check(
+  'IIFE.144 v0.3.0 __ccsdRateLoad one-shot sidecar load (cross-reload)',
+  /function\s+__ccsdRateLoad\s*\(\s*sid\s*\)/.test(iife) && /globalThis\.__ccsdRateLoaded/.test(iife),
+);
+
+// IIFE.145 QuickPick carries the chart entry (form C webview).
+check('IIFE.145 v0.3.0 QuickPick offers "Show live rate chart" entry', iife.includes('qpShowChartLabel'));
+
+// IIFE.146 showRateChart function present (webview panel with strict CSP).
+check('IIFE.146 v0.3.0 showRateChart function present', /function\s+showRateChart\s*\(\s*\)/.test(iife));
+
+// IIFE.147 webview strict CSP (no remote scripts; only inline + data: images).
+// The CSP appears in the IIFE source as: content="default-src \\'none\\';
+// script-src \\'unsafe-inline\\'; ..." (both apostrophes per token escaped
+// because the outer JS string is single-quoted). The bridge between
+// Content-Security-Policy and default-src crosses literal " chars
+// (`Content-Security-Policy" content="default-src`), so the bridge pattern
+// uses [\s\S]*? (any char, non-greedy) rather than [^"]*. Each `\\?` makes
+// the backslash optional so the regex also matches the unescaped comment
+// mention of the CSP earlier in the IIFE.
+check(
+  'IIFE.147 v0.3.0 rate chart webview strict CSP (default-src none + unsafe-inline script)',
+  /Content-Security-Policy[\s\S]*?default-src\s+\\?'\\?none\\?'[\s\S]*?script-src\s+\\?'\\?unsafe-inline\\?'/.test(
+    iife,
+  ),
+);
+
+// IIFE.148 webview panel uses pure SVG (no external chart lib — all inline).
+check(
+  'IIFE.148 v0.3.0 rate chart uses inline SVG (no external chart lib)',
+  iife.includes('<svg') && !iife.includes('uPlot') && !iife.includes('Chart.js'),
+);
+
+// IIFE.149 webview panel is single-instance keyed on globalThis.__ccsdRateChart.
+check(
+  'IIFE.149 v0.3.0 rate chart panel single-instance (globalThis.__ccsdRateChart)',
+  /if\s*\(\s*globalThis\.__ccsdRateChart\s*\)\s*\{[^}]*panel\.reveal/.test(iife),
+);
+
+// IIFE.150 v0.3.0 fix (HIGH): chart-panel timer is READ-ONLY on __ccsdRateBuf.
+// The previous implementation called __ccsdRateSample(sid2,0,totalNow,false,Date.now())
+// inside the chart's 500ms msgTimer, which (a) pushed delta=0 samples into the
+// SHARED buffer (since isRunning=false → delta=0), interleaving with the §G SBI
+// tick's real samples to produce zebra-stripe bars + sparkline jitter, and
+// (b) clobbered prev[sid]=-1 each tick, which made the next §G tick's
+// `if(isRunning&&prev[sid]>=0&&realNow>=prev[sid])` short-circuit and skip its
+// own delta compute, AND (c) drove the EMA peak `mx[sid]=mx[sid]*0.85+0*0.15`
+// down 15% per chart tick. The fix: extract __ccsdRateFromBuf(arr,nowMs) as a
+// pure read-only helper, call it from the chart timer instead. The §G tick
+// remains the sole writer (1 sample/500ms); the chart just re-renders from
+// the buffer. This test scopes the check to the showRateChart function body
+// (between `function showRateChart(){` and the next sibling function
+// declaration `function __ccsdRateChartHtml(`) — the body MUST NOT contain a
+// __ccsdRateSample( CALL (comments stripped first so the explanatory comment
+// referencing the old buggy call for posterity doesn't false-positive), and
+// MUST compute rateNow via __ccsdRateFromBuf(.
+{
+  // Strip /* … */ and // … comments so an explanatory comment that mentions
+  // the deleted call (for changelog/posteriority) doesn't false-positive.
+  function stripComments(s) {
+    return s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  }
+  const fnStart = iife.indexOf('function showRateChart(){');
+  const fnEnd = iife.indexOf('function __ccsdRateChartHtml(');
+  const body = fnStart >= 0 && fnEnd > fnStart ? iife.slice(fnStart, fnEnd) : '';
+  const bodyStripped = stripComments(body);
+  check(
+    'IIFE.150 v0.3.0 fix (HIGH) chart-panel timer is READ-ONLY on __ccsdRateBuf (no __ccsdRateSample call; rateNow via __ccsdRateFromBuf)',
+    body.length > 0 &&
+      !/__ccsdRateSample\s*\(/.test(bodyStripped) &&
+      /__ccsdRateFromBuf\s*\(\s*arr\s*,\s*Date\.now\(\s*\)\s*\)/.test(bodyStripped),
+    'chart panel must compute rateNow via the read-only __ccsdRateFromBuf helper, not __ccsdRateSample (which writes delta=0 samples + clobbers prev[sid] → zebra stripes + sparkline jitter + EMA peak decay)',
+  );
+}
+
+// IIFE.151 __ccsdRateFromBuf read-only helper present (extracted from
+// __ccsdRateSample's former inline rate compute — same windowed-sum math, just
+// hoisted to a pure function that both __ccsdRateSample and the chart-panel
+// timer can call without mutating the buffer).
+check(
+  'IIFE.151 v0.3.0 fix __ccsdRateFromBuf read-only helper present (rate-from-buffer, no mutation)',
+  /function\s+__ccsdRateFromBuf\s*\(\s*arr\s*,\s*nowMs\s*\)/.test(iife),
+);
+
+// IIFE.152 v0.3.0 fix (MEDIUM): chart webview CSS uses VSCode theme CSS
+// variables instead of hardcoded #1e1e1e/#ddd/#4fc3f7/#ffb74d. The webview
+// HTML is string-concatenated in __ccsdRateChartCss; without theme variables,
+// light-theme users see a black slab with dim elements (background:#1e1e1e is
+// the VSCode dark-theme editor background). The fix wraps every color in
+// var(--vscode-…,<fallback>) so the webview inherits the active theme. SVG
+// inline stroke="#xxx"/fill="#xxx" are switched to class-based
+// (.midline/.cum-line/.rate-bar) so CSS variables apply. This test verifies
+// each required theme variable is referenced.
+check(
+  'IIFE.152 v0.3.0 fix (MEDIUM) chart CSS uses VSCode theme variables (--vscode-editor-background/foreground + chart-blue/orange)',
+  /var\(--vscode-editor-background/.test(iife) &&
+    /var\(--vscode-editor-foreground/.test(iife) &&
+    /var\(--vscode-chart-blue/.test(iife) &&
+    /var\(--vscode-chart-orange/.test(iife) &&
+    /var\(--vscode-descriptionForeground/.test(iife) &&
+    /var\(--vscode-editorWidget-border/.test(iife),
+  'webview hardcoded #1e1e1e/#ddd/#4fc3f7/#ffb74d must be wrapped in VSCode theme CSS variables so light theme is readable',
 );
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

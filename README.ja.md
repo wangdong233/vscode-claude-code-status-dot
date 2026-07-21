@@ -131,6 +131,7 @@ $(clock) 12.3k tok · $0.42
 - tooltip には現在のセッションの total / 24h / 7d / 30d 累計 $ + モデル + プロジェクト + 今 turn の経過時間を表示
 - SBI をクリックすると QuickPick 設定パネルが開く: ウィンドウ切替 / 表示モード（token / cost / both）/ 通知オンオフ / サウンド選択 / トークン数コピー / 統計リセット / 状態ディレクトリを開く / 設定を開く
 - **QuickPick 設定パネル + tooltip は VSCode の UI 言語に追従**（zh / en / ja / de / es / fr / pt / ru、未知の言語は en にフォールバック）—— VSCode が日本語ならパネルも日本語；設定値（5min / all / token / cost / both / サウンド名）は言語中立で翻訳されない
+- **v0.3.0 新機能：tok/s レート + Unicode スパークライン** —— 500ms ごとに input+output トークンをサンプリング（cache_read/cache_creation は意図的に除外。含めると cache spike で無意味な数百万 tok/s 表示になる）。直近 8 サンプル（4s）を `▁▂▃▄▅▆▇█` ミニチャート化、5s スライディングウィンドウで `tok/s` 算出。`ccStatusDot.rateDisplayMode`（`off|numeric|sparkline|both`、デフォルト `both`）が描画を制御。ステータスバーが混雑する場合は `numeric` か `off` に切替
 - しきい値アラート: `ccStatusDot.warnThresholdUsd` が閾値を跨いだとき通知（デフォルト無効）
 
 **データソース**: CC の transcript jsonl が唯一の権威ソース（各行の assistant `message.usage`）。writer hook は byte-offset sidecar で増分読み取り（33MB の大ファイルでも < 100ms）。CC `/resume` は同一 sid を再利用 → 統計は自然に継続；新規セッションは 0 から開始。
@@ -163,13 +164,13 @@ CC の自動更新はパッチを全体上書きしてしまう。**v0.2.0 よ�
 
 ## 🎨 状態色
 
-| 色 | 意味 | トリガー |
-|---|---|---|
-| 🟡 黄 `#CCA700`（**静的**、アニメなし） | 実行中 | プロンプト送信、ツール呼び出し前後（ハートビート）、subagent spawn |
-| 🟢 緑 `#3FB950`（静的） | 当ターン完了（ユーザー入力不要） | CC が `Stop` をトリガー、かつ最終返信が中性完了（`完了` / `Done.` / `すべてのテストが通過`）；**5 分超過で自動的に灰に** |
-| 🔴 赤 `#F85149`（速ブリンク） | 中断 / エラー | CC が `StopFailure` をトリガー（レート制限、過負荷など） |
-| ⚪ 灰 `#808080`（静的） | アイドル | 初期 / 完了から 5 分超過 / ステータスファイルなし |
-| 🔵 青 `#58A6FF`（静的） | ユーザー入力待ち（2 種のトリガー） | (a) **CC が権限承認ダイアログをポップアップ**: reader がアイコンを譲り、CC ネイティブの青ドットを表示（**上書きしない**）；(b) **CC の最終返信が「意思決定待ち」の意味を含む**（`等你` / `你决定` / `请确认` / `let me know` / `your call` など）→ reader が青色 `claude-logo-pending.svg` をレンダリング（running 黄 / done 緑を上書き）。下部 🔵 ライトは両トリガーを計数 |
+| 色                                      | 意味                               | トリガー                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🟡 黄 `#CCA700`（**静的**、アニメなし） | 実行中                             | プロンプト送信、ツール呼び出し前後（ハートビート）、subagent spawn                                                                                                                                                                                                                                                                                                          |
+| 🟢 緑 `#3FB950`（静的）                 | 当ターン完了（ユーザー入力不要）   | CC が `Stop` をトリガー、かつ最終返信が中性完了（`完了` / `Done.` / `すべてのテストが通過`）；**5 分超過で自動的に灰に**                                                                                                                                                                                                                                                    |
+| 🔴 赤 `#F85149`（速ブリンク）           | 中断 / エラー                      | CC が `StopFailure` をトリガー（レート制限、過負荷など）                                                                                                                                                                                                                                                                                                                    |
+| ⚪ 灰 `#808080`（静的）                 | アイドル                           | 初期 / 完了から 5 分超過 / ステータスファイルなし                                                                                                                                                                                                                                                                                                                           |
+| 🔵 青 `#58A6FF`（静的）                 | ユーザー入力待ち（2 種のトリガー） | (a) **CC が権限承認ダイアログをポップアップ**: reader がアイコンを譲り、CC ネイティブの青ドットを表示（**上書きしない**）；(b) **CC の最終返信が「意思決定待ち」の意味を含む**（`等你` / `你决定` / `请确认` / `let me know` / `your call` など）→ reader が青色 `claude-logo-pending.svg` をレンダリング（running 黄 / done 緑を上書き）。下部 🔵 ライトは両トリガーを計数 |
 
 > running は静的黄ドット（アニメなし）；interrupted は赤の速ブリンクで警告。完全な状態契約（イベント / SVG / IPC / 通知）は [`docs/STATES.md`](docs/STATES.md) を参照。
 
@@ -238,15 +239,16 @@ patched 済み拡張は正常に描画し続ける。
 <details>
 <summary>📖 コマンド一覧</summary>
 
-| コマンド | 役割 |
-|---|---|
-| `npx vscode-claude-code-status-dot` | インストール（パッチ + hooks + companion、冪等；旧版の残留も自動クリーンアップ） |
-| `npx vscode-claude-code-status-dot --revert` | 復元（`.bak` から復元 + hooks 削除 + INSTALL_DIR 削除、ユーザーデータは保持） |
-| `npx vscode-claude-code-status-dot --status` | dry-run 診断レポート、ファイルを一切変更しない |
+| コマンド                                     | 役割                                                                             |
+| -------------------------------------------- | -------------------------------------------------------------------------------- |
+| `npx vscode-claude-code-status-dot`          | インストール（パッチ + hooks + companion、冪等；旧版の残留も自動クリーンアップ） |
+| `npx vscode-claude-code-status-dot --revert` | 復元（`.bak` から復元 + hooks 削除 + INSTALL_DIR 削除、ユーザーデータは保持）    |
+| `npx vscode-claude-code-status-dot --status` | dry-run 診断レポート、ファイルを一切変更しない                                   |
 
 開発時はコマンドを `npx tsx patch.ts` に置き換える（同じ引数）。
 
 またはソースから（開発時）:
+
 ```bash
 git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
 cd vscode-claude-code-status-dot
@@ -297,17 +299,17 @@ VSCode の `settings.json` に書く（設定しなければデフォルト値�
 }
 ```
 
-| 設定項目 | デフォルト | 説明 |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | 通知のメインスイッチ |
-| `ccStatusDot.notifyWhenFocused` | `true` | フォアグラウンド（VSCode がアクティブ）でも通知（macOS システム通知 / Win / Linux は VSCode メッセージ）；`false` でバックグラウンド時のみ通知 |
-| `ccStatusDot.notifySound` | `"Glass"` | macOS システム通知サウンド（done と中断で共有；`""` でミュート；Basso / Ping / Hero なども選択可） |
-| `ccStatusDot.tokenStatsWindow` | `"all"` | 右下トークン SBI の時間ウィンドウ。`all` = 累積（セッション全体、リセットなし、デフォルト）；`5min/10min/1h/24h/3d/7d/30d` = ローリングウィンドウ（古い turn は期限切れで滑り落ちる、「リセットされた」ように見える） |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | トークン SBI の表示モード: `token`（トークンのみ）/ `cost`（$ のみ）/ `both`（両方） |
-| `ccStatusDot.tokenSbiVisible` | `true` | トークン SBI の表示 / 非表示 |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | ストリーミング中 IIFE が tick ごとに transcript 末尾を読み、hook 発火間でもトークンが更新される；性能優先端末では `false` で無効化 |
-| `ccStatusDot.showCost` | `true` | `$` を表示（未知モデルは自動的に非表示；`token-rates.json` に一致エントリが必要） |
-| `ccStatusDot.warnThresholdUsd` | `0` | コスト閾値越え通知（0 = 無効；正数 = USD 閾値、越えるごとに 1 回通知） |
+| 設定項目                            | デフォルト | 説明                                                                                                                                                                                                                  |
+| ----------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.notify`                | `true`     | 通知のメインスイッチ                                                                                                                                                                                                  |
+| `ccStatusDot.notifyWhenFocused`     | `true`     | フォアグラウンド（VSCode がアクティブ）でも通知（macOS システム通知 / Win / Linux は VSCode メッセージ）；`false` でバックグラウンド時のみ通知                                                                        |
+| `ccStatusDot.notifySound`           | `"Glass"`  | macOS システム通知サウンド（done と中断で共有；`""` でミュート；Basso / Ping / Hero なども選択可）                                                                                                                    |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`    | 右下トークン SBI の時間ウィンドウ。`all` = 累積（セッション全体、リセットなし、デフォルト）；`5min/10min/1h/24h/3d/7d/30d` = ローリングウィンドウ（古い turn は期限切れで滑り落ちる、「リセットされた」ように見える） |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`   | トークン SBI の表示モード: `token`（トークンのみ）/ `cost`（$ のみ）/ `both`（両方）                                                                                                                                  |
+| `ccStatusDot.tokenSbiVisible`       | `true`     | トークン SBI の表示 / 非表示                                                                                                                                                                                          |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`     | ストリーミング中 IIFE が tick ごとに transcript 末尾を読み、hook 発火間でもトークンが更新される；性能優先端末では `false` で無効化                                                                                    |
+| `ccStatusDot.showCost`              | `true`     | `$` を表示（未知モデルは自動的に非表示；`token-rates.json` に一致エントリが必要）                                                                                                                                     |
+| `ccStatusDot.warnThresholdUsd`      | `0`        | コスト閾値越え通知（0 = 無効；正数 = USD 閾値、越えるごとに 1 回通知）                                                                                                                                                |
 
 > **カスタムモデル定価**: `~/.claude/cc-status-dot/token-rates.json` はホットリロード定価表 —— デフォルトで Anthropic 公式価格をカバー；GLM 等の未一致モデルは自動的に $ を隠す。glob を 1 行追加すれば $ 表示を有効化できる:
 
@@ -315,7 +317,7 @@ VSCode の `settings.json` に書く（設定しなければデフォルト値�
 {
   "_default": null,
   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
-  "glm-*":           { "in": 0.5, "out": 1.5 }
+  "glm-*": { "in": 0.5, "out": 1.5 },
 }
 ```
 
@@ -337,6 +339,7 @@ CC の自動更新が拡張ディレクトリを全体置換し、patched ファ
 
 **`npx` で接続できない?**
 フォールバックとしてグローバルインストール:
+
 ```bash
 npm i -g vscode-claude-code-status-dot
 vscode-claude-code-status-dot        # インストール後そのままコマンド実行
@@ -374,10 +377,9 @@ vscode-claude-code-status-dot がお役に立てば、作者にコーヒーを�
 
 <div align="center">
 
-WeChat | Alipay
-:-: | :-:
-<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
-
+|                                WeChat                                |                                Alipay                                |
+| :------------------------------------------------------------------: | :------------------------------------------------------------------: |
+| <img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay"> |
 
 </div>
 

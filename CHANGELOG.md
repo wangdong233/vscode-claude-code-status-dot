@@ -2,6 +2,50 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.3.0] - 2026-07-21
+
+**右下角 token 计数：B/T 单位 + 瞬时 tok/s 速率 + sparkline + webview 大图。** 基于 5 路深度调研（A 实时性审计 + B LLM 拦截可行性 + C OSS 调研 + D 速率/图表设计 + E 单位格式）。用户两提案：提案1（LLM 调用层拦截）→ 调研 B 裁决 NO-GO（架构错位——CC 的 API 调用在 CLI 子进程，patch 触不到；只文档化路径于 `docs/LLM-INTERCEPT-DESIGN.md`）；提案2（瞬时速率 + 动态图表）→ 全面落地。
+
+### Added — 速率与图表（提案 2，按调研 D 落地）
+
+- **瞬时 tok/s 滑动窗口速率**（`patch.ts` `__ccsdRateSample`）：每 §G tick（500ms）采样 `realNow = (w.in+w.out) + (dIn+dOut)` —— 故意排除 cache_read/cache_creation（调研 D R2 critical：用户 796M session 中 cache_read 占 85%，包含会产出无意义的数十 M tok/s spike）。ring buffer 容量 16 = 8s 历史；5s 滑动窗口算 `rate_real = Σ last(10).d / 5s`。EMA peak（τ≈2s，`max*0.85+delta*0.15`）auto-scale 防 burst peg █ / idle 趋零。
+- **状态栏 unicode sparkline**（`__ccsdRateSpark`）：`▁▂▃▄▅▆▇█`（U+2581..U+2588）8 块，渲染最近 8 个采样点（4s）。零依赖、零 CSP 风险、单色字体 tabular-nums 兜底宽度恒定。示例：`$(clock) 12.3k tok ▂▄▆█ 1.2k/s · $0.42`。
+- **`<sid>.rate` sidecar**（IIFE 唯一 writer）：ring buffer 快照 throttled 2s 写盘（仅 `state==='running'`），跨 reload 续 sparkline。schema：`{v:1,sid,last_ts,recent_max,samples:[{t,d,total}]}`。原子 tmp+rename 镜像 `writeJsonAtomic` 纪律。
+- **webview 大图面板**（`showRateChart`，调研 D form C）：点击 token SBI → QuickPick → `$(graph) Show live rate chart`。pure-SVG（无外部库——uPlot/Chart.js 故意避开，零 CSP remote-script 风险），~80 行内联 JS+SVG。两 series：累计 token 折线（#4fc3f7）+ 瞬时 tok/s 柱状（#ffb74d）。严格 CSP `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:`。单例（`globalThis.__ccsdRateChart`），onDidDispose 清 timer + msgHandler。
+- **i18n 9 新键 × 8 语言**：`qpShowChartLabel/Detail`、`ttRateTpl`、`ttSparklineHint`、`wvChartTitle`、`wvSeriesCumulative/Rate`、`wvTotalLabel`、`wvRateLabel`、`wvSidLabel`、`wvSampleLabel`。符号（`tok` / `/s` / unicode 块）跨语言不译。
+
+### Changed — 单位（提案 E）
+
+- **fmtTok 加 B/T 阶**（`patch.ts:2034`）：v0.2.9 fmtTok 上限 M → 1.5B 显 "1500.0M"（用户实报，796M→1B 临界必须修）。新 tiers `1e3→k`、`1e6→M`、`1e9→B`、`1e12→T`，3-4 sig figs（`m<10?m.toFixed(2):m<100?m.toFixed(1):Math.floor(m)`），trailing-zero strip regex `/\.0+$/` 清噪声。Locale-independent 手写（`Intl.NumberFormat` 跨 locale 抖动：zh→"8亿"、de→"796 Mio." 破坏 SBI 视觉稳定）。样例：1234→"1.23k"、1234567→"1.23M"、1234567890→"1.23B"、796007504→"796M"、1500000000→"1.50B"、1e12→"1T"。
+- **fmtRate / fmtBytes 新增 helpers**：`fmtRate` 速率显示（`<1→"0"`、`<1000→整数`、`>=1000→fmtTok`）；`fmtBytes` 留作未来 pendingBytes 显示。
+
+### Documentation
+
+- **`docs/LLM-INTERCEPT-DESIGN.md`（新）**：调研 B 裁决——LLM 调用层拦截在 CC 双进程架构下 4 种策略全部失效或极高风险（fetch monkey-patch / SDK middleware 跨进程不可见；HTTPS_PROXY+MITM 污染整机信任链 + 可能 cert-pin + 打断 CC 调用 + 触 ToS）。文档化路径 + 风险 + 4 个未来重启条件（CC 官方 streaming usage hook / SDK middleware / statusline final usage / 独立签名 companion binary）+ 4 个实施前必查项（CC 是否 honor HTTPS_PROXY / cert-pin / 代理延迟 / ToS）。
+- **`docs/STATES.md` §10**（新）：速率 + sparkline + sidecar + webview panel 的契约面（数据流图、采样算法、不变量、CSP、性能预算）。
+- **`README.md` / `README.en.md`** 同步：单位示例（B/T）、新 SBI 形态（含速率 + sparkline）、新菜单项（Show live rate chart）、新配置项（`rateDisplayMode`）。
+- **`CHANGELOG.md`** v0.3.0 条目（本条）。
+
+### Config
+
+- 新增 `ccStatusDot.rateDisplayMode`（enum `off|numeric|sparkline|both`，默认 `both`）：控制 token SBI 速率后缀呈现。`both` = `▂▄▆█ 1.2k/s`；`numeric` = `1.2k/s`；`sparkline` = `▂▄▆█`；`off` = 无后缀（perf 敏感机器或状态栏拥挤时降级）。
+
+### Architecture invariants preserved
+
+5 态点 / 4 灯 / permission blue / token SBI 既有 / Q1 跨重启持久 / Q2 interrupted sticky / PostCompact / v0.2.8 src/ 自愈 — **零冲突**。速率功能是 §G tick 内的纯加法（采样、推 buffer、拼字符串）+ 一个新 webview 命令，不改 state 渲染、不改 hook 契约、不改 `<sid>.json` / `<sid>.offset` / `<sid>.tokens.json` schema。
+
+### Tests
+
+- 新增 16 个 IIFE 测试（IIFE.133-149）：fmtTok B/T tier、trailing-zero strip、__ccsdRateSample 函数签名、RATE_BUF_CAP、sparkline chars、§G tick 调用采样、cfg.rateDisplayMode 读取、INPUT+OUTPUT 采样（lane D R2 invariant）、__ccsdRateSpark 渲染器、__ccsdRateFlush 原子写、__ccsdRateLoad 单次 sidecar 加载、QuickPick chart 项、showRateChart 函数、CSP strict、inline SVG 无外部库、单例 globalThis.__ccsdRateChart。
+- 更新 IIFE.21c（v0.2.9 → v0.3.0 banner）、IIFE.56（fmtTok label 反映新 tiers）、IIFE.66（setInterval count 2 → 3：加 chart-panel timer）。
+- 全套 654+ assertions 全绿（240 IIFE + 71 cc-status + 148 smoke + 34 patcher-io + 40 version-sync + 37 contract-sync + 14 standalone）。
+
+### Changed
+
+- `INJECT_VERSION` v0.2.9 → v0.3.0（IIFE body 变：fmtTok B/T + fmtRate/fmtBytes + __ccsdRateSample/Spark/Flush/Load + showRateChart + __ccsdRateChartHtml/Css/Js + 9 i18n 键 + §G tick 加采样 + chart QuickPick 项 + chart handler）。
+- `HOOK_VERSION` 保持 v0.2.1（writer IPC contract 未变——仅 GC 加 `.rate` 扩展，writer 本身不读写此文件；cc-status.js body 变 = 加 isRate GC 分支 + baseName 正则扩展 → banner hash 重盖 `4153997e → a8fe2726`）。
+- `companion/package.json` 0.2.7 → 0.3.0；`companion/extension.ts` `MIN_PATCHER_VERSION` 0.2.9 → 0.3.0 + `injectVersion()` fallback `v0.2.9 → v0.3.0`。
+
 ## [0.2.9] - 2026-07-21
 
 **修 /compact 误显红球（Q4）+ 三项证据驱动的性能 hygiene（Q5）。** Q4：用户报告 /compact 在长会话上短暂显红球且计入底部 🔴 SBI；调研定位 `/compact` 中止 in-flight turn 触发 StopFailure（唯一 interrupted writer）→ Q2 的 preserveInterrupted 让红 sticky 直到下个 UserPromptSubmit。Q5：四轮调研（CC 源码 + 项目代码 + 真实 fixture 实测）给出"插件本身不会卡 VSCode"的证据驱动结论，并修了 3 个测得的真实浪费点（~10 IPC/sec + 1.1ms/tick）。

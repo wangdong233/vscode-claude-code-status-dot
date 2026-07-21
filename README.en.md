@@ -27,13 +27,13 @@ When you've got several Claude Code sessions going in parallel — one coding, o
 
 <img src="docs/images/status-dots.png" width="640" alt="Five-state status dots on every CC session">
 
-*Every CC session's tab — in both the top tab bar and the left-side "Open Editors" view — shows its live state. 🟡 yellow = running, 🟢 green = done, 🔵 blue = awaiting your input (permission yield), 🔴 red = interrupted, ⚪ gray = idle.*
+_Every CC session's tab — in both the top tab bar and the left-side "Open Editors" view — shows its live state. 🟡 yellow = running, 🟢 green = done, 🔵 blue = awaiting your input (permission yield), 🔴 red = interrupted, ⚪ gray = idle._
 
 <br>
 
 <img src="docs/images/completion-notification.png" width="640" alt="Completion notification">
 
-*A native macOS notification drops the moment a turn ends — foreground or background, with sound, no buttons, auto-dismisses.*
+_A native macOS notification drops the moment a turn ends — foreground or background, with sound, no buttons, auto-dismisses._
 
 <br>
 
@@ -112,9 +112,12 @@ The bottom bar's 🔵 light ticks up and the tab turns blue the moment Claude Co
 A second status bar item on the **right side** of the status bar shows the token usage and (optional) USD cost estimate for the currently active CC panel:
 
 ```
-$(clock) 12.3k tok · $0.42
+$(clock) 12.3k tok ▂▄▆█ 1.2k/s · $0.42
 ```
 
+- **v0.3.0 new: instantaneous tok/s rate + unicode sparkline** — every 500ms tick samples input+output tokens (deliberately excludes cache_read/cache_creation; otherwise cache spikes produce meaningless multi-M tok/s readings). The last 8 samples (4s) render as an 8-block `▁▂▃▄▅▆▇█` mini-chart; the tok/s value comes from a 5-second sliding window. `ccStatusDot.rateDisplayMode` (`off|numeric|sparkline|both`, default `both`) controls the rendering; switch to `numeric` or `off` on a crowded status bar.
+- **v0.3.0 new: click the SBI → `$(graph) Show live rate chart`** — opens a webview panel with a dual-series chart (cumulative tokens line in blue + instantaneous tok/s bars in orange), pure-SVG with zero external libraries and a strict CSP `default-src 'none'`.
+- **v0.3.0 new: B/T units** — `fmtTok` extended from {k, M} to {k, M, B, T} 4-significant-figure adaptive formatting. 1.5B renders as "1.50B" instead of "1500.0M"; 796M renders as "796M" instead of "796.0M".
 - **Token grows in real time while CC is streaming** — it doesn't wait for the reply to finish; every tick reads the transcript tail for the delta. Tooltip stays static (no flicker, already optimized). On perf-sensitive machines you can disable `tokenLiveDeltaEnabled`.
 - **Default window is `all` (cumulative, never resets)** — pick from 5min / 10min / 1h / 24h / 3d / 7d / 30d / all. `all` is whole-session cumulative (monotonically grows at the session level, like a ledger that only goes up); `5min..30d` are rolling windows (old turns slide out when they expire, which can look like the count "resetting" — useful for "how much have I spent in the last X").
 - **Workflow subagent tokens are included** — tokens burned by background subagents / teammates are merged into the parent session's stats (what you paid for them won't be "invisible").
@@ -150,13 +153,13 @@ Every patch is preceded by a syntax check (we never ship a broken `extension.js`
 
 ## 🎨 Status colors
 
-| Color | Meaning | Trigger |
-|---|---|---|
-| 🟡 Yellow `#CCA700` (**static**, no animation) | Running | Prompt submitted, around tool calls (heartbeat), subagent spawn |
-| 🟢 Green `#3FB950` (static) | Turn done (not awaiting user) | CC fires `Stop` and the final reply is a neutral completion (`Done.` / `Shipped.`); **auto-turns gray after 5 min** |
-| 🔴 Red `#F85149` (fast flash) | Interrupted / errored | CC fires `StopFailure` (rate limit, overload, etc.) |
-| ⚪ Gray `#808080` (static) | Idle | Initial / done > 5 min ago / no state file |
-| 🔵 Blue `#58A6FF` (static) | Awaiting your input (two triggers) | (a) **CC pops an authorization dialog**: reader yields the icon to CC's native blue dot (**never overrides**); (b) **CC's final reply carries an "awaiting your decision" semantic** (`let me know` / `your call` / `please confirm` / `等你` / `你决定` etc.) → reader renders the blue `claude-logo-pending.svg` (overrides running-yellow / done-green). The bottom 🔵 light counts both triggers. |
+| Color                                          | Meaning                            | Trigger                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🟡 Yellow `#CCA700` (**static**, no animation) | Running                            | Prompt submitted, around tool calls (heartbeat), subagent spawn                                                                                                                                                                                                                                                                                                                                       |
+| 🟢 Green `#3FB950` (static)                    | Turn done (not awaiting user)      | CC fires `Stop` and the final reply is a neutral completion (`Done.` / `Shipped.`); **auto-turns gray after 5 min**                                                                                                                                                                                                                                                                                   |
+| 🔴 Red `#F85149` (fast flash)                  | Interrupted / errored              | CC fires `StopFailure` (rate limit, overload, etc.)                                                                                                                                                                                                                                                                                                                                                   |
+| ⚪ Gray `#808080` (static)                     | Idle                               | Initial / done > 5 min ago / no state file                                                                                                                                                                                                                                                                                                                                                            |
+| 🔵 Blue `#58A6FF` (static)                     | Awaiting your input (two triggers) | (a) **CC pops an authorization dialog**: reader yields the icon to CC's native blue dot (**never overrides**); (b) **CC's final reply carries an "awaiting your decision" semantic** (`let me know` / `your call` / `please confirm` / `等你` / `你决定` etc.) → reader renders the blue `claude-logo-pending.svg` (overrides running-yellow / done-green). The bottom 🔵 light counts both triggers. |
 
 > Running is a static yellow dot (no animation); interrupted flashes red as an alert. Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](docs/STATES.md).
 
@@ -217,15 +220,16 @@ A VSCode `WebviewPanel` tab icon (`iconPath`) is set **exclusively by the extens
 <details>
 <summary>📖 Command reference</summary>
 
-| Command | Effect |
-|---|---|
-| `npx vscode-claude-code-status-dot` | Install (patch extension.js + wire hooks, idempotent; auto-cleans leftover files from old versions) |
-| `npx vscode-claude-code-status-dot --revert` | Restore (from `.bak` + remove hooks + delete INSTALL_DIR, keeps user data) |
-| `npx vscode-claude-code-status-dot --status` | Dry-run report, changes nothing |
+| Command                                      | Effect                                                                                              |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `npx vscode-claude-code-status-dot`          | Install (patch extension.js + wire hooks, idempotent; auto-cleans leftover files from old versions) |
+| `npx vscode-claude-code-status-dot --revert` | Restore (from `.bak` + remove hooks + delete INSTALL_DIR, keeps user data)                          |
+| `npx vscode-claude-code-status-dot --status` | Dry-run report, changes nothing                                                                     |
 
 For dev, swap the command for `npx tsx patch.ts` (same flags).
 
 Or from source:
+
 ```bash
 git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
 cd vscode-claude-code-status-dot
@@ -277,17 +281,17 @@ Add to VSCode's `settings.json` (skip to keep defaults):
 }
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | Master notification switch |
-| `ccStatusDot.notifyWhenFocused` | `true` | Also fire the notification when VSCode is focused (notifications fire in both foreground and background by default; set `false` to mute while focused) |
-| `ccStatusDot.notifySound` | `"Glass"` | macOS notification sound (used for both done & interrupted; `""` for silent; options: Basso/Ping/Hero, etc.) |
-| `ccStatusDot.tokenStatsWindow` | `"all"` | Time window for the right-side token SBI. `all` = cumulative (whole session, never resets, default); `5min/10min/1h/24h/3d/7d/30d` = rolling windows (old turns slide out, which can look like the count "resetting"). |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | token SBI display mode: `token` (tokens only) / `cost` ($ only) / `both` (both) |
-| `ccStatusDot.tokenSbiVisible` | `true` | Show / hide the token SBI |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | During streaming, the IIFE reads the transcript tail every tick so token counts update between hook fires; set `false` on perf-sensitive machines |
-| `ccStatusDot.showCost` | `true` | Show `$` (unknown models auto-hide; requires a matching entry in `token-rates.json`) |
-| `ccStatusDot.warnThresholdUsd` | `0` | Cross-threshold cost notification (0 = disabled; positive number = USD threshold, fires once per crossing) |
+| Option                              | Default   | Description                                                                                                                                                                                                            |
+| ----------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.notify`                | `true`    | Master notification switch                                                                                                                                                                                             |
+| `ccStatusDot.notifyWhenFocused`     | `true`    | Also fire the notification when VSCode is focused (notifications fire in both foreground and background by default; set `false` to mute while focused)                                                                 |
+| `ccStatusDot.notifySound`           | `"Glass"` | macOS notification sound (used for both done & interrupted; `""` for silent; options: Basso/Ping/Hero, etc.)                                                                                                           |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`   | Time window for the right-side token SBI. `all` = cumulative (whole session, never resets, default); `5min/10min/1h/24h/3d/7d/30d` = rolling windows (old turns slide out, which can look like the count "resetting"). |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`  | token SBI display mode: `token` (tokens only) / `cost` ($ only) / `both` (both)                                                                                                                                        |
+| `ccStatusDot.tokenSbiVisible`       | `true`    | Show / hide the token SBI                                                                                                                                                                                              |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`    | During streaming, the IIFE reads the transcript tail every tick so token counts update between hook fires; set `false` on perf-sensitive machines                                                                      |
+| `ccStatusDot.showCost`              | `true`    | Show `$` (unknown models auto-hide; requires a matching entry in `token-rates.json`)                                                                                                                                   |
+| `ccStatusDot.warnThresholdUsd`      | `0`       | Cross-threshold cost notification (0 = disabled; positive number = USD threshold, fires once per crossing)                                                                                                             |
 
 > **Custom model pricing**: `~/.claude/cc-status-dot/token-rates.json` is a hot-reload pricing table — by default it covers Anthropic's official prices; unmatched models like GLM auto-hide the `$`. Add a glob to display `$` for them:
 
@@ -295,7 +299,7 @@ Add to VSCode's `settings.json` (skip to keep defaults):
 {
   "_default": null,
   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
-  "glm-*":           { "in": 0.5, "out": 1.5 }
+  "glm-*": { "in": 0.5, "out": 1.5 },
 }
 ```
 
@@ -317,6 +321,7 @@ Likely you interrupted CC with Esc (CC doesn't fire Stop/StopFailure, so no hook
 
 **`npx` can't connect?**
 Fall back to a global install:
+
 ```bash
 npm i -g vscode-claude-code-status-dot
 vscode-claude-code-status-dot        # run the command directly after install
@@ -331,7 +336,7 @@ vscode-claude-code-status-dot        # run the command directly after install
 - **Minified anchor fragility**: the patch depends on two exact strings in CC's code; on version drift the patcher reports "Anchor mismatch" and refuses to write (the extension is not damaged).
 - **No notification when VSCode is fully closed**: the IIFE runs in the extension host process; if VSCode is closed it doesn't run → no notification.
 - **System notification click doesn't jump to tab**: osascript has no click callback; the notification only reminds — locate the session via the tab green/red dot back in VSCode.
-- **SBI priority namespace not owned**: the bottom status bar item sits at a single priority (`-9996`). The VSCode StatusBarItem API has no extension-level namespace/ownership — another extension declaring the same priority could push our item to a corner. Because the whole 4-light row is one SBI, an external insertion can only land on the side, never *between* the four lights. Rare in practice; documented honestly in STATES.md §7.5.
+- **SBI priority namespace not owned**: the bottom status bar item sits at a single priority (`-9996`). The VSCode StatusBarItem API has no extension-level namespace/ownership — another extension declaring the same priority could push our item to a corner. Because the whole 4-light row is one SBI, an external insertion can only land on the side, never _between_ the four lights. Rare in practice; documented honestly in STATES.md §7.5.
 - **Emoji font-stack dependency**: the bottom status bar dots are emoji glyphs (🟢🟡🔵🔴⚪) that depend on the system emoji font stack — macOS (Apple Color Emoji) / Windows 10+ (Segoe UI Emoji) / mainstream Linux (Noto Color Emoji) render them in color; Win7 / some headless Linux / emoji-font-less remote SSH environments may render them as monochrome glyphs or tofu boxes. A deliberate tradeoff (user aesthetic preference > cross-platform uniformity).
 
 ---
@@ -354,10 +359,9 @@ If vscode-claude-code-status-dot helps you, consider buying the author a coffee 
 
 <div align="center">
 
-WeChat | Alipay
-:-: | :-:
-<img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay">
-
+|                                WeChat                                |                                Alipay                                |
+| :------------------------------------------------------------------: | :------------------------------------------------------------------: |
+| <img src="docs/images/support-wechat.jpg" height="200" alt="WeChat"> | <img src="docs/images/support-alipay.jpg" height="200" alt="Alipay"> |
 
 </div>
 

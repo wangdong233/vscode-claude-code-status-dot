@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.0:11170198*/
+/*cc-status-dot-hook:v0.2.1:564ac28b*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -176,7 +176,15 @@ const DELETE = Symbol('delete');
 // edit hits both sites in lockstep. The test-iife.mjs IIFE.37c regex + the
 // §INTERRUPTED-RETENTION test in test-cc-status.js both pin the literal value,
 // catching drift at CI time.
-const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000;
+// v0.2.7 (Q2 interrupted sticky): extended from 24h to 7d. User report
+// "interrupted 红色自己消了" had a 24h decay as one of three suspects — the
+// prior 24h window was borderline for cross-day workflows. 7d keeps the 🔴
+// light sticky for "is the issue still open this week?" while still bounding
+// disk residue from abandoned crashes (research warned unbounded growth if
+// cancelled entirely). Mirrors GC_DRIFT_SINCE_MS for a single coherent "stale
+// terminal session" horizon on both the interrupted-preservation path (§7.5)
+// and the drift-prune path (§7.5 contract).
+const INTERRUPTED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 // v0.2.6 round-3 MEDIUM (regression §7.5 contract): drifted inflight .json
 // files (Stop payload inflight=1 drift + cc-status.js:390-401 preserveSince
@@ -621,6 +629,21 @@ function deriveStatus(payload, cur) {
       const curState =
         cur && (cur.state === 'running' || cur.state === 'done' || cur.state === 'interrupted') ? cur.state : 'running';
       const preserveSince = stayRunning && curState === 'running' && typeof cur.since === 'number' && cur.since > 0;
+      // v0.2.7 (Q2 interrupted sticky): when the session is ALREADY interrupted
+      // (StopFailure wrote {state:'interrupted', error:...} earlier in this same
+      // turn), a subsequent Stop MUST NOT overwrite it with done. The user's
+      // semantic is "interrupted stays red until I send a new prompt" — only
+      // UserPromptSubmit clears red (genuine session continuation). CC's anti-
+      // loop gate / stop_hook_active / delayed Stop from the failed turn would
+      // otherwise silently clear the 🔴 light the moment the user looks away.
+      // Mirrors SubagentStop's curState==='interrupted' && next===0 preserve
+      // rule (cc-status.js:527-531) for symmetry. inflight>0 still allows the
+      // terminal→running transition because a live subagent genuinely un-blocks
+      // the turn (rare path; reader shows 🟡 yellow instead of 🔴 red — correct
+      // because the user can now see "the workflow is making progress"). Also
+      // preserve cur.error to surface the specific failure reason in §4b
+      // (mirrors SubagentStop preserveError cc-status.js:541).
+      const preserveInterrupted = curState === 'interrupted' && !stayRunning;
       // v0.2.6 blue-via-content: if Claude's final reply clearly awaits user
       // input/decision/feedback ("等你测试反馈" / "let me know" / "please
       // confirm" / short standalone question to user), write pending:true so
@@ -632,11 +655,22 @@ function deriveStatus(payload, cur) {
       // Stuck-running scenario (luceo): stayRunning=true (background_tasks
       // drift) + message "等你测试反馈" → state='running' AND pending=true →
       // reader tick renders blue (pending branch wins over running yellow).
+      // v0.2.7: pending is suppressed on preserveInterrupted — interrupted
+      // already dominates pending for SBI counting (§7 aggregation decays
+      // interrupted→idle but does NOT promote interrupted→pending), so a blue
+      // dot on top of a red one would mislead. Keep the red sticky.
       const lam = typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : '';
-      const awaitsUser = !payload.stop_hook_active && !!lam && lastMessageRequestsUserInput(lam);
+      const awaitsUser =
+        !preserveInterrupted && !payload.stop_hook_active && !!lam && lastMessageRequestsUserInput(lam);
       return {
-        state: stayRunning ? 'running' : 'done',
-        since: preserveSince ? cur.since : now,
+        state: preserveInterrupted ? 'interrupted' : stayRunning ? 'running' : 'done',
+        since:
+          preserveInterrupted && cur && typeof cur.since === 'number' && cur.since > 0
+            ? cur.since
+            : preserveSince
+              ? cur.since
+              : now,
+        ...(preserveInterrupted && cur && typeof cur.error === 'string' && cur.error ? { error: cur.error } : {}),
         activeSubagents: inflight != null ? inflight : 0,
         pending: awaitsUser,
       };
@@ -675,7 +709,22 @@ function deriveStatus(payload, cur) {
       };
 
     // Session is over: clean up its status file.
+    // v0.2.7 (Q2 interrupted sticky): when the session is in the interrupted
+    // state (StopFailure wrote it earlier), SessionEnd MUST NOT delete the
+    // file — research noted interrupted is mostly a CRASH path (no SessionEnd
+    // fires), but defensive preservation closes the gap for the case where CC
+    // sends both StopFailure AND SessionEnd (e.g. forced exit mid-failure).
+    // The user semantic: interrupted stays 🔴 red until they send a new prompt
+    // (UserPromptSubmit → running, session continues). Deleting here would
+    // silently clear the red the moment CC's session-close event arrives,
+    // defeating the sticky contract. Returning null (instead of DELETE) keeps
+    // the existing <sid>.json on disk untouched; the reader keeps rendering 🔴
+    // for the full INTERRUPTED_RETENTION_MS (7d) window. Any other state
+    // (running/done/pending) still goes through the normal DELETE cleanup.
     case 'SessionEnd':
+      if (cur && cur.state === 'interrupted') {
+        return null;
+      }
       return DELETE;
 
     default:
@@ -696,6 +745,16 @@ function deriveStatus(payload, cur) {
 
 const TOK_OFFSET_EXT = '.offset';
 const TOK_FORCEREREAD_EXT = '.forcereread'; // QuickPick "Reset session stats" marker
+// v0.2.7 (Q1 fix): independent token-snapshot file for the IIFE reader. The
+// hook writes <sid>.tokens.json on every TOK_EVENT fire alongside <sid>.json,
+// carrying the SAME tokens field deriveTokensField produced + a thin envelope
+// (v/sid/since/cwd/transcript_path/written_at) so the IIFE can render a
+// non-zero token count IMMEDIATELY after a VSCode restart (SessionStart) —
+// without it, SessionEnd deletes <sid>.json (the only place tokens used to
+// live), SessionStart writes a fresh <sid>.json with no tokens, and the SBI
+// reads 0 until the next TOK_EVENT fire pre-warms the 256KB tail (giving only
+// tail-slice totals, not cumulative). See STATES.md §8.7 v0.2.7 update.
+const TOK_TOKENS_EXT = '.tokens.json';
 const TOK_BUCKETS_MAX = 1000;
 const TOK_TURNS_MAX = 400;
 const TOK_BUCKET_MS = 5 * 60 * 1000; // 5min folding window (first progressive stage)
@@ -2004,35 +2063,59 @@ async function main() {
         let unlinked = 0;
         for (const name of fs.readdirSync(STATE_DIR)) {
           if (unlinked >= GC_MAX_UNLINKS) break;
-          const isJson = name.endsWith('.json');
-          const isTmp = !isJson && name.endsWith('.tmp');
+          // v0.2.7 (Q1 fix): isTokens MUST be tested BEFORE isJson — the file
+          // `<sid>.tokens.json` ends with `.json` so the bare isJson check would
+          // otherwise match it, then JSON.parse would treat it as a state file
+          // (no .state field → fall through to prune, accidentally reaping the
+          // very snapshot we just wrote). The strict order isTokens → isJson →
+          // isTmp → isOffset → isForceReread is now load-bearing; the
+          // §GC.Q1.isTokensOrder test pins it. Mirrors the priority discipline
+          // already in place for isOffset vs isJson (a path that ends in BOTH
+          // .offset and would otherwise be mis-classified).
+          const isTokens = name.endsWith(TOK_TOKENS_EXT);
+          const isJson = !isTokens && name.endsWith('.json');
+          const isTmp = !isTokens && !isJson && name.endsWith('.tmp');
           // v0.2.4: also reap stale token sidecars `<sid>.offset` whose
           // matching `.json` is being pruned (interrupted-preservation still
           // honors the .json parse and skips interrupted → the .offset for an
           // interrupted session is also kept so the user can re-inspect totals
-          // after a crash). A stale .offset whose .json was deleted (by a
-          // prior GC pass for an interrupted-then-old session, or by the user)
-          // is reaped when its mtime exceeds INTERRUPTED_RETENTION_MS.
+          // after a crash).
+          // v0.2.7 (Q1 fix): .offset GC changed to PURE mtime rule. The prior
+          // "look up matching .json; reap if .json is gone/stale" rule was
+          // correct PRE-Q1 (when SessionEnd deleted both .json AND .offset
+          // atomically). Post-Q1, SessionEnd deletes ONLY .json — .offset is
+          // intentionally preserved across restart so the next resume picks up
+          // the cumulative read cursor. The old rule would now see "no .json"
+          // immediately after SessionEnd and reap the .offset as an "orphan",
+          // destroying the cumulative state we just fought to keep. Pure mtime
+          // closes the gap: reap .offset only when staler than
+          // INTERRUPTED_RETENTION_MS (now 7d), regardless of .json presence.
+          // This matches .forcereread / .tokens.json's mtime-only contract.
           // v0.2.4 critical-fix follow-up: also reap orphan `<sid>.forcereread`
           // markers (QuickPick "Reset session stats" writes one; if the user
           // resets then closes CC before the next hook fire consumes it, the
           // marker would otherwise linger forever). Same mtime rule as .offset.
-          const isOffset = !isJson && !isTmp && name.endsWith('.offset');
-          const isForceReread = !isJson && !isTmp && !isOffset && name.endsWith(TOK_FORCEREREAD_EXT);
+          const isOffset = !isTokens && !isJson && !isTmp && name.endsWith('.offset');
+          const isForceReread = !isTokens && !isJson && !isTmp && !isOffset && name.endsWith(TOK_FORCEREREAD_EXT);
           // v0.2.4 round-2 (data-logic LOW): the prior `if (name === '.gc')
           // continue;` was unreachable dead code — `.gc` does not end with
           // .json/.tmp/.offset/.forcereread, so the line above already
           // `continue`s past it. Even `.gc.json` / `.gc.tmp` would not match
           // the strict `name === '.gc'` equality check. Removed: the suffix
           // filter is the authoritative gate.
-          if (!isJson && !isTmp && !isOffset && !isForceReread) continue;
+          if (!isTokens && !isJson && !isTmp && !isOffset && !isForceReread) continue;
           const p = path.join(STATE_DIR, name);
           // v0.2.4: also skip the current session's .offset sidecar AND
           // .forcereread marker (we may be about to consume/re-write either).
           // The skip check uses the basename without extension so all of
-          // `<sid>.json` / `<sid>.offset` / `<sid>.forcereread` map to the
-          // same logical session.
-          const baseName = name.replace(/\.(json|offset|forcereread|tmp)$/, '');
+          // `<sid>.json` / `<sid>.offset` / `<sid>.forcereread` /
+          // `<sid>.tokens.json` map to the same logical session.
+          // v0.2.7: regex now also strips the `.tokens.json` suffix — note the
+          // .tokens.json branch must be greedy over `.json` (regex alternation
+          // tries left-to-right, so .tokens.json|json ordering matters: the
+          // alternation below lists .tokens.json BEFORE .json so a full match
+          // strips both extensions and leaves the bare sid).
+          const baseName = name.replace(/\.(tokens\.json|json|offset|forcereread|tmp)$/, '');
           const currentBase = sid;
           if (baseName === currentBase) continue; // never prune the file we're about to write OR its sidecars
           try {
@@ -2042,7 +2125,14 @@ async function main() {
             } catch {
               continue; // stat failed — best-effort skip
             }
-            if (isJson) {
+            if (isTokens) {
+              // v0.2.7 (Q1 fix): <sid>.tokens.json GC = pure mtime rule.
+              // SessionEnd intentionally preserves this file (it carries the
+              // token snapshot the IIFE needs to render non-zero on first
+              // post-restart tick). Reap only when staler than
+              // INTERRUPTED_RETENTION_MS (now 7d). Mirrors .offset / .forcereread.
+              if (st.mtimeMs >= cutoff) continue;
+            } else if (isJson) {
               // v0.2.6 round-3 MEDIUM fix (regression §7.5 contract): a drifted
               // Stop payload (inflight=1 drift + cc-status.js:390-401 preserveSince
               // keeps cur.since old + writeJsonAtomic refreshes mtime fresh on
@@ -2085,31 +2175,22 @@ async function main() {
                 /* re-stat failed — best-effort proceed to unlink */
               }
             } else if (isOffset) {
-              // .offset GC: reap only if (a) older than INTERRUPTED_RETENTION_MS
-              // AND (b) the matching .json is gone OR also stale. We keep the
-              // .offset for any session whose .json is still fresh or
-              // interrupted-preserved (matches the .json prune contract).
+              // v0.2.7 (Q1 fix): .offset GC now PURE mtime. Pre-Q1 the rule
+              // was "reap if older than cutoff AND matching .json is gone or
+              // also stale" — correct when SessionEnd deleted both atomically,
+              // but Q1 makes SessionEnd delete ONLY .json (preserving .offset
+              // for the next resume's cumulative cursor). Under the old rule,
+              // a post-SessionEnd orphan .offset would be reaped IMMEDIATELY
+              // (no .json present), wiping the cumulative state we just kept
+              // — a regression. Pure mtime closes the gap and unifies with
+              // .tokens.json / .forcereread (all three are post-SessionEnd
+              // survivors, all three reap on mtime only).
               if (st.mtimeMs >= cutoff) continue;
-              const jsonBase = p.slice(0, -TOK_OFFSET_EXT.length) + '.json';
-              try {
-                const jst = fs.statSync(jsonBase);
-                // .json exists — only reap .offset if .json is also stale AND
-                // not interrupted-preserved.
-                if (jst.mtimeMs >= cutoff) continue;
-                try {
-                  const jp = JSON.parse(fs.readFileSync(jsonBase, 'utf8'));
-                  if (jp && jp.state === 'interrupted') continue;
-                } catch {
-                  /* fall through to prune */
-                }
-              } catch {
-                /* .json gone — fall through to prune the orphan .offset */
-              }
             } else if (isForceReread) {
               // .forcereread marker GC: same mtime rule as .offset. These are
               // tiny marker files written by QuickPick reset; if the user
               // resets then closes CC before the next hook fire consumes the
-              // marker, it lingers — reap on the same 24h schedule.
+              // marker, it lingers — reap on the same 7d schedule.
               if (st.mtimeMs >= cutoff) continue;
             } else {
               // .tmp orphan: reap only if older than GC_TMP_AGE_MS (a legitimate
@@ -2213,21 +2294,39 @@ async function main() {
     } catch {
       /* file already absent — nothing to clean up */
     }
-    // v0.2.4: SessionEnd also removes the token offset sidecar so it doesn't
-    // leak after a clean session exit. (Crashed sessions skip SessionEnd, so
-    // the .offset is reclaimed by the UserPromptSubmit GC sweep above on the
-    // next prompt — v0.2.4 code-style LOW fix: direction word was "below"
-    // pre-fix, but the GC sweep is defined ~150 lines ABOVE this block, not
-    // below. The literal direction is now correct.)
+    // v0.2.7 (Q1 fix): SessionEnd no longer removes <sid>.offset — research
+    // confirmed it was the root cause of tokens loss across VSCode restart:
+    // SessionEnd → DELETE → unlinkSync(.offset) wipes the cumulative read
+    // cursor (totals/buckets/perTurn/subOffsets); on resume, the next TOK_EVENT
+    // fire sees no sidecar → readTranscriptIncremental starts at offset=0 →
+    // first-fire tail pre-warm reads only the trailing 256KB (TOK_TAIL_PRESET_BYTES)
+    // → the "all" window's cumulative totals are permanently under-counted
+    // (only tail rows; non-tail rows are never backfilled because tailWarmed
+    // is also gone). patch.ts:267-272 already documented this exact bug class
+    // for the QuickPick "Reset session stats" path ("deleting it zeroed
+    // ctx.buckets on the next fire... already-merged subagent tokens...
+    // permanently lost"). SessionEnd walked the same dead path; we close it
+    // now. The .offset stays on disk and is reclaimed by the GC sweep on the
+    // mtime rule (see the isOffset branch below). <sid>.tokens.json (the Q1
+    // display snapshot) is likewise preserved — see writeJsonAtomic(<sid>.json)
+    // below where the tokens snapshot is written each fire.
+    //
+    // v0.2.4 historical note: the original "SessionEnd also removes the token
+    // offset sidecar so it doesn't leak after a clean session exit" comment
+    // was correct about leakage but wrong about timing — the GC sweep already
+    // reaps stale .offset/.tokens.json after INTERRUPTED_RETENTION_MS (now 7d,
+    // see the UserPromptSubmit GC branch), so explicit deletion at SessionEnd
+    // was redundant AND destroyed the cumulative state needed for the very
+    // next resume. The GC path is the single source of truth now.
+    //
     // NOTE: the sidecar path is <sid>.offset (NOT <sid>.json.offset). filePath
     // ends in ".json" so we can't append TOK_OFFSET_EXT to it — build from sid.
-    try {
-      fs.unlinkSync(path.join(STATE_DIR, sid + TOK_OFFSET_EXT));
-    } catch {
-      /* offset already absent — fine */
-    }
     // Also remove any orphan <sid>.forcereread marker (QuickPick reset may
-    // have written one and the user closed the session before it fired).
+    // have written one and the user closed the session before it fired). The
+    // marker is a one-shot instruction (consumed on the next fire or dropped
+    // when the session ends), so deletion here is correct — but the .tokens
+    // snapshot is NOT a one-shot and MUST survive (the next resume reads it
+    // immediately on the first tick before any TOK_EVENT fire).
     try {
       fs.unlinkSync(path.join(STATE_DIR, sid + TOK_FORCEREREAD_EXT));
     } catch {
@@ -2402,6 +2501,38 @@ async function main() {
     writeJsonAtomic(filePath, status);
   } catch {
     /* ignore */
+  }
+  // v0.2.7 (Q1 fix): write an INDEPENDENT token-snapshot file so the IIFE
+  // reader can render a non-zero token count IMMEDIATELY after a VSCode
+  // restart (SessionStart) — before any TOK_EVENT fire. <sid>.json is the
+  // TRANSIENT state carrier (deleted by SessionEnd), so tokens living only
+  // inside it would zero on every restart. <sid>.tokens.json survives
+  // SessionEnd (only the GC sweep reclaims it after INTERRUPTED_RETENTION_MS=
+  // 7d of staleness — see the UserPromptSubmit GC branch). The snapshot
+  // mirrors status.tokens VERBATIM (deriveTokensField output — no separate
+  // schema to invent) and adds a thin envelope for IIFE freshness display +
+  // cross-restart jsonl location. v:1 is the schema anchor for future
+  // migrations. Written AFTER <sid>.json so SIGKILL between the two leaves
+  // the worst case as "new state + stale tokens" (one tick of stale display,
+  // 500ms self-heal on next fire) — NOT "new tokens + stale state" which
+  // would lie about state to the reader. Both writes use writeJsonAtomic
+  // (tmp + rename) so each is individually atomic.
+  if (status.tokens && typeof status.tokens === 'object') {
+    try {
+      const tokensPath = path.join(STATE_DIR, sid + TOK_TOKENS_EXT);
+      const snap = {
+        v: 1,
+        sid: sid,
+        since: typeof status.since === 'number' && Number.isFinite(status.since) ? status.since : 0,
+        cwd: typeof status.cwd === 'string' ? status.cwd : undefined,
+        transcript_path: typeof status.transcript_path === 'string' ? status.transcript_path : undefined,
+        tokens: status.tokens,
+        written_at: Date.now(),
+      };
+      writeJsonAtomic(tokensPath, snap);
+    } catch {
+      /* snapshot failure must not abort — primary state already written */
+    }
   }
 
   process.exit(0);

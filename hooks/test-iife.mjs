@@ -333,7 +333,8 @@ check(
 // v0.1.17 banner specifically: locks the single-SBI compact-concat pivot
 // (a regression that rolled back to v0.1.16 4-SBI would surface here
 // before any SBI assertion fires).
-check('IIFE.21c banner carries v0.2.6 stamp', /\/\*cc-status-dot-injected:v0\.2\.6:/.test(iife));
+// v0.2.7: stamp bumped for Q1 (tokens persistence) + Q2 (interrupted sticky).
+check('IIFE.21c banner carries v0.2.7 stamp', /\/\*cc-status-dot-injected:v0\.2\.7:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -916,26 +917,33 @@ check(
   /var\s+SBI_RUNNING_STALE_MS\s*=\s*(?:30\s*\*\s*60\s*\*\s*1000|1800000)/.test(iife),
 );
 // v0.1.13/v0.1.14 interrupted retention (architecture-review fix): interrupted
-// files older than 24h decay to idle so the 🔴 red light doesn't monotonically
-// grow from accumulated abandoned interrupted sessions (crashed/killed CC
-// never sends SessionEnd). File is NOT deleted — only the count drops.
+// files older than the retention threshold decay to idle so the 🔴 red light
+// doesn't monotonically grow from accumulated abandoned interrupted sessions
+// (crashed/killed CC never sends SessionEnd). File is NOT deleted — only the
+// count drops.
 // v0.2.5 round-2 (ARCH-6): INTERRUPTED_RETENTION_MS is template-substituted
 // from the patch.ts top-level const, so accept the computed numeric form
-// (`var INTERRUPTED_RETENTION_MS=86400000;`) OR the prior expression form.
+// OR the prior expression form.
+// v0.2.7 (Q2 interrupted sticky): extended 24h → 7d to keep the 🔴 sticky
+// across cross-day workflows. Accept either 24h or 7d so a future revert
+// (e.g. user feedback "7d too long, want shorter") only needs to update the
+// value without rewriting this test's regex; the load-bearing invariant is
+// "the IIFE bytes bake the constant" — the actual value is also pinned by
+// test-contract-sync.mjs (cross-file equality with cc-status.js).
 check(
-  'IIFE.37c SBI INTERRUPTED_RETENTION_MS constant (24h decay for 🔴)',
-  /var\s+INTERRUPTED_RETENTION_MS\s*=\s*(?:24\s*\*\s*60\s*\*\s*60\s*\*\s*1000|86400000)/.test(iife),
+  'IIFE.37c SBI INTERRUPTED_RETENTION_MS constant (decay for 🔴, v0.2.7=7d)',
+  /var\s+INTERRUPTED_RETENTION_MS\s*=\s*(?:7\s*\*\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000|604800000)/.test(iife),
 );
 // v0.2.4 follow-up (round-2 data-logic fix): the decay used to key off mtime,
 // but orphan SubagentStop / Notification writes on an interrupted parent
 // refresh the file's mtime while preserving since (see cc-status.js
 // SubagentStop preserveSince + Notification preserveError paths) — under
-// orphan activity the 24h clock never elapsed. The decay now keys off
+// orphan activity the retention clock never elapsed. The decay now keys off
 // `since` (the terminal timestamp set by StopFailure), mirroring the
 // done>5min branch one block up. Lock the since-based form so a regression
 // reverting to mtime (and the silent 🔴-grows-forever bug) would surface.
 check(
-  'IIFE.37d SBI interrupted>24h since decay →idle (bounds 🔴 growth, orphan-write-proof)',
+  'IIFE.37d SBI interrupted>retention since decay →idle (bounds 🔴 growth, orphan-write-proof)',
   /else if\s*\(\s*st\s*===\s*"interrupted"\s*&&\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*INTERRUPTED_RETENTION_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}/.test(
     iife,
   ),
@@ -1207,7 +1215,7 @@ check(
 // had a content hash.
 {
   const HOOK_SRC = path.join(ROOT, 'hooks', 'cc-status.js');
-  const SRC_HOOK_VERSION = 'v0.2.0'; // mirror HOOK_VERSION in patch.ts
+  const SRC_HOOK_VERSION = 'v0.2.1'; // mirror HOOK_VERSION in patch.ts (v0.2.7 bump)
   const HOOK_HASH_LEN = 8;
   let hookSrc = '';
   try {
@@ -2178,6 +2186,156 @@ check(
     // Length parity: 5 svgs (idle / running / done / error / pending).
     const count = (m[1].match(/"claude-logo-/g) || []).length;
     check('IIFE.117 OUR_SVGS contains 5 entries (added pending to the 4)', count === 5, 'count=' + count);
+  }
+}
+
+// v0.2.7 Q1 (tokens persistence): readTok three-tier fallback — extract the
+// function from the baked IIFE and behaviorally test that <sid>.tokens.json
+// is preferred over <sid>.json, and that <sid>.json is used when the snapshot
+// is absent. Mirrors the IIFE.97-109 computeLiveDelta behavioral extraction
+// harness (new Function with fs/pth/os/Buffer/Number/JSON/DIR injected).
+{
+  const fnStart = iife.indexOf('function readTok(');
+  if (fnStart < 0) {
+    check('IIFE.118 readTok extractable for behavioral test (v0.2.7 Q1)', false);
+  } else {
+    // Brace-balanced extraction of the function body.
+    let depth = 0;
+    let i = iife.indexOf('{', fnStart);
+    depth = 1;
+    i += 1;
+    while (i < iife.length && depth > 0) {
+      const c = iife[i];
+      if (c === '{') depth += 1;
+      else if (c === '}') depth -= 1;
+      i += 1;
+    }
+    const fnSrc = iife.slice(fnStart, i);
+    check('IIFE.118 readTok extractable for behavioral test (v0.2.7 Q1)', fnSrc.length > 80);
+
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccsd-readtok-'));
+    const shimOs = { ...os, homedir: () => tmpHome };
+    const stateDir = path.join(tmpHome, '.claude', 'cc-tab-status');
+    fs.mkdirSync(stateDir, { recursive: true });
+    let fn = null;
+    try {
+      // eslint-disable-next-line no-new-func
+      fn = new Function('fs', 'pth', 'os', 'JSON', 'globalThis', 'DIR', 'return ' + fnSrc)(
+        fs,
+        path,
+        shimOs,
+        JSON,
+        globalThis,
+        stateDir,
+      );
+      check('IIFE.119 readTok compiles via new Function (v0.2.7 Q1 harness)', true);
+    } catch (e) {
+      check('IIFE.119 readTok compiles via new Function (v0.2.7 Q1 harness)', false, e.message);
+    }
+
+    if (fn) {
+      // IIFE.120: when only <sid>.tokens.json exists (post-SessionEnd state),
+      // readTok returns its tokens + envelope. This is the load-bearing
+      // assertion for the Q1 0-window fix.
+      const SID_A = 'q1-snap-only';
+      const snapA = {
+        v: 1,
+        sid: SID_A,
+        since: 1700000000000,
+        cwd: '/proj-A',
+        transcript_path: '/path/A.jsonl',
+        tokens: { total: { in: 777, out: 888, cr: 0, cc5: 0, cc1: 0, cci: 0 }, windows: {} },
+        written_at: 1700000001000,
+      };
+      fs.writeFileSync(path.join(stateDir, SID_A + '.tokens.json'), JSON.stringify(snapA));
+      globalThis.__ccsdActiveSid = SID_A;
+      try {
+        const got = fn();
+        const ok = got && got.tokens && got.tokens.total && got.tokens.total.in === 777 && got.sid === SID_A;
+        check('IIFE.120 readTok prefers <sid>.tokens.json when only snapshot exists (Q1 0-window fix)', ok);
+      } catch (e) {
+        check(
+          'IIFE.120 readTok prefers <sid>.tokens.json when only snapshot exists (Q1 0-window fix)',
+          false,
+          e.message,
+        );
+      }
+
+      // IIFE.121: when BOTH <sid>.tokens.json AND <sid>.json exist, the
+      // snapshot is still preferred (it survived SessionEnd; the in-flight
+      // .json may be stale from SessionStart's no-tokens write). Wait —
+      // actually the design is: snapshot is freshest cumulative, .json is
+      // for active sessions where the in-flight fire just updated tokens.
+      // The current implementation tries snapshot FIRST and returns if it has
+      // tokens — so when both exist, snapshot wins. Pin that.
+      const SID_B = 'q1-both-exist';
+      const snapB = {
+        v: 1,
+        sid: SID_B,
+        tokens: { total: { in: 111, out: 0, cr: 0, cc5: 0, cc1: 0, cci: 0 }, windows: {} },
+      };
+      const jsonB = { state: 'running', tokens: { total: { in: 222, out: 0, cr: 0, cc5: 0, cc1: 0, cci: 0 } } };
+      fs.writeFileSync(path.join(stateDir, SID_B + '.tokens.json'), JSON.stringify(snapB));
+      fs.writeFileSync(path.join(stateDir, SID_B + '.json'), JSON.stringify(jsonB));
+      globalThis.__ccsdActiveSid = SID_B;
+      try {
+        const got = fn();
+        // Snapshot wins (in=111 from .tokens.json, not in=222 from .json).
+        const ok = got && got.tokens && got.tokens.total && got.tokens.total.in === 111;
+        check('IIFE.121 readTok prefers <sid>.tokens.json when both files exist (snapshot wins)', ok);
+      } catch (e) {
+        check('IIFE.121 readTok prefers <sid>.tokens.json when both files exist (snapshot wins)', false, e.message);
+      }
+
+      // IIFE.122: when only <sid>.json exists (pre-v0.2.7 install OR active
+      // session where snapshot write hasn't fired yet), readTok falls back
+      // to .json. Pin the legacy-compat fallback.
+      const SID_C = 'q1-json-only';
+      const jsonC = { state: 'running', tokens: { total: { in: 333, out: 0, cr: 0, cc5: 0, cc1: 0, cci: 0 } } };
+      fs.writeFileSync(path.join(stateDir, SID_C + '.json'), JSON.stringify(jsonC));
+      globalThis.__ccsdActiveSid = SID_C;
+      try {
+        const got = fn();
+        const ok = got && got.tokens && got.tokens.total && got.tokens.total.in === 333;
+        check('IIFE.122 readTok falls back to <sid>.json when snapshot absent (legacy compat)', ok);
+      } catch (e) {
+        check('IIFE.122 readTok falls back to <sid>.json when snapshot absent (legacy compat)', false, e.message);
+      }
+
+      // IIFE.123: when NEITHER exists (truly fresh session), readTok returns
+      // null. Pin the null fallback so the §E QuickPick + §G tick can detect
+      // "no data" and render the placeholder.
+      const SID_D = 'q1-neither';
+      globalThis.__ccsdActiveSid = SID_D;
+      try {
+        const got = fn();
+        check('IIFE.123 readTok returns null when neither file exists', got === null);
+      } catch (e) {
+        check('IIFE.123 readTok returns null when neither file exists', false, e.message);
+      }
+
+      // IIFE.124: when <sid>.tokens.json exists but has NO tokens field
+      // (corrupt/partial), readTok must fall back to <sid>.json. Pin the
+      // "snapshot present but invalid → fall through" path.
+      const SID_E = 'q1-snap-no-tokens';
+      fs.writeFileSync(path.join(stateDir, SID_E + '.tokens.json'), JSON.stringify({ v: 1, sid: SID_E }));
+      fs.writeFileSync(
+        path.join(stateDir, SID_E + '.json'),
+        JSON.stringify({ state: 'running', tokens: { total: { in: 444, out: 0, cr: 0, cc5: 0, cc1: 0, cci: 0 } } }),
+      );
+      globalThis.__ccsdActiveSid = SID_E;
+      try {
+        const got = fn();
+        const ok = got && got.tokens && got.tokens.total && got.tokens.total.in === 444;
+        check('IIFE.124 readTok falls back to <sid>.json when snapshot has no tokens field', ok);
+      } catch (e) {
+        check('IIFE.124 readTok falls back to <sid>.json when snapshot has no tokens field', false, e.message);
+      }
+
+      // Cleanup: clear the active sid so subsequent sections don't see a
+      // leftover value (this is globalThis-pinned across the test process).
+      globalThis.__ccsdActiveSid = undefined;
+    }
   }
 }
 

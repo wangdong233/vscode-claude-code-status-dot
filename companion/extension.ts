@@ -84,7 +84,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.2.6";
+const MIN_PATCHER_VERSION = "0.2.7";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -139,11 +139,11 @@ function injectMarker(): string {
     return effectiveConfig?.injectMarker ?? "cc-status-dot-injected";
 }
 
-/** Expected IIFE version stamp. Falls back to the v0.2.6 hardcoded value if
+/** Expected IIFE version stamp. Falls back to the v0.2.7 hardcoded value if
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.2.6";
+    return effectiveConfig?.injectVersion ?? "v0.2.7";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -309,9 +309,7 @@ type CmpVerStr = (a: string, b: string) => number;
 const CMP_VER_STR_CACHE_KEY = "__ccsdCmpVerStr";
 
 function getCmpVerStr(): CmpVerStr | null {
-    const cached = (globalThis as Record<string, unknown>)[CMP_VER_STR_CACHE_KEY] as
-        | CmpVerStr
-        | undefined;
+    const cached = (globalThis as Record<string, unknown>)[CMP_VER_STR_CACHE_KEY] as CmpVerStr | undefined;
     if (cached) return cached;
     const src = effectiveConfig?.semverComparatorSrc;
     if (typeof src !== "string" || src.trim() === "") return null;
@@ -477,8 +475,7 @@ function runPatcher(): Promise<PatchResult> {
             // Anchor B missing is a warning, not a failure — patch.js still
             // exits 0 with the A-only patch written. Parse stdout so we can
             // surface it to the user instead of reporting a hollow "success".
-            const anchorBMissing =
-                /Anchor B not found/i.test(stdout) || /anchors injected: A only/i.test(stdout);
+            const anchorBMissing = /Anchor B not found/i.test(stdout) || /anchors injected: A only/i.test(stdout);
             resolve({ ok: code === 0, stdout, stderr, anchorBMissing });
         });
     });

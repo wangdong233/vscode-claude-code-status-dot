@@ -795,13 +795,16 @@ function listAllJsonUnder(home) {
   }
 }
 
-// --- §C. Bounded GC (UserPromptSubmit prune of files > 24h) --------------
+// --- §C. Bounded GC (UserPromptSubmit prune of files > 7d) --------------
 //
 // R3 e2e-review high-priority gap: the GC at UserPromptSubmit unlinks stale
 // files but had ZERO test coverage. Plant files at varied mtimes + states,
 // fire UserPromptSubmit for a fresh session, and assert exactly which files
 // survived. Locks the §7.5 interrupted-preservation contract + the skip-
 // current rule + the cross-session prune.
+// v0.2.7 (Q2 interrupted sticky): INTERRUPTED_RETENTION_MS bumped 24h → 7d
+// to keep the 🔴 sticky across cross-day workflows. The "old" plants now use
+// 8d (just past the new 7d cutoff) instead of 25h; the "near" plant uses 6d.
 {
   const H24 = 24 * 60 * 60 * 1000;
   const HR = 60 * 60 * 1000;
@@ -809,21 +812,21 @@ function listAllJsonUnder(home) {
   const home = newTempHome();
   // 1: fresh running (5min ago) — KEEP
   plantStatus(home, 'gc-fresh-running', { state: 'running', since: Date.now() - 5 * MIN }, 5 * MIN);
-  // 2: old done (25h ago) — PRUNE (no diagnostic value, reader already decayed)
-  plantStatus(home, 'gc-old-done', { state: 'done', since: Date.now() - 25 * HR }, 25 * HR);
-  // 3: old interrupted (25h ago) — KEEP (§7.5 diagnostic-preservation contract)
+  // 2: old done (8d ago) — PRUNE (no diagnostic value, reader already decayed)
+  plantStatus(home, 'gc-old-done', { state: 'done', since: Date.now() - 8 * 24 * HR }, 8 * 24 * HR);
+  // 3: old interrupted (8d ago) — KEEP (§7.5 diagnostic-preservation contract)
   plantStatus(
     home,
     'gc-old-interrupted',
-    { state: 'interrupted', since: Date.now() - 25 * HR, error: 'rate_limit' },
-    25 * HR,
+    { state: 'interrupted', since: Date.now() - 8 * 24 * HR, error: 'rate_limit' },
+    8 * 24 * HR,
   );
-  // 4: old running (25h ago) — PRUNE (crashed session, no diagnostic value)
-  plantStatus(home, 'gc-old-running', { state: 'running', since: Date.now() - 25 * HR }, 25 * HR);
-  // 5: old idle-by-default (no state field, 25h ago) — PRUNE (corrupt, no value)
-  plantStatus(home, 'gc-old-nostate', { foo: 'bar' }, 25 * HR);
-  // 6: just-under-24h interrupted — KEEP (still within retention)
-  plantStatus(home, 'gc-near-24h-int', { state: 'interrupted', since: Date.now() - 23 * HR }, 23 * HR);
+  // 4: old running (8d ago) — PRUNE (crashed session, no diagnostic value)
+  plantStatus(home, 'gc-old-running', { state: 'running', since: Date.now() - 8 * 24 * HR }, 8 * 24 * HR);
+  // 5: old idle-by-default (no state field, 8d ago) — PRUNE (corrupt, no value)
+  plantStatus(home, 'gc-old-nostate', { foo: 'bar' }, 8 * 24 * HR);
+  // 6: just-under-7d interrupted — KEEP (still within retention)
+  plantStatus(home, 'gc-near-24h-int', { state: 'interrupted', since: Date.now() - 6 * 24 * HR }, 6 * 24 * HR);
 
   // Fire UserPromptSubmit for a NEW session (different sid) — exercises the
   // cross-session prune + skip-current rule (the new session's file must be
@@ -843,7 +846,7 @@ function listAllJsonUnder(home) {
   function survived(sid) {
     return survivors.includes(sid + '.json');
   }
-  // Expected survivors: fresh-running (1), old-interrupted (3, §7.5), near-24h-int (6), new-session.
+  // Expected survivors: fresh-running (1), old-interrupted (3, §7.5), near-7d-int (6), new-session.
   function checkSurvival(name, sid, expected) {
     const actual = survived(sid);
     if (actual === expected) {
@@ -857,11 +860,11 @@ function listAllJsonUnder(home) {
     }
   }
   checkSurvival('§C.2 fresh running (5min) KEPT', 'gc-fresh-running', true);
-  checkSurvival('§C.3 old done (25h) PRUNED', 'gc-old-done', false);
-  checkSurvival('§C.4 old interrupted (25h) KEPT (§7.5 diagnostic preservation)', 'gc-old-interrupted', true);
-  checkSurvival('§C.5 old running (25h) PRUNED', 'gc-old-running', false);
-  checkSurvival('§C.6 corrupt old no-state (25h) PRUNED', 'gc-old-nostate', false);
-  checkSurvival('§C.7 near-24h interrupted (23h) KEPT', 'gc-near-24h-int', true);
+  checkSurvival('§C.3 old done (8d) PRUNED', 'gc-old-done', false);
+  checkSurvival('§C.4 old interrupted (8d) KEPT (§7.5 diagnostic preservation)', 'gc-old-interrupted', true);
+  checkSurvival('§C.5 old running (8d) PRUNED', 'gc-old-running', false);
+  checkSurvival('§C.6 corrupt old no-state (8d) PRUNED', 'gc-old-nostate', false);
+  checkSurvival('§C.7 near-7d interrupted (6d) KEPT', 'gc-near-24h-int', true);
   checkSurvival('§C.8 new session file written (skip-current)', newSid, true);
 
   // v0.2.6 round-3 regression-pin (regression §7.5 contract): GC_DRIFT_SINCE_MS
@@ -1418,16 +1421,58 @@ function listAllJsonUnder(home) {
     );
   }
 
-  // SessionEnd should unlink both <sid>.json AND <sid>.offset.
+  // v0.2.7 (Q1 fix): SessionEnd now unlinks ONLY <sid>.json — the .offset
+  // sidecar (cumulative read cursor) AND the new <sid>.tokens.json snapshot
+  // MUST survive so the next resume picks up cumulative state + non-zero
+  // display on the first tick. Pre-Q1 both were deleted here, zeroing the
+  // cumulative state on every VSCode restart.
   fire(home, 'SessionEnd');
   const jsonGone = !fs.existsSync(stateFile(home));
-  const offGone = !fs.existsSync(offsetPath);
-  if (jsonGone && offGone) {
+  const offsetPathStill = path.join(home, '.claude', 'cc-tab-status', SID + '.offset');
+  const tokensPath = path.join(home, '.claude', 'cc-tab-status', SID + '.tokens.json');
+  const offKept = fs.existsSync(offsetPathStill);
+  const tokensKept = fs.existsSync(tokensPath);
+  if (jsonGone && offKept && tokensKept) {
     pass++;
-    console.log('  PASS  §H.7 SessionEnd unlinks both <sid>.json and <sid>.offset');
+    console.log('  PASS  §H.7 SessionEnd deletes <sid>.json but preserves .offset + .tokens.json (Q1)');
   } else {
     fail++;
-    console.log('  FAIL  §H.7 jsonGone=' + jsonGone + ' offGone=' + offGone);
+    console.log('  FAIL  §H.7 jsonGone=' + jsonGone + ' offKept=' + offKept + ' tokensKept=' + tokensKept);
+  }
+
+  // v0.2.7 (Q1 fix): the preserved <sid>.tokens.json must carry the SAME
+  // cumulative tokens the hook wrote to <sid>.json before SessionEnd. This is
+  // the load-bearing assertion that the post-restart IIFE tick can render
+  // non-zero token count BEFORE any TOK_EVENT fire.
+  if (tokensKept) {
+    let snap = null;
+    try {
+      snap = JSON.parse(fs.readFileSync(tokensPath, 'utf8'));
+    } catch {
+      /* corrupt — fall through */
+    }
+    const okSnap =
+      snap &&
+      snap.v === 1 &&
+      snap.sid === SID &&
+      typeof snap.written_at === 'number' &&
+      snap.tokens &&
+      snap.tokens.total &&
+      snap.tokens.total.in === 300 && // matches §H.5 accumulated total
+      snap.tokens.total.out === 150 &&
+      snap.tokens.total.cr === 15000;
+    if (okSnap) {
+      pass++;
+      console.log('  PASS  §H.8 <sid>.tokens.json carries cumulative tokens across SessionEnd (Q1 sticky)');
+    } else {
+      fail++;
+      console.log(
+        '  FAIL  §H.8 expected snap.v=1 sid=' +
+          SID +
+          ' tokens.total=300/150/15000, got ' +
+          JSON.stringify(snap && snap.tokens && snap.tokens.total),
+      );
+    }
   }
 }
 
@@ -3779,6 +3824,328 @@ checkPending(
   fire(newTempHome(), 'Stop', { last_assistant_message: 'You decide the next step.' }),
   true,
 );
+
+// --- §AD v0.2.7 Q1: tokens persist across SessionEnd -----------------------
+//
+// Pin the Q1 contract: SessionEnd no longer wipes token state. The cumulative
+// .offset sidecar + the new <sid>.tokens.json snapshot both survive, so a
+// VSCode restart (SessionEnd → SessionStart on the same sid) renders non-zero
+// tokens IMMEDIATELY on the first IIFE tick (no 0-window). The §H.7/§H.8 tests
+// above already pin the SessionEnd-no-unlink behavior end-to-end via the
+// transcript-driven fire path. Here we add targeted assertions for the
+// explicit "restart" sequence and the .tokens.json write-on-every-TOK_EVENT
+// discipline (writes happen even on non-token events that carry forward
+// cur.tokens, so the snapshot stays fresh across background events too).
+
+// §AD.1 StopFailure does NOT write .tokens.json (no tokens field to snapshot).
+// Background event → status.tokens carried forward from cur.tokens; if cur has
+// no tokens (fresh session), status.tokens is undefined → no snapshot write.
+// Asserts the `if (status.tokens && typeof status.tokens === 'object')` gate.
+{
+  const home = newTempHome();
+  const got = fire(home, 'StopFailure', { error: 'rate_limit' });
+  const tokensPath = path.join(home, '.claude', 'cc-tab-status', SID + '.tokens.json');
+  const noSnap = !fs.existsSync(tokensPath);
+  if (got && got.state === 'interrupted' && noSnap) {
+    pass++;
+    console.log('  PASS  §AD.1 StopFailure (no tokens field) does NOT write .tokens.json snapshot');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §AD.1 expected interrupted + no .tokens.json, got state=' +
+        (got && got.state) +
+        ' snapExists=' +
+        !noSnap,
+    );
+  }
+}
+
+// §AD.2 Restart sequence: write tokens via PostToolUse → SessionEnd → assert
+// .tokens.json survives + carries correct cumulative totals. This is the
+// "VSCode restart" simulation: SessionEnd is the LAST event CC fires on
+// restart; SessionStart (which we don't simulate here because the hook ignores
+// it — TOK_EVENTS excludes SessionStart) is the FIRST event of the resumed
+// session, but the IIFE tick reads .tokens.json directly (no hook fire needed).
+{
+  const home = newTempHome();
+  const tsDir = path.join(home, '.claude', 'projects', 'q1-restart-proj');
+  fs.mkdirSync(tsDir, { recursive: true });
+  const tsPath = path.join(tsDir, SID + '.jsonl');
+  const now = Date.now();
+  const row = {
+    type: 'assistant',
+    isSidechain: false,
+    sessionId: SID,
+    timestamp: new Date(now - 60000).toISOString(),
+    message: {
+      role: 'assistant',
+      model: 'glm-5.2',
+      usage: { input_tokens: 500, output_tokens: 250, cache_read_input_tokens: 50000, cache_creation_input_tokens: 0 },
+    },
+  };
+  fs.writeFileSync(tsPath, JSON.stringify(row) + '\n');
+  const before = fire(home, 'PostToolUse', { transcript_path: tsPath });
+  const tokensPath = path.join(home, '.claude', 'cc-tab-status', SID + '.tokens.json');
+  const snapBefore = fs.existsSync(tokensPath) ? JSON.parse(fs.readFileSync(tokensPath, 'utf8')) : null;
+  // SessionEnd fires — pre-Q1 this would unlink BOTH .json AND .offset, losing
+  // all cumulative state. Post-Q1 it unlinks ONLY .json (state carrier).
+  fire(home, 'SessionEnd');
+  const jsonGone = !fs.existsSync(stateFile(home));
+  const offsetKept = fs.existsSync(path.join(home, '.claude', 'cc-tab-status', SID + '.offset'));
+  const tokensKept = fs.existsSync(tokensPath);
+  let snapAfter = null;
+  try {
+    snapAfter = JSON.parse(fs.readFileSync(tokensPath, 'utf8'));
+  } catch {
+    /* ignore — tokensKept will be false */
+  }
+  const ok =
+    jsonGone &&
+    offsetKept &&
+    tokensKept &&
+    snapBefore &&
+    snapBefore.tokens &&
+    snapBefore.tokens.total &&
+    snapBefore.tokens.total.in === 500 &&
+    snapAfter &&
+    snapAfter.v === 1 &&
+    snapAfter.sid === SID &&
+    snapAfter.tokens &&
+    snapAfter.tokens.total &&
+    snapAfter.tokens.total.in === 500;
+  if (ok) {
+    pass++;
+    console.log(
+      '  PASS  §AD.2 SessionEnd preserves .offset + .tokens.json (cumulative=500/250/50000 survives restart)',
+    );
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §AD.2 jsonGone=' +
+        jsonGone +
+        ' offsetKept=' +
+        offsetKept +
+        ' tokensKept=' +
+        tokensKept +
+        ' snapBefore.in=' +
+        (snapBefore && snapBefore.tokens && snapBefore.tokens.total && snapBefore.tokens.total.in) +
+        ' snapAfter.in=' +
+        (snapAfter && snapAfter.tokens && snapAfter.tokens.total && snapAfter.tokens.total.in),
+    );
+  }
+}
+
+// §AD.3 GC sweep reaps .tokens.json + .offset past INTERRUPTED_RETENTION_MS
+// (7d) but keeps them fresh. Plant a stale .tokens.json + .offset pair at 8d,
+// fire UserPromptSubmit for a different sid, assert both are reaped. Pin the
+// mtime-only GC contract (no .json presence check, which would falsely reap
+// them immediately post-SessionEnd).
+{
+  const home = newTempHome();
+  const dir = path.join(home, '.claude', 'cc-tab-status');
+  fs.mkdirSync(dir, { recursive: true });
+  const staleSid = 'stale-tokens-sid';
+  const staleTokens = path.join(dir, staleSid + '.tokens.json');
+  const staleOffset = path.join(dir, staleSid + '.offset');
+  fs.writeFileSync(
+    staleTokens,
+    JSON.stringify({ v: 1, sid: staleSid, tokens: { total: { in: 1 } }, written_at: Date.now() }),
+  );
+  fs.writeFileSync(
+    staleOffset,
+    JSON.stringify({ offset: 0, lastTs: 0, lastSize: 0, totals: { in: 1 }, buckets: [], perTurn: [] }),
+  );
+  // Set mtime to 8d ago (> 7d cutoff → reap target).
+  const staleAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(staleTokens, staleAt, staleAt);
+  fs.utimesSync(staleOffset, staleAt, staleAt);
+  // Also plant a FRESH pair (< 7d) to assert they survive.
+  const freshSid = 'fresh-tokens-sid';
+  const freshTokens = path.join(dir, freshSid + '.tokens.json');
+  const freshOffset = path.join(dir, freshSid + '.offset');
+  fs.writeFileSync(
+    freshTokens,
+    JSON.stringify({ v: 1, sid: freshSid, tokens: { total: { in: 2 } }, written_at: Date.now() }),
+  );
+  fs.writeFileSync(
+    freshOffset,
+    JSON.stringify({ offset: 0, lastTs: 0, lastSize: 0, totals: { in: 2 }, buckets: [], perTurn: [] }),
+  );
+  // Fire UserPromptSubmit for an unrelated sid — triggers GC.
+  fireRaw(home, { hook_event_name: 'UserPromptSubmit', session_id: 'gc-trigger-sid', prompt: 'hi' });
+  const staleReaped = !fs.existsSync(staleTokens) && !fs.existsSync(staleOffset);
+  const freshKept = fs.existsSync(freshTokens) && fs.existsSync(freshOffset);
+  if (staleReaped && freshKept) {
+    pass++;
+    console.log('  PASS  §AD.3 GC reaps stale (8d) .tokens.json + .offset, keeps fresh (Q1 mtime-only rule)');
+  } else {
+    fail++;
+    console.log('  FAIL  §AD.3 staleReaped=' + staleReaped + ' freshKept=' + freshKept + ' (mtime-only GC contract)');
+  }
+}
+
+// §AD.4 isTokens-order guard: a corrupt <sid>.tokens.json with NO v/sid/tokens
+// fields would historically have been matched by isJson (it ends with .json)
+// and parsed as a state file → no .state → fall through to prune. The isTokens
+// check now fires FIRST, so the file goes through the pure-mtime branch and is
+// KEPT if fresh (even though its content is non-state). This is the
+// load-bearing pin on the isTokens/isJson ordering.
+{
+  const home = newTempHome();
+  const dir = path.join(home, '.claude', 'cc-tab-status');
+  fs.mkdirSync(dir, { recursive: true });
+  const bogusSid = 'bogus-tokens-sid';
+  // Write a .tokens.json with content that would parse as no-state under isJson.
+  const bogusPath = path.join(dir, bogusSid + '.tokens.json');
+  fs.writeFileSync(bogusPath, JSON.stringify({ foo: 'bar', not_a_state: true }));
+  // Fire UserPromptSubmit for an unrelated sid (triggers GC). The bogus file is
+  // fresh (< 7d) and must SURVIVE — mtime-only rule on the isTokens branch.
+  fireRaw(home, { hook_event_name: 'UserPromptSubmit', session_id: 'gc-trigger-sid2', prompt: 'hi' });
+  const survived = fs.existsSync(bogusPath);
+  if (survived) {
+    pass++;
+    console.log('  PASS  §AD.4 <sid>.tokens.json survives GC even with non-state content (isTokens-before-isJson)');
+  } else {
+    fail++;
+    console.log('  FAIL  §AD.4 expected bogus .tokens.json to survive GC (was reaped — isJson-order regression)');
+  }
+}
+
+// --- §AE v0.2.7 Q2: interrupted sticky across Stop + SessionEnd -------------
+//
+// User report: "interrupted 红色自己消了" — three suspects identified:
+//   (a) SessionEnd deletes <sid>.json (interrupted state lost)
+//   (b) reader decay since>24h → idle (now extended to 7d, see INTERRUPTED_RETENTION_MS)
+//   (c) CC's automatic Stop event overwrites interrupted → done
+// All three fixed in cc-status.js. These tests pin the writer-side invariants.
+// Reader-side decay behavior is exercised in test-iife.mjs (IIFE.37c).
+
+// §AE.1 Stop after StopFailure PRESERVES interrupted (the core Q2c fix).
+// Pre-Q2: `state: stayRunning ? 'running' : 'done'` overwrote interrupted.
+// Post-Q2: cur.state===interrupted && !stayRunning → stay interrupted.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'StopFailure', { error: 'rate_limit' });
+  // StopFailure wrote state=interrupted. Now fire a Stop WITHOUT inflight —
+  // this is the suspected "CC auto-fires Stop after StopFailure" path that
+  // was clearing the red.
+  const got = fire(home, 'Stop');
+  const ok = got && got.state === 'interrupted' && got.error === 'rate_limit';
+  if (ok) {
+    pass++;
+    console.log('  PASS  §AE.1 Stop after StopFailure preserves interrupted (Q2c sticky)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §AE.1 expected interrupted+error=rate_limit, got state=' +
+        (got && got.state) +
+        ' error=' +
+        (got && got.error),
+    );
+  }
+}
+
+// §AE.2 Stop with inflight>0 after StopFailure → running (genuine workflow
+// continuation un-blocks the turn; rare path but correct). This pins that the
+// preserve-interrupted rule fires ONLY when !stayRunning.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'StopFailure', { error: 'rate_limit' });
+  const got = fire(home, 'Stop', { background_tasks: [{ id: 'w1', type: 'workflow' }] });
+  const ok = got && got.state === 'running';
+  if (ok) {
+    pass++;
+    console.log('  PASS  §AE.2 Stop inflight>0 after StopFailure → running (workflow un-blocks turn)');
+  } else {
+    fail++;
+    console.log('  FAIL  §AE.2 expected running (inflight un-blocks interrupted), got state=' + (got && got.state));
+  }
+}
+
+// §AE.3 UserPromptSubmit clears interrupted (correct — user is starting a new
+// turn, the interrupted session is now continuing). This is the user-stated
+// semantic: "持续到用户发新 prompt 会话继续".
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'StopFailure', { error: 'rate_limit' });
+  const got = fire(home, 'UserPromptSubmit');
+  const ok = got && got.state === 'running' && got.pending === false;
+  if (ok) {
+    pass++;
+    console.log(
+      '  PASS  §AE.3 UserPromptSubmit clears interrupted → running (sticky contract: user prompt clears red)',
+    );
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §AE.3 expected running+pending=false, got state=' +
+        (got && got.state) +
+        ' pending=' +
+        (got && got.pending),
+    );
+  }
+}
+
+// §AE.4 SessionEnd PRESERVES interrupted <sid>.json (Q2a fix). Pre-Q2:
+// SessionEnd → DELETE → file removed → IIFE renders no red. Post-Q2: when
+// cur.state===interrupted, SessionEnd returns null (no delete, no write).
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'StopFailure', { error: 'rate_limit' });
+  // Snapshot the interrupted file's state for comparison after SessionEnd.
+  const before = readState(home);
+  const final = fire(home, 'SessionEnd');
+  const after = readState(home);
+  // `fire` returns readState() result; for SessionEnd-on-interrupted the hook
+  // exits early (status===null) and leaves the file untouched, so `final`
+  // and `after` read the SAME persisted interrupted state (deep-equal content,
+  // not object identity — JSON.parse returns fresh objects each call).
+  const ok =
+    before &&
+    before.state === 'interrupted' &&
+    final &&
+    final.state === 'interrupted' &&
+    after &&
+    after.state === 'interrupted' &&
+    after.error === 'rate_limit';
+  if (ok) {
+    pass++;
+    console.log('  PASS  §AE.4 SessionEnd preserves interrupted <sid>.json (Q2a sticky)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §AE.4 before=' +
+        (before && before.state) +
+        ' final=' +
+        (final && final.state) +
+        ' after=' +
+        (after && after.state),
+    );
+  }
+}
+
+// §AE.5 SessionEnd STILL deletes non-interrupted states (regression guard:
+// the Q2a fix only protects interrupted; done/running/pending still cleanup).
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'Stop'); // → done
+  const before = readState(home);
+  fire(home, 'SessionEnd');
+  const after = readState(home);
+  const ok = before && before.state === 'done' && after === null;
+  if (ok) {
+    pass++;
+    console.log('  PASS  §AE.5 SessionEnd still deletes done state (regression: only interrupted is protected)');
+  } else {
+    fail++;
+    console.log('  FAIL  §AE.5 expected done→deleted, got before=' + (before && before.state) + ' after=' + after);
+  }
+}
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

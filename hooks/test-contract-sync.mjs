@@ -250,6 +250,28 @@ if (patchForceReread !== null && hookForceReread !== null) {
   );
 }
 
+// --- TOK_TOKENS_EXT cross-file equality (v0.2.7 Q1 fix) --------------------
+// The new <sid>.tokens.json snapshot is written by the hook and read by the
+// IIFE reader (readTok three-tier + §G tick fallback). A rename on one side
+// would silently desync the writer↔reader path — the snapshot would still be
+// written but the IIFE would keep reading the legacy .json path and the post-
+// restart 0-window would silently re-open. Mirror the TOK_OFFSET_EXT /
+// TOK_FORCEREREAD_EXT cross-file equality contract.
+const patchTokens = extractStringConst(patchSrc, 'TOK_TOKENS_EXT');
+const hookTokens = extractStringConst(hookSrc, 'TOK_TOKENS_EXT');
+check('patch.ts TOK_TOKENS_EXT defined (v0.2.7 Q1)', patchTokens !== null);
+check('hooks/cc-status.js TOK_TOKENS_EXT defined (v0.2.7 Q1)', hookTokens !== null);
+if (patchTokens !== null && hookTokens !== null) {
+  check(
+    'TOK_TOKENS_EXT cross-file equality (Q1 tokens-snapshot path contract) — "' +
+      patchTokens +
+      '" === "' +
+      hookTokens +
+      '"',
+    patchTokens === hookTokens,
+  );
+}
+
 // --- IIFE baked .offset literal === TOK_OFFSET_EXT (v0.2.5 round-3 MEDIUM) ---
 // The round-3 fix re-baked tokOffsetExtLiteral into the IIFE so a future
 // rename of TOK_OFFSET_EXT flows through automatically. This test verifies
@@ -294,6 +316,37 @@ if (patchForceReread !== null && hookForceReread !== null) {
       'IIFE computeLiveDelta uses baked TOK_OFFSET_EXT literal (round-3 MEDIUM) — skipped (run `npm run build` to enable)',
       true,
     );
+  }
+
+  // v0.2.7 (Q1 fix): the IIFE bytes must also contain the JSON-stringified
+  // form of TOK_TOKENS_EXT inside readTok's three-tier fallback (sid+
+  // ${tokTokensExtLiteral}) AND inside the §G tick tokens-snapshot fallback.
+  // Two sites: readTok (QuickPick path) + the §G tick merge (live SBI path).
+  // Closes the silent-desync window where a writer-side TOK_TOKENS_EXT rename
+  // passes the cross-file equality contract test above but the IIFE keeps
+  // reading the wrong filename, missing the snapshot on post-restart tick.
+  if (iifeBytes && patchTokens !== null) {
+    const expectedSid = 'sid+"' + patchTokens + '"';
+    const readTokStart = iifeBytes.indexOf('function readTok(');
+    const inReadTok = readTokStart >= 0 && iifeBytes.slice(readTokStart).includes(expectedSid);
+    check(
+      'IIFE readTok uses baked TOK_TOKENS_EXT literal (v0.2.7 Q1: three-tier fallback no hardcoded .tokens.json drift)',
+      inReadTok,
+      'expected IIFE bytes to contain "' + expectedSid + '" inside readTok',
+    );
+    // §G tick merge site: activeSid+"<...>" (the snapshot read inside the tick
+    // body). Search for the literal anywhere in the IIFE bytes AFTER the §G
+    // tick entrypoint — at least one occurrence outside readTok.
+    const tickStart = iifeBytes.indexOf('globalThis.__ccsdTokSbi');
+    const tickHasLiteral = tickStart >= 0 && iifeBytes.slice(tickStart).includes('activeSid+"' + patchTokens + '"');
+    check(
+      'IIFE §G tick uses baked TOK_TOKENS_EXT literal for snapshot fallback (v0.2.7 Q1)',
+      tickHasLiteral,
+      'expected IIFE bytes to contain "activeSid+"' + patchTokens + '" inside §G tick',
+    );
+  } else {
+    check('IIFE readTok uses baked TOK_TOKENS_EXT literal (v0.2.7 Q1) — skipped (run `npm run build` to enable)', true);
+    check('IIFE §G tick uses baked TOK_TOKENS_EXT literal (v0.2.7 Q1) — skipped (run `npm run build` to enable)', true);
   }
 }
 

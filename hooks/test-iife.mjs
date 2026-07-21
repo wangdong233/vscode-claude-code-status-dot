@@ -199,7 +199,24 @@ check(
 );
 
 // --- 4. Permission pending yield (STATES.md §1 v0.1.8) ----------------------
-check('IIFE.12 __ccsdPending yield present', /if\s*\(\s*t\.__ccsdPending\s*\)\s*return/.test(iife));
+// v0.2.9.1 (Q7 tab-orange fix): the `if(t.__ccsdPending)return` YIELD was REMOVED —
+// it left the tab on CC's native ORANGE logo when rename_tab carried
+// hasPendingPermissions=true (CC 2.1.216 fires this during workflow tool-use).
+// Permission prompts now surface via the FILE pending field (Notification hook →
+// j.pending → the IIFE.12a blue-render branch). The per-panel tick must NEVER
+// leave native orange: the no-sid + read-fail (else) paths now render idle fallback.
+check(
+  'IIFE.12 __ccsdPending yield REMOVED (Q7) — no code-path return-without-render',
+  !/if\s*\(\s*t\.__ccsdPending\s*\)\s*\{[^}]*return/.test(iife),
+);
+check(
+  'IIFE.12b no-sid path renders idle fallback (Q7, never native orange)',
+  /if\(!sid\)\{__ccsdDbg[^}]*claude-logo-idle\.svg/.test(iife),
+);
+check(
+  'IIFE.12c else read-fail path renders idle fallback (Q7)',
+  /else\{__ccsdDbg\("ELSE[^}]*claude-logo-idle\.svg/.test(iife),
+);
 // v0.2.6 blue-via-content: per-panel reader pending branch. The IIFE's
 // per-panel tick reads j.pending from the status file and renders our blue
 // claude-logo-pending.svg when pending=true && state!=="idle". Priority:

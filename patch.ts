@@ -1826,6 +1826,8 @@ function buildIIFE(resDir: string): string {
         // steady state (99.6% reduction). See CHANGELOG v0.2.9 + docs/STATES.md
         // §9 perf section.
         `var __ccsdUriCache=Object.create(null);function ccuri(p){return __ccsdUriCache[p]||(__ccsdUriCache[p]=vs.Uri.file(p));}`,
+        // v0.2.9-debug (Q7 tab-orange): anomaly logger. Append-only, fires ONLY on the 3 no-iconPath early-return paths below (rare). Remove after root cause confirmed + fix landed.
+        `var __ccsdDbgLog=pth.join(DIR,"_panel-debug.log");function __ccsdDbg(s){try{try{if(fs.statSync(__ccsdDbgLog).size>2097152)fs.writeFileSync(__ccsdDbgLog,"")}catch(e){}fs.appendFileSync(__ccsdDbgLog,Date.now()+" "+s+"\\n")}catch(e){}}`,
         `var DONE_TO_IDLE_MS=${DONE_TO_IDLE_MS};`,
         `/*§7.2 stale-running heuristic: v0.2.6 keys off 'since' (the *→running transition time), not mtime. Stop preserveSince path (cc-status.js:390-401) keeps cur.since on inflight>0 Stop heartbeats while writeJsonAtomic refreshes mtime — mtime stays fresh forever under CC's repeated Stop fire on drifted inflight payloads, so mtime-decay never fires. since-decay fires correctly because since is preserved (not refreshed) across the same path. Mirrors done>5min / interrupted>24h decay which already key off since.*/`,
         `var SBI_RUNNING_STALE_MS=${SBI_RUNNING_STALE_MS};`,
@@ -2183,7 +2185,7 @@ function buildIIFE(resDir: string): string {
         // === §H Per-panel tick (state-machine + notify dedup + svg switch) ===
         `var timer=setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
-        `var sid=t.__ccsdSid;if(!sid)return;`,
+        `var sid=t.__ccsdSid;if(!sid){__ccsdDbg("NOSID pend="+!!t.__ccsdPending);try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return;}`,
         // v0.2.4: keep globalThis.__ccsdActiveSid fresh for the token SBI tick.
         // Each CC panel runs its own per-panel tick (this setInterval) — the
         // ACTIVE panel's tick fires here every 500ms and updates the global so
@@ -2224,7 +2226,7 @@ function buildIIFE(resDir: string): string {
         `if(globalThis.__ccsdLastNotifyKey===__nkey){lastTermSince=since;}`,
         `else{globalThis.__ccsdLastNotifyKey=__nkey;lastTermSince=since;try{notify(st,err)}catch(e){}}`,
         `}`,
-        `/*permission pending: yield to CC native blue dot*/if(t.__ccsdPending)return;`,
+        `/*v0.2.9.1 Q7 fix: REMOVED the if(t.__ccsdPending)return yield. It left the tab on CC's NATIVE ORANGE logo whenever rename_tab carried hasPendingPermissions=true, and CC 2.1.216 fires that during workflow tool-use (not just real permission prompts) — so background workflow tabs went orange while the sid-independent aggregation correctly showed yellow. Permission prompts still surface as our blue via the FILE pending field (Notification hook -> j.pending -> the pend render branch at IIFE.12a). The tab now ALWAYS renders our icon (file state, or idle fallback at the no-sid/else paths), never native orange. t.__ccsdPending is still SET (rename_tab) + read by the RENDER debug log below + feeds the bottom 🔵 via __ccsdPendingSet (aggregation, separate dimension).*/`,
         // v0.2.6 blue-via-content: reader-side pending branch. The writer's
         // Stop case now sets pending:true when Claude's last_assistant_message
         // clearly awaits user input/decision/feedback (AWAIT_USER_RE match in
@@ -2270,9 +2272,9 @@ function buildIIFE(resDir: string): string {
         `else if(st==="running"){svg=(since&&(now-since>SINCE_STALE_MS)&&since<now)?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-running.svg")}`,
         `else if(st==="done"){svg=(since&&(now-since>DONE_TO_IDLE_MS))?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-done.svg")}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
-        `else{return}`,
+        `else{__ccsdDbg("ELSE sid="+(sid||"").slice(0,8)+" st="+st);try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return}`,
         `flashSeq++;`,
-        `try{p.iconPath=ccuri(svg)}catch(e){}`,
+        `try{p.iconPath=ccuri(svg)}catch(e){}try{var __lm=globalThis.__ccsdRenderMap||(globalThis.__ccsdRenderMap={});var __rs=sid+":"+svg+":"+st+":"+pend;if(__lm[sid]!==__rs){__lm[sid]=__rs;__ccsdDbg("RENDER sid="+sid.slice(0,8)+" svg="+svg.split("/").pop()+" st="+st+" pend="+pend+" cpend="+!!t.__ccsdPending)}}catch(e){}`,
         `},${TICK_MS});`,
         // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,

@@ -84,7 +84,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.2.7";
+const MIN_PATCHER_VERSION = "0.2.8";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -139,11 +139,11 @@ function injectMarker(): string {
     return effectiveConfig?.injectMarker ?? "cc-status-dot-injected";
 }
 
-/** Expected IIFE version stamp. Falls back to the v0.2.7 hardcoded value if
+/** Expected IIFE version stamp. Falls back to the v0.2.8 hardcoded value if
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.2.7";
+    return effectiveConfig?.injectVersion ?? "v0.2.8";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -313,6 +313,35 @@ function getCmpVerStr(): CmpVerStr | null {
     if (cached) return cached;
     const src = effectiveConfig?.semverComparatorSrc;
     if (typeof src !== "string" || src.trim() === "") return null;
+    // v0.2.8 round-2 (MEDIUM version-sync / defense-in-depth): the src text
+    // comes from companion-config.json, a user-writable file under
+    // INSTALL_DIR (~/.claude/cc-status-dot/). Anyone with write access to
+    // that dir already has arbitrary code execution (they could just edit
+    // INSTALL_DIR/patch.js directly), so `new Function(src)` does NOT
+    // escalate privilege. BUT — defense-in-depth is cheap here, and a future
+    // reuse of this pattern in a more sensitive context would inherit the
+    // gate. Reject any src that contains tokens outside the canonical
+    // cmpVerStr body's safe vocabulary:
+    //   - identifiers: a, b, pa, pb, len, i, ai, bi, x, Number, Math
+    //   - punctuation: . , ; : ( ) { } [ ] = + - * % ? < > ! | & _
+    //   - string literal: "." (one-character string for split separator)
+    //   - digits + whitespace
+    // Anything else (backticks, $, template literals, function expressions,
+    // globalThis/process/require/import, eval, Function constructor) is
+    // rejected → staleness check degrades to skip. The canonical body (see
+    // src/semver.ts) passes this gate trivially.
+    const SAFE_TOKEN_RE = /^[A-Za-z0-9_.,;:()?<>!=|&+\-*/%\s"{}\[\]]+$/;
+    if (!SAFE_TOKEN_RE.test(src)) {
+        return null;
+    }
+    // Block-list of dangerous keywords that the conservative char-class above
+    // already excludes (kept explicit so a future loosening of the regex is
+    // forced to confront each one). The canonical body uses none of these.
+    const DANGEROUS =
+        /\b(?:function|=>|import|require|process|globalThis|window|eval|Function|fetch|setTimeout|setInterval|setImmediate|this|constructor|prototype|__proto__)\b/;
+    if (DANGEROUS.test(src)) {
+        return null;
+    }
     try {
         // Construct the comparator from the config-baked source. The body
         // uses only `a`, `b`, `.split`, `.map`, `Number`, `Math.max`, `pa[i]

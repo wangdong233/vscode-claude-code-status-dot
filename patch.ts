@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.2.7";
+const INJECT_VERSION = "v0.2.8";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -395,8 +395,19 @@ const SINCE_STALE_MS = 15 * 60 * 1000;
  *  command points at INSTALL_DIR/hooks/cc-status.js.
  *
  *  Distinct from STATE_DIR (~/.claude/cc-tab-status/) which is per-session USER
- *  DATA and is NOT touched by install / --revert. */
-const INSTALL_DIR = path.join(os.homedir(), ".claude", "cc-status-dot");
+ *  DATA and is NOT touched by install / --revert.
+ *
+ *  v0.2.8 round-1 (MEDIUM): CCSD_INSTALL_DIR env override. Production callers
+ *  NEVER set this — INSTALL_DIR resolves to ~/.claude/cc-status-dot as always.
+ *  The override exists purely so hooks/test-standalone-patch.mjs can drive the
+ *  real installCompanion() copy path into a sandbox tmp dir (instead of manually
+ *  mirror-copying and bypassing installCompanion, which left the v0.2.7 bug
+ *  covered). The override is consumed at process start (here) so every downstream
+ *  reference (RUNTIME_RES_DIR, COMPANION_CONFIG_PATH, LAST_REPATCH_PATH, the
+ *  status reporter) tracks it automatically. */
+const INSTALL_DIR: string = process.env.CCSD_INSTALL_DIR
+    ? path.resolve(process.env.CCSD_INSTALL_DIR)
+    : path.join(os.homedir(), ".claude", "cc-status-dot");
 
 /** Runtime resources dir — the absolute path baked into the injected IIFE.
  *  A const (not a fn) because INSTALL_DIR is itself a const: the path is fixed
@@ -2009,7 +2020,18 @@ function buildIIFE(resDir: string): string {
         // between our statSync and readFileSync.
         `var __cc=globalThis.__ccsdAgCache;if(!__cc){__cc=globalThis.__ccsdAgCache=Object.create(null);}var __stale=Object.create(null);`,
         `for(var i=0;i<files.length;i++){`,
-        `if(!files[i].endsWith(".json"))continue;`,
+        // v0.2.8 round-2 (MEDIUM efficiency regression): the `.endsWith(".json")`
+        // filter alone matches BOTH `<sid>.json` AND the v0.2.7-introduced
+        // `<sid>.tokens.json` snapshot. The snapshot has no `state` field
+        // (only v/sid/since/cwd/transcript_path/tokens/written_at), so its
+        // JSON.parse contributes nothing to the 4-light counts (`j.state===
+        // undefined` falls through to the idle catch-all). Skipping it here
+        // restores v0.2.6 per-tick parse cost — every 500ms tick during an
+        // active turn no longer re-parses a ~50KB snapshot per on-disk
+        // session. The baked literal (tokTokensExtLiteral) is the single
+        // source of truth, so a future rename of TOK_TOKENS_EXT flows through
+        // automatically (pinned cross-file by test-contract-sync.mjs).
+        `if(!files[i].endsWith(".json")||files[i].endsWith(${tokTokensExtLiteral}))continue;`,
         `try{`,
         `var fp=pth.join(DIR,files[i]);__stale[files[i]]=true;`,
         `var __mt=0,__sz=0;try{var __s=fs.statSync(fp);__mt=__s.mtimeMs;__sz=__s.size;}catch(e3){}`,
@@ -3530,22 +3552,46 @@ function writeCompanionConfig(): void {
  *  baking into companion-config.json. The body uses only `a`, `b`, and standard
  *  JS builtins — no closure captures — so it's safe to ship to the companion's
  *  `new Function('a','b', src)` constructor. Returns null on extraction
- *  failure (writeCompanionConfig logs a warning in that case). */
+ *  failure (writeCompanionConfig logs a warning in that case).
+ *
+ *  v0.2.8 round-2 (HIGH integrity): the prior implementation only tried
+ *  `src/semver.ts`, which is NOT shipped in the npm tarball (the published
+ *  package ships `dist/src/*.js`, not `src/*.ts` — verified via `npm pack
+ *  --dry-run`). In production, the prior code returned null → the
+ *  companion-config.json's `semverComparatorSrc` field was null for every
+ *  production user → the companion's ARCH-3 stale-patcher check silently
+ *  degraded to skip. The CI test passed only because it reads the source
+ *  tree directly. Fix: try the compiled `dist/src/semver.js` (shipped) at
+ *  every level, alongside the TS source (dev tsx). The body is byte-identical
+ *  to the TS source because tsc strips only the type annotations
+ *  (`a: string, b: string` → `a, b`) without transforming the function body. */
 function extractCmpVerStrBody(): string | null {
+    // Candidate loaders in priority order. Each entry tries .ts (dev tsx)
+    // first, then .js (compiled mode). The TS-first ordering is purely
+    // cosmetic — dev mode has the freshest source, so dev prefers it;
+    // production has only the compiled .js, so it falls through to it.
+    const candidates = [
+        path.join(SCRIPT_DIR, "src", "semver.ts"), // dev tsx: <root>/src/semver.ts
+        path.join(SCRIPT_DIR, "src", "semver.js"), // compiled: dist/src/semver.js (SHIPPED)
+        path.join(SCRIPT_DIR, "..", "src", "semver.ts"), // older dev layout
+        path.join(SCRIPT_DIR, "..", "src", "semver.js"), // unusual: <root>/src/semver.js
+    ];
     let src = "";
-    try {
-        src = fs.readFileSync(path.join(SCRIPT_DIR, "src", "semver.ts"), "utf8");
-    } catch {
-        // Compiled mode (dist/): src/ lives one level up from dist/.
+    for (const c of candidates) {
         try {
-            src = fs.readFileSync(path.join(SCRIPT_DIR, "..", "src", "semver.ts"), "utf8");
+            src = fs.readFileSync(c, "utf8");
+            if (src) break;
         } catch {
-            return null;
+            /* try next candidate */
         }
     }
+    if (!src) return null;
     // Match `export function cmpVerStr(a: string, b: string): number { ... }`
-    // (the body is what we want; TS type annotations are stripped). Use the
-    // SAME brace-balanced extraction as test-version-sync.mjs: extractFnBody.
+    // OR `export function cmpVerStr(a, b) { ... }` (compiled JS — tsc strips
+    // the type annotations). The body extraction is brace-balanced and works
+    // identically on both forms because tsc does not transform the function
+    // body. Use the SAME brace-balanced extraction as test-version-sync.mjs:
+    // extractFnBody.
     const startIdx = src.indexOf("function cmpVerStr(");
     if (startIdx === -1) return null;
     let i = src.indexOf("{", startIdx);
@@ -3601,12 +3647,35 @@ function writeRepatchFlag(extDir: string, anchorB: boolean, source: "companion" 
     }
 }
 
-/** Install (or refresh) the companion .vsix into every detected VS Code-family
- *  CLI on PATH. Idempotent: re-running refreshes via `--force`. If NO CLI is
- *  detected we warn and continue — the IIFE patch alone still works. Also
- *  copies our compiled patch.js to INSTALL_DIR so the companion has a stable
- *  path to re-exec at VS Code startup (see companion/extension.ts). */
-function installCompanion(): void {
+/** Source modules dist/patch.js imports via relative ESM specifiers. The
+ *  install path copies each of these into INSTALL_DIR/src/ so the standalone
+ *  patch.js can resolve them at module load. Listed here (and re-declared in
+ *  reportCompanionStatus + hooks/test-standalone-patch.mjs + test-patcher-io.mjs)
+ *  — hooks/test-contract-sync.mjs §SRC_MODULES guards this list against the
+ *  actual `from "./src/...js"` imports in patch.ts source (extracts both via
+ *  regex, asserts set equality). A future patch.ts that adds a new
+ *  `import { foo } from "./src/foo.js"` and forgets to update SRC_MODULES
+ *  fails that test directly — closing the silent regression window where
+ *  installCompanionRuntimeFiles skips the new module and the companion
+ *  crashes with ERR_MODULE_NOT_FOUND on the next --patch-only. */
+const SRC_MODULES = ["semver.js", "jsonc.js", "surgical-json.js"];
+
+/** Copy dist/patch.js + dist/src/*.js + companion-config.json into INSTALL_DIR
+ *  so the companion can re-exec the patcher without depending on the user's
+ *  npx cache. This is the file-copy half of installCompanion — extracted into
+ *  its own function in v0.2.8 round-1 so hooks/test-standalone-patch.mjs can
+ *  drive the REAL install path (via the `--install-companion-runtime` dev
+ *  subcommand) into a sandbox tmp dir (CCSD_INSTALL_DIR=<tmp>) instead of
+ *  mirror-copying the files manually. The manual copy in the prior test version
+ *  bypassed installCompanion entirely, so the v0.2.7 regression (step 1a
+ *  missing — no src/ copy) was INVISIBLE to the test (it passed on v0.2.7
+ *  too). Calling this function directly reproduces the bug class.
+ *
+ *  Idempotent + atomic per file (atomicCopyFileSync uses tmp+rename, so no
+ *  half-written patch.js or src/*.js is ever observed even if the process is
+ *  killed mid-copy). Stale src/*.js orphans from prior versions are swept
+ *  before the fresh copies land — mirrors installRuntimeFiles' SVG sweep. */
+function installCompanionRuntimeFiles(): void {
     // 1. Copy dist/patch.js → INSTALL_DIR/patch.js so the companion can re-exec
     //    the patcher without depending on the user's npx cache (which may be
     //    purged). dist/patch.js exists in the published package; in dev
@@ -3640,12 +3709,117 @@ function installCompanion(): void {
         warn(`failed to copy patch.js to INSTALL_DIR (non-fatal): ${(e as Error).message ?? String(e)}`);
     }
 
+    // 1a. Copy dist/src/*.js → INSTALL_DIR/src/ so the runtime patch.js can
+    //     resolve its ESM imports (./src/semver.js | jsonc.js | surgical-json.js).
+    //     v0.2.4 split patch.ts into src/ three modules and dist/patch.js
+    //     imports them via relative ESM specifiers that resolve against
+    //     patch.js's own URL. When the companion re-execs
+    //     INSTALL_DIR/patch.js --patch-only, Node's ESM loader resolves those
+    //     specifiers to INSTALL_DIR/src/*.js BEFORE any code runs — so without
+    //     these files the companion auto-heal crashes at module load with
+    //     ERR_MODULE_NOT_FOUND (v0.2.8 fix; latent since v0.2.4, exposed when
+    //     a CC auto-update overwrote extension.js and triggered companion
+    //     re-patch). Mirrors the resources/hooks/token-rates copy discipline
+    //     (atomicCopyFileSync — tmp+rename, never observed half-written) and
+    //     the SVG stale-sweep pattern from installRuntimeFiles.
+    //
+    //     Guard discipline matches step 1 above: the OUTER guard is directory
+    //     existence, the INNER guard is per-file .js existence. In dev (tsx)
+    //     SCRIPT_DIR=project root and src/*.TS exists → enters the if branch,
+    //     but every per-file existsSync(src/*.js) is false → 3× warn. That is
+    //     the intended dev signal (run `npm run build`). The else branch is
+    //     reserved for the genuinely-broken-build case: compiled mode where
+    //     SCRIPT_DIR/dist but dist/src/ is entirely absent.
+    const srcSrcDir = path.join(SCRIPT_DIR, "src");
+    const dstSrcDir = path.join(INSTALL_DIR, "src");
+    try {
+        if (fs.existsSync(srcSrcDir)) {
+            fs.mkdirSync(dstSrcDir, { recursive: true });
+            // Sweep stale modules from prior versions (e.g. a future rename/drop
+            // that leaves an orphan .js the new patch.js no longer imports).
+            // Only touches *.js in dstSrcDir — never other files.
+            try {
+                for (const name of fs.readdirSync(dstSrcDir)) {
+                    if (name.endsWith(".js") && !SRC_MODULES.includes(name)) {
+                        try {
+                            fs.unlinkSync(path.join(dstSrcDir, name));
+                            log(`removed stale src/ module: ${name}`);
+                        } catch {
+                            /* best-effort — non-fatal */
+                        }
+                    }
+                }
+            } catch {
+                /* readdir failure — non-fatal, proceed to copy */
+            }
+            let copied = 0;
+            let failed = 0;
+            // v0.2.8 round-2 (MEDIUM integrity): per-iteration try/catch so a
+            // mid-loop failure (ENOSPC, EACCES on one file) does NOT leave
+            // some modules fresh and others absent → companion crashes on next
+            // reload with ERR_MODULE_NOT_FOUND pointing at the missing one.
+            // Without this guard, atomicCopyFileSync's own atomicity only
+            // protects PER-FILE state (no half-written .js) — it does NOT
+            // protect PER-LIST state (3 files become 2). Mirrors step 1's
+            // outer try/catch discipline (patch.js copy is also isolated
+            // from src/*.js copy).
+            for (const mod of SRC_MODULES) {
+                const s = path.join(srcSrcDir, mod);
+                const d = path.join(dstSrcDir, mod);
+                if (fs.existsSync(s)) {
+                    try {
+                        atomicCopyFileSync(s, d);
+                        copied += 1;
+                    } catch (e) {
+                        failed += 1;
+                        warn(
+                            `failed to copy src/${mod} → ${d} (companion may crash with ERR_MODULE_NOT_FOUND when importing this module): ${(e as Error).message ?? String(e)}`,
+                        );
+                    }
+                } else {
+                    warn(`source module missing, not copied: src/${mod}`);
+                }
+            }
+            log(
+                `copied src/*.js → ${dstSrcDir} (${copied}/${SRC_MODULES.length} modules${failed > 0 ? `, ${failed} failed` : ""} — companion re-execs patch.js which imports these)`,
+            );
+        } else {
+            // Compiled mode WITHOUT `npm run build`: SCRIPT_DIR is dist/ but
+            // dist/src/ is entirely absent — broken build (npm run build did
+            // not emit dist/src/) or patch.js was run from an unexpected
+            // location. Surface loudly so the user runs `npm run build` before
+            // publishing. (Dev tsx mode has SCRIPT_DIR=project root where
+            // src/*.ts exists → enters the if branch above → per-file
+            // existsSync fails → 3× warn. The else here is NOT the dev case.)
+            warn(
+                `dist/src/ not found at ${srcSrcDir} — companion will crash with ERR_MODULE_NOT_FOUND on next --patch-only until \`npm run build\` is run`,
+            );
+        }
+    } catch (e) {
+        warn(
+            `failed to copy src/*.js to INSTALL_DIR (companion may fail to re-patch): ${(e as Error).message ?? String(e)}`,
+        );
+    }
+
     // 1b. Write INSTALL_DIR/companion-config.json with the constants the
     //     companion currently hand-mirrors (INSTALL_DIR / INJECT_MARKER /
     //     INJECT_VERSION / SEARCH_DIRS / ccExtIdPrefix / patchJsPath /
     //     patcherVersion). Best-effort — companion falls back to its hardcoded
     //     values if this file is missing or stale. See writeCompanionConfig.
     writeCompanionConfig();
+}
+
+/** Install (or refresh) the companion .vsix into every detected VS Code-family
+ *  CLI on PATH. Idempotent: re-running refreshes via `--force`. If NO CLI is
+ *  detected we warn and continue — the IIFE patch alone still works. Also
+ *  copies our compiled patch.js to INSTALL_DIR so the companion has a stable
+ *  path to re-exec at VS Code startup (see companion/extension.ts). */
+function installCompanion(): void {
+    // 1+1a+1b. Copy patch.js + src/*.js + companion-config.json into INSTALL_DIR.
+    //    Extracted to installCompanionRuntimeFiles() in v0.2.8 round-1 so the
+    //    standalone e2e (hooks/test-standalone-patch.mjs) can drive the real
+    //    copy path via `--install-companion-runtime` + CCSD_INSTALL_DIR=<tmp>.
+    installCompanionRuntimeFiles();
 
     // 2. Install the .vsix into every detected VS Code-family CLI.
     const vsixAbs = locateCompanionVsix();
@@ -3731,6 +3905,21 @@ function uninstallCompanion(): void {
     } catch (e) {
         warn(`could not remove ${dstPatchJs}: ${(e as Error).message ?? String(e)} (remove manually)`);
     }
+    // v0.2.8: also remove INSTALL_DIR/src/ (the semver/jsonc/surgical-json
+    // modules copied by installCompanion step 1a). Symmetric cleanup so
+    // --uninstall-companion (and the revert path that calls into it) does
+    // not leave orphan module files behind. --revert's removeInstallDir
+    // already recursive-rms INSTALL_DIR so this is cosmetic for that path,
+    // but --uninstall-companion does NOT touch INSTALL_DIR otherwise.
+    const dstSrcDir = path.join(INSTALL_DIR, "src");
+    try {
+        if (fs.existsSync(dstSrcDir)) {
+            fs.rmSync(dstSrcDir, { recursive: true, force: true });
+            log(`removed companion src/ copy: ${dstSrcDir}`);
+        }
+    } catch (e) {
+        warn(`could not remove ${dstSrcDir}: ${(e as Error).message ?? String(e)} (remove manually)`);
+    }
 }
 
 /** Surface companion install health in --status. Reports: vsix presence in the
@@ -3746,6 +3935,15 @@ function reportCompanionStatus(): void {
     const dstPatchJs = path.join(INSTALL_DIR, "patch.js");
     log(
         `  INSTALL_DIR/patch.js: ${fs.existsSync(dstPatchJs) ? "present" : "(missing — companion will warn at startup)"}`,
+    );
+    // v0.2.8: surface INSTALL_DIR/src/ module presence so a user diagnosing
+    // "auto-patch failed" can self-check whether the ESM-import dependencies
+    // are in place. Missing any of the three modules guarantees
+    // ERR_MODULE_NOT_FOUND on the next companion --patch-only.
+    const dstSrcDir = path.join(INSTALL_DIR, "src");
+    const srcPresent = SRC_MODULES.every((m) => fs.existsSync(path.join(dstSrcDir, m)));
+    log(
+        `  INSTALL_DIR/src/: ${srcPresent ? `present (${SRC_MODULES.length} modules)` : "(missing — companion will crash with ERR_MODULE_NOT_FOUND on next --patch-only, re-run `npx vscode-claude-code-status-dot`)"}`,
     );
     // v0.2.3: also surface the companion-config.json + last-repatch.json files
     // the patcher writes for the companion to read. A missing config means
@@ -3838,7 +4036,20 @@ function installRuntimeFiles(): void {
             const srcFile = path.join(srcRes, svg);
             try {
                 if (fs.existsSync(srcFile)) {
-                    fs.copyFileSync(srcFile, path.join(destRes, svg));
+                    // v0.2.8 round-3 MEDIUM (integrity): the LAST non-atomic copy in
+                    // installRuntimeFiles. cc-status.js (line ~4109) and token-rates.json
+                    // (line ~4194) both moved to atomicCopyFileSync in v0.2.6 round-3, but
+                    // this SVG loop was missed — same partial-copy risk under
+                    // ENOSPC/EINTR/SIGKILL: libuv uv_fs_copyfile opens dst with
+                    // O_CREAT|O_WRONLY|O_TRUNC and copies in chunks, so a mid-copy failure
+                    // leaves a truncated claude-logo-*.svg on disk. A partial SVG renders
+                    // as broken-emoji in the CC status bar, and the next install's stale
+                    // sweep (below) doesn't catch it because the filename still matches
+                    // OUR_SVGS. atomicCopyFileSync reads the source as a Buffer and writes
+                    // via tmp+rename (POSIX rename is atomic → dst is never observed
+                    // half-written), matching the discipline already used for hook/token
+                    // files in this same function.
+                    atomicCopyFileSync(srcFile, path.join(destRes, svg));
                     copied += 1;
                 } else {
                     warn(`source SVG missing, not copied: ${svg}`);
@@ -4513,6 +4724,20 @@ function run(argv: string[]): void {
     }
     if (args.includes("--status")) {
         reportStatus();
+        return;
+    }
+    if (args.includes("--install-companion-runtime")) {
+        // v0.2.8 round-1 (MEDIUM): dev/test-only entry. Runs ONLY the file-copy
+        // half of installCompanion (patch.js + src/*.js + companion-config.json
+        // → INSTALL_DIR) — skips the `code --install-extension` step so the test
+        // environment is not mutated. Used by hooks/test-standalone-patch.mjs
+        // with CCSD_INSTALL_DIR=<tmp> to verify the REAL install path copies
+        // src/*.js (the v0.2.7 regression was step 1a missing — the prior test
+        // mirror-copied the files itself, bypassing installCompanion, so it
+        // passed on v0.2.7 too and the regression was invisible). Calling this
+        // subcommand reproduces the bug class directly. Never advertised in
+        // --help; intentionally undocumented outside the test + this comment.
+        installCompanionRuntimeFiles();
         return;
     }
     if (args.includes("--patch-only")) {

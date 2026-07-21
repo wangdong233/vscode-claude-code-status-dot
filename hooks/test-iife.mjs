@@ -334,7 +334,10 @@ check(
 // (a regression that rolled back to v0.1.16 4-SBI would surface here
 // before any SBI assertion fires).
 // v0.2.7: stamp bumped for Q1 (tokens persistence) + Q2 (interrupted sticky).
-check('IIFE.21c banner carries v0.2.7 stamp', /\/\*cc-status-dot-injected:v0\.2\.7:/.test(iife));
+// v0.2.8: stamp bumped for INSTALL_DIR/src/ copy fix (IIFE body unchanged;
+// bump triggers companion IIFE-version drift detect → restore+reinject →
+// installCompanion re-runs and copies the missing src/ modules).
+check('IIFE.21c banner carries v0.2.8 stamp', /\/\*cc-status-dot-injected:v0\.2\.8:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));

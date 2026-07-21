@@ -128,7 +128,12 @@ function aggregate(home, now = Date.now(), pendingSet = null) {
     return ag; // no dir -> all zeros (matches IIFE's outer try/catch)
   }
   for (const f of files) {
-    if (!f.endsWith('.json')) continue;
+    // v0.2.8 round-2 (MEDIUM efficiency): skip <sid>.tokens.json snapshots.
+    // The IIFE aggregation filter was tightened to exclude them (they have
+    // no `state` field → JSON.parse was wasted work on every tick). Mirror
+    // the same filter here so the replica's bucket counts match the IIFE's
+    // exactly when a future test plants a .tokens.json in the state dir.
+    if (!f.endsWith('.json') || f.endsWith('.tokens.json')) continue;
     const fp = path.join(DIR, f);
     try {
       const j = JSON.parse(fs.readFileSync(fp, 'utf8'));

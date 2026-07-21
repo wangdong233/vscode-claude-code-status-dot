@@ -129,6 +129,31 @@ check(
 const cmpRows = rows.filter((r) => /^cmpVerStr/.test(r.name));
 check('corpus covers cmpVerStr (>=3 rows)', cmpRows.length >= 3, 'found ' + cmpRows.length);
 
+// v0.2.8 build-integrity gate: dist/patch.js imports three sibling modules
+// via relative ESM specifiers (`./src/semver.js`, `./src/jsonc.js`,
+// `./src/surgical-json.js`). The build MUST emit all three under dist/src/
+// or installCompanion's copy step has nothing to copy → the companion
+// auto-heal crashes at module load with ERR_MODULE_NOT_FOUND. Hooks the
+// v0.2.4 latent bug at the build layer (separate from the standalone e2e
+// in test-standalone-patch.mjs, which hooks it at the runtime layer).
+if (fs.existsSync(DIST_PATCH)) {
+  const DIST_SRC = path.join(ROOT, 'dist', 'src');
+  for (const m of ['semver.js', 'jsonc.js', 'surgical-json.js']) {
+    check(
+      `dist/src/${m} present (patch.js imports it via ESM)`,
+      fs.existsSync(path.join(DIST_SRC, m)),
+      'run `npm run build` — dist/src/ missing',
+    );
+  }
+} else {
+  // Dev fallback path (tsx): src/*.ts exists in project root, dist/src/*.js
+  // is not expected. Skip rather than fail — the standalone e2e covers the
+  // built-product check.
+  for (const m of ['semver.js', 'jsonc.js', 'surgical-json.js']) {
+    check(`dist/src/${m} present — skipped (dev tsx fallback)`, true);
+  }
+}
+
 console.log('');
 if (fail === 0) {
   console.log(`All ${pass} patcher-I/O self-test rows passed.`);

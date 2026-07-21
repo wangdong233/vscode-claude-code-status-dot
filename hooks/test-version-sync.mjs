@@ -110,16 +110,112 @@ if (injectVerFallbackMatch) {
   );
 }
 
-// --- companion/package.json version (companion releases can decouple from
-// the patcher's package.json version, but the v0.2.x line currently keeps
-// them in lockstep — flag if they drift so the maintainer makes an
-// intentional choice rather than an accidental one) ---
+// v0.2.8 round-1 (MEDIUM): source-vs-shipped-artifact drift gate. The prior
+// test only read companion/extension.ts SOURCE, so a maintainer who bumped
+// extension.ts but forgot `npm run companion:build` shipped a STALE compiled
+// artifact (companion/dist/extension.js still had the old literals). The
+// HIGH finding in v0.2.8 was exactly this: the .vsix shipped with
+// MIN_PATCHER_VERSION="0.2.7" + injectVersion fallback "v0.2.7" while source
+// said 0.2.8. Cross-check the compiled artifact (if present) against the
+// source literal so the dev-loop edit-source-then-`npm test` flow catches
+// the "forgot to rebuild" drift directly. (The release boundary is gated
+// separately by hooks/assert-companion-vsix.mjs, which `prepublishOnly`
+// runs as its final step AFTER `companion:build`+`companion:package` — this
+// test is the DEVELOPER loop gate, not the release gate. Earlier comment
+// versions implied prepublishOnly ran this test, which is not the case:
+// `npm test` does not appear in the prepublishOnly chain.)
+const companionDistPath = path.join(ROOT, 'companion', 'dist', 'extension.js');
+if (fs.existsSync(companionDistPath)) {
+  const companionDist = fs.readFileSync(companionDistPath, 'utf8');
+  if (minPatcherMatch) {
+    const distMinPatcherMatch = companionDist.match(/MIN_PATCHER_VERSION\s*=\s*"(\d+\.\d+\.\d+)"/);
+    check('companion/dist/extension.js exists with MIN_PATCHER_VERSION literal', !!distMinPatcherMatch);
+    if (distMinPatcherMatch) {
+      check(
+        `companion/dist/extension.js MIN_PATCHER_VERSION (${distMinPatcherMatch[1]}) === source (${minPatcherMatch[1]}) — rebuild drift gate`,
+        distMinPatcherMatch[1] === minPatcherMatch[1],
+        distMinPatcherMatch[1] !== minPatcherMatch[1]
+          ? `stale compiled artifact — run \`npm run companion:build\` to recompile (source=${minPatcherMatch[1]}, dist=${distMinPatcherMatch[1]})`
+          : '',
+      );
+    }
+  }
+  if (injectVerFallbackMatch) {
+    // The TS compiler keeps the `??` nullish-coalesce operator and the literal
+    // in the emitted JS, so the same regex shape works on both source and dist.
+    const distFallbackMatch = companionDist.match(/\?\?\s*"v(\d+\.\d+\.\d+)"/);
+    check('companion/dist/extension.js has injectVersion() `?? "vX.Y.Z"` fallback literal', !!distFallbackMatch);
+    if (distFallbackMatch) {
+      check(
+        `companion/dist/extension.js injectVersion fallback (v${distFallbackMatch[1]}) === source (v${injectVerFallbackMatch[1]}) — rebuild drift gate`,
+        distFallbackMatch[1] === injectVerFallbackMatch[1],
+        distFallbackMatch[1] !== injectVerFallbackMatch[1]
+          ? `stale compiled artifact — run \`npm run companion:build\` to recompile (source=v${injectVerFallbackMatch[1]}, dist=v${distFallbackMatch[1]})`
+          : '',
+      );
+    }
+  }
+} else {
+  // Dev-only: companion/dist/ may not exist until the first `companion:build`.
+  // prepublishOnly always emits it before release. Skip in a bare dev tree.
+  check('companion/dist/extension.js present (skipped — run `npm run companion:build` once)', true);
+}
+
+// companion/package.json version lockstep policy. Through v0.2.5 the
+// companion version was kept in lockstep with the patcher's package.json
+// version (both bumped together on every release). v0.2.7+ decoupled them:
+// the companion can LAG the patcher when a release only touches patch.ts
+// (the companion .vsix runtime behavior is unchanged — only the embedded
+// MIN_PATCHER_VERSION + injectVersion() fallback literals move, and those
+// flow through companion-config.json at install time without a .vsix
+// rebuild). The reverse — companion AHEAD of patcher — would mean a
+// companion .vsix shipped against a patcher version that doesn't exist
+// yet, which is always an accidental bump. Same-major.minor is required:
+// a companion 0.3.x against patcher 0.2.x means a feature was added to
+// the companion without the corresponding patcher release.
+//
+// v0.2.8 round-2 (MEDIUM): the prior comment here promised "flag if they
+// drift" but the code only validated X.Y.Z format — the test passed green
+// even as the actual repo drifted from 0.2.5/0.2.5 (in lockstep) to
+// 0.2.8/0.2.6 (intentional lag) to a hypothetical 0.2.5/0.2.9 (accidental
+// ahead). The new assertions below enforce the documented policy:
+//   1. companion.version is a valid X.Y.Z.
+//   2. companion.version is in the same major.minor as pkg.version.
+//   3. companion.version is <= pkg.version (lag OK, ahead NOT OK).
+// A maintainer who wants to bump the companion past the patcher must
+// either bump the patcher in lockstep OR document the override here.
 const companionPkg = JSON.parse(read('companion/package.json'));
 check(
   `companion/package.json version (${companionPkg.version}) is a valid X.Y.Z`,
   /^\d+\.\d+\.\d+$/.test(companionPkg.version),
   'got ' + companionPkg.version,
 );
+function parseVer(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+const cVer = parseVer(companionPkg.version);
+const pVer = parseVer(pkgVersion);
+if (cVer && pVer) {
+  check(
+    `companion (${companionPkg.version}) and patcher (${pkgVersion}) share major.minor`,
+    cVer[0] === pVer[0] && cVer[1] === pVer[1],
+    'a cross-major.minor drift means the companion shipped a feature without a matching patcher release',
+  );
+  // Lag allowed (companion <= patcher); ahead is an accidental bump.
+  // cmpVerStr-style numeric compare on the triple.
+  const companionAhead =
+    cVer[0] > pVer[0] ||
+    (cVer[0] === pVer[0] && cVer[1] > pVer[1]) ||
+    (cVer[0] === pVer[0] && cVer[1] === pVer[1] && cVer[2] > pVer[2]);
+  check(
+    `companion (${companionPkg.version}) is not AHEAD of patcher (${pkgVersion}) — lag OK, ahead is accidental`,
+    !companionAhead,
+    companionAhead
+      ? 'companion.version > patcher.version — either bump package.json in lockstep or document the override in this test'
+      : '',
+  );
+}
 
 // v0.2.5 round-1 (MEDIUM): every config key the IIFE reads via
 // cfg.get("...") MUST be declared in companion/package.json's
@@ -383,6 +479,99 @@ if (canonicalBody) {
     if (corpusOk) {
       check('cmpVerStr canonical body agrees on full corpus (' + corpus.length + ' cases)', true);
     }
+  }
+}
+
+// v0.2.8 round-2 (MEDIUM version-sync / defense-in-depth): getCmpVerStr()
+// in companion/extension.ts constructs the comparator via `new Function("a",
+// "b", src)` where `src` is read from companion-config.json's
+// semverComparatorSrc field — a user-writable file under INSTALL_DIR
+// (~/.claude/cc-status-dot/). Anyone with write access to that dir already
+// has arbitrary code execution (they could just edit INSTALL_DIR/patch.js
+// directly), so `new Function` does NOT escalate privilege. But the body
+// now passes through a defensive gate (SAFE_TOKEN_RE allow-list + DANGEROUS
+// block-list) before compilation — a future reuse of this pattern in a more
+// sensitive context would inherit the gate. Verify:
+//   1. The companion source declares the SAFE_TOKEN_RE + DANGEROUS gates.
+//   2. The canonical body (src/semver.ts cmpVerStr body) passes BOTH gates.
+//   3. Adversarial bodies (process.exit, fetch, __proto__, Function
+//      constructor) are REJECTED by at least one gate.
+{
+  const SAFE_RE_DECLARED = /const\s+SAFE_TOKEN_RE\s*=\s*\/(.+)\/[a-z]*;?/.test(companionSrc);
+  check(
+    'companion getCmpVerStr declares SAFE_TOKEN_RE allow-list (round-2 MEDIUM defense-in-depth)',
+    SAFE_RE_DECLARED,
+    'expected `const SAFE_TOKEN_RE = /.../;` near getCmpVerStr in companion/extension.ts',
+  );
+  const DANGEROUS_DECLARED = /const\s+DANGEROUS\s*=\s*\/(.+)\/[a-z]*;?/.test(companionSrc);
+  check(
+    'companion getCmpVerStr declares DANGEROUS block-list (round-2 MEDIUM defense-in-depth)',
+    DANGEROUS_DECLARED,
+    'expected `const DANGEROUS = /.../;` near getCmpVerStr in companion/extension.ts',
+  );
+  // Extract the two regex literals from companion source and rebuild them in
+  // this test process so we can run them against canonical + adversarial
+  // bodies. Mirrors the contract-sync pattern of regex-extracting source.
+  function extractRegex(src, name) {
+    const m = src.match(new RegExp('const\\s+' + name + '\\s*=\\s*/(.+)/([a-z]*);?'));
+    if (!m) return null;
+    try {
+      return new RegExp(m[1], m[2]);
+    } catch (e) {
+      return null;
+    }
+  }
+  const safeRe = extractRegex(companionSrc, 'SAFE_TOKEN_RE');
+  const dangerousRe = extractRegex(companionSrc, 'DANGEROUS');
+  if (safeRe && dangerousRe && canonicalBody) {
+    // Canonical body MUST pass both gates (otherwise the production companion
+    // would silently degrade to skip-check — the very regression this defense
+    // is supposed to prevent).
+    const safeOk = safeRe.test(canonicalBody);
+    const notDangerous = !dangerousRe.test(canonicalBody);
+    check(
+      'canonical cmpVerStr body passes SAFE_TOKEN_RE (round-2 MEDIUM)',
+      safeOk,
+      'the canonical body was rejected by the allow-list — production companion would silently degrade; chars outside the vocabulary: ' +
+        JSON.stringify([...new Set(canonicalBody.replace(/[A-Za-z0-9_.,;:()?<>!=|&+\-*/%\s"{}\[\]]/g, ''))]),
+    );
+    check(
+      'canonical cmpVerStr body passes DANGEROUS block-list (round-2 MEDIUM)',
+      notDangerous,
+      'the canonical body was matched by the block-list — production companion would silently degrade',
+    );
+    // Adversarial bodies MUST be rejected. Each one is a known dangerous
+    // shape that an attacker with config-write access would try.
+    const adversarial = [
+      ['process.exit(0)', 'process access'],
+      ['return process.env.HOME', 'process.env access'],
+      ['return require("fs").readFileSync(b)', 'require import'],
+      ['const f = new Function("a", "return a"); return f(a)', 'Function constructor'],
+      ['globalThis.__attack = a', 'globalThis mutation'],
+      ['this.constructor.constructor("return process")().exit()', 'this escape'],
+      ['eval("process.exit(0)")', 'eval'],
+      ['return (a = {__proto__: {}}), 0', '__proto__ pollution'],
+    ];
+    let advOk = true;
+    const advFails = [];
+    for (const [body, label] of adversarial) {
+      const passesSafe = safeRe.test(body);
+      const passesDanger = !dangerousRe.test(body);
+      // At least ONE gate must reject (either the allow-list excludes it, OR
+      // the block-list catches it). If both gates pass, the body would
+      // compile → security gap.
+      if (passesSafe && passesDanger) {
+        advOk = false;
+        advFails.push(label);
+      }
+    }
+    check(
+      'adversarial bodies (8 vectors) rejected by at least one gate (round-2 MEDIUM)',
+      advOk,
+      advFails.length ? 'these vectors passed BOTH gates: ' + advFails.join(', ') : '',
+    );
+  } else {
+    check('canonical body + companion regexes extractable (round-2 MEDIUM) — skipped', true);
   }
 }
 

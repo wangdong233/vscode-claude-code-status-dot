@@ -4,25 +4,39 @@
 // (ARCH-1 first slice). Pure function — no I/O, no closure dependencies.
 // Used by:
 //   - patch.ts: discoverExtension sorts CC extension dirs by version.
-//   - patch.ts: writeCompanionConfig flow (the comparator body is mirrored
-//     by the companion; see ARCH-3 / test-version-sync.mjs).
+//   - patch.ts: writeCompanionConfig flow (extractCmpVerStrBody reads this
+//     file at install time and bakes the body into companion-config.json's
+//     semverComparatorSrc field — see ARCH-3 / test-version-sync.mjs).
 //
-// MIRROR NOTE: companion/extension.ts:cmpVerStr is a byte-for-byte mirror
-// of this body. The companion compiles standalone into a .vsix so it cannot
-// import this module at runtime — the price of distribution isolation is a
-// mirror copy. A future 4-segment or pre-release-tag change touches BOTH
-// sides; see hooks/test-version-sync.mjs for the CI assertion that the two
-// implementations agree on a fixed test corpus.
+// ARCH-3 mirror-elimination (v0.2.5 round-2, final form in v0.2.8 round-2):
+// through v0.2.4 the companion had a byte-for-byte mirror `cmpVerStr`
+// function in companion/extension.ts. ARCH-3 eliminated the mirror by
+// having patch.ts:extractCmpVerStrBody regex-extract the body from this
+// file and bake it into companion-config.json; the companion then reads
+// that field at activate() and `new Function('a','b', src)`-caches it on
+// globalThis. The companion compiles standalone into a .vsix so it cannot
+// `import` this module at runtime — the config-baked body is the runtime
+// channel that keeps the canonical source flowing without a static mirror.
+// extractCmpVerStrBody tries `dist/src/semver.js` (shipped in the npm
+// tarball) first and falls back to this `src/semver.ts` (dev tsx mode); the
+// two have byte-identical function bodies because tsc only strips type
+// annotations. A future 4-segment or pre-release-tag change touches ONE
+// function (this one); test-version-sync.mjs §Q asserts the config-baked
+// body agrees with this source on a fixed test corpus, and test-contract-
+// sync.mjs pins the IIFE-baked .tokens.json literal that the snapshot
+// fallback reads.
 
 /** Compare two `X.Y.Z` (or `X.Y`, or any segment count) version strings.
  *  Returns >0 if a>b, <0 if a<b, 0 if equal. Numeric per-segment comparison
  *  (not lexical). Missing segments on either side are treated as 0.
  *
  *  Canonical helper for ALL semver comparisons in the patcher + the companion
- *  (companion/extension.ts has its own cmpVerStr that MIRRORS this body —
- *  keep them in lockstep; the companion compiles standalone into a .vsix so
- *  it cannot import from here at runtime). A future 4-segment or
- *  pre-release-tag change touches ONE function (this one) + the mirror.
+ *  (the companion reads this body from companion-config.json's
+ *  semverComparatorSrc field at activate() — written by patch.ts:
+ *  writeCompanionConfig via extractCmpVerStrBody — and `new Function`
+ *  compiles it; keep this body self-contained, no closure captures).
+ *  A future 4-segment or pre-release-tag change touches ONE function (this
+ *  one) + the companion's whitelist (see getCmpVerStr's safe-tokens gate).
  *
  *  v0.2.4 follow-up: consolidated the prior cmpSemver/cmpVer/cmpVerStr trio
  *  (string-comparator + number[]-alias + thin-wrapper) into a single

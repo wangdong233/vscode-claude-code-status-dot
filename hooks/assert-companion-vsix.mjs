@@ -14,6 +14,15 @@
 //      `version` AND `activationEvents` match what we expect. The activation
 //      check is specifically the regression that bit v0.2.0 (illegal
 //      "onStartup" event silently disabled the companion).
+//   4. v0.2.8 round-1 (HIGH) — also extract extension/dist/extension.js from
+//      the .vsix and verify its embedded MIN_PATCHER_VERSION + injectVersion
+//      fallback literals match the source (companion/extension.ts). The
+//      v0.2.8 release shipped a .vsix with MIN_PATCHER_VERSION="0.2.7" while
+//      source said "0.2.8" — companion:build was last run before the source
+//      bump and companion:package was never re-run. This gate catches the
+//      same drift class at the release boundary, complementing the
+//      dev-loop drift gate in test-version-sync.mjs (which checks
+//      companion/dist/extension.js directly).
 //
 // Zero runtime deps — uses only Node's built-in zlib + a minimal zip central-
 // directory reader (the .vsix is a standard ZIP archive, same as .vsix files
@@ -76,43 +85,41 @@ const cdSize = buf.readUInt32LE(eocd + 12);
 const cdOffset = buf.readUInt32LE(eocd + 16);
 if (cdOffset + cdSize > buf.length) fail(`${vsixPath} central directory is truncated`);
 
-// Walk the central directory looking for `package.json` at the root.
-let ptr = cdOffset;
-let pkgEntry = null;
-for (let i = 0; i < cdEntries; i += 1) {
-  if (buf.readUInt32LE(ptr) !== 0x02014b50) fail(`${vsixPath} central directory corrupt at entry ${i}`);
-  const compMethod = buf.readUInt16LE(ptr + 10);
-  const compSize = buf.readUInt32LE(ptr + 20);
-  const uncompressedSize = buf.readUInt32LE(ptr + 24);
-  const fnLen = buf.readUInt16LE(ptr + 28);
-  const extraLen = buf.readUInt16LE(ptr + 30);
-  const commentLen = buf.readUInt16LE(ptr + 32);
-  const localHeaderOffset = buf.readUInt32LE(ptr + 42);
-  const fn = buf.subarray(ptr + 46, ptr + 46 + fnLen).toString('utf8');
-  if (fn === 'extension/package.json') {
-    pkgEntry = { compMethod, compSize, uncompressedSize, localHeaderOffset };
-    break;
+// v0.2.8 round-1 (HIGH): factor the central-directory walk into a helper so we
+// can pull BOTH extension/package.json (manifest version/activationEvents
+// check) AND extension/dist/extension.js (compiled-in MIN_PATCHER_VERSION +
+// injectVersion fallback check) out of the same .vsix. Returns the inflated
+// file text or null if the entry is absent.
+function readVsixEntry(entryName) {
+  let ptr = cdOffset;
+  for (let i = 0; i < cdEntries; i += 1) {
+    if (buf.readUInt32LE(ptr) !== 0x02014b50) fail(`${vsixPath} central directory corrupt at entry ${i}`);
+    const compMethod = buf.readUInt16LE(ptr + 10);
+    const compSize = buf.readUInt32LE(ptr + 20);
+    const fnLen = buf.readUInt16LE(ptr + 28);
+    const extraLen = buf.readUInt16LE(ptr + 30);
+    const commentLen = buf.readUInt16LE(ptr + 32);
+    const localHeaderOffset = buf.readUInt32LE(ptr + 42);
+    const fn = buf.subarray(ptr + 46, ptr + 46 + fnLen).toString('utf8');
+    if (fn === entryName) {
+      // Read the local file header to find the data offset.
+      const lh = localHeaderOffset;
+      if (buf.readUInt32LE(lh) !== 0x04034b50) fail(`${vsixPath} local header for ${entryName} corrupt`);
+      const lhFnLen = buf.readUInt16LE(lh + 26);
+      const lhExtraLen = buf.readUInt16LE(lh + 28);
+      const dataStart = lh + 30 + lhFnLen + lhExtraLen;
+      const compData = buf.subarray(dataStart, dataStart + compSize);
+      if (compMethod === 0) return compData.toString('utf8');
+      if (compMethod === 8) return inflateRawSync(compData).toString('utf8');
+      fail(`${vsixPath} ${entryName} uses unsupported compression method ${compMethod}`);
+    }
+    ptr += 46 + fnLen + extraLen + commentLen;
   }
-  ptr += 46 + fnLen + extraLen + commentLen;
+  return null;
 }
-if (!pkgEntry) fail(`${vsixPath} is missing extension/package.json — the .vsix is malformed`);
 
-// Read the local file header to find the data offset.
-const lh = pkgEntry.localHeaderOffset;
-if (buf.readUInt32LE(lh) !== 0x04034b50) fail(`${vsixPath} local header for package.json corrupt`);
-const lhFnLen = buf.readUInt16LE(lh + 26);
-const lhExtraLen = buf.readUInt16LE(lh + 28);
-const dataStart = lh + 30 + lhFnLen + lhExtraLen;
-const compData = buf.subarray(dataStart, dataStart + pkgEntry.compSize);
-
-let pkgJsonText;
-if (pkgEntry.compMethod === 0) {
-  pkgJsonText = compData.toString('utf8');
-} else if (pkgEntry.compMethod === 8) {
-  pkgJsonText = inflateRawSync(compData).toString('utf8');
-} else {
-  fail(`${vsixPath} package.json uses unsupported compression method ${pkgEntry.compMethod}`);
-}
+const pkgJsonText = readVsixEntry('extension/package.json');
+if (pkgJsonText === null) fail(`${vsixPath} is missing extension/package.json — the .vsix is malformed`);
 
 let innerPkg;
 try {
@@ -135,8 +142,54 @@ if (innerIllegal.length > 0) {
   );
 }
 
+// v0.2.8 round-1 (HIGH): cross-check the compiled-in version constants inside
+// the .vsix against companion/extension.ts source. This is the exact drift
+// that bit v0.2.8: extension.ts source said MIN_PATCHER_VERSION="0.2.8" but
+// the compiled artifact embedded in the .vsix still said "0.2.7" because
+// companion:package ran before the source bump. Without this gate, the only
+// thing checking the .vsix is the manifest version (already checked above) —
+// the JS-embedded literals sail through unchecked.
+const companionSrc = readFileSync(join(COMPANION_DIR, 'extension.ts'), 'utf8');
+const srcMinPatcher = companionSrc.match(/const\s+MIN_PATCHER_VERSION\s*=\s*"(\d+\.\d+\.\d+)"/);
+const srcInjectFallback = companionSrc.match(
+  /function\s+injectVersion\([^)]*\)(?::[^{]*)?{[\s\S]*?\?\?\s*"v(\d+\.\d+\.\d+)"/,
+);
+if (!srcMinPatcher) fail(`companion/extension.ts missing MIN_PATCHER_VERSION literal — source drift`);
+if (!srcInjectFallback) fail(`companion/extension.ts missing injectVersion() ?? "vX.Y.Z" fallback — source drift`);
+
+const extJsText = readVsixEntry('extension/dist/extension.js');
+if (extJsText === null) {
+  fail(
+    `${vsixPath} is missing extension/dist/extension.js — the .vsix was packaged before \`npm run companion:build\` emitted the compiled artifact. Re-run \`npm run companion:build && npm run companion:package\`.`,
+  );
+}
+
+const distMinPatcher = extJsText.match(/MIN_PATCHER_VERSION\s*=\s*"(\d+\.\d+\.\d+)"/);
+if (!distMinPatcher) {
+  fail(
+    `${vsixPath} extension/dist/extension.js missing MIN_PATCHER_VERSION literal — compiled artifact shape changed?`,
+  );
+}
+if (distMinPatcher[1] !== srcMinPatcher[1]) {
+  fail(
+    `${vsixPath} STALE compiled artifact: extension.ts source has MIN_PATCHER_VERSION="${srcMinPatcher[1]}" but the embedded extension.js has "${distMinPatcher[1]}". Re-run \`npm run companion:build && npm run companion:package\` after editing extension.ts. This exact drift shipped the v0.2.8 HIGH finding.`,
+  );
+}
+
+// The TS compiler keeps `?? "vX.Y.Z"` literal verbatim in the emitted JS, so
+// the same regex shape works against the compiled output.
+const distInjectFallback = extJsText.match(/\?\?\s*"v(\d+\.\d+\.\d+)"/);
+if (!distInjectFallback) {
+  fail(`${vsixPath} extension/dist/extension.js missing injectVersion() ?? "vX.Y.Z" fallback literal`);
+}
+if (distInjectFallback[1] !== srcInjectFallback[1]) {
+  fail(
+    `${vsixPath} STALE compiled artifact: extension.ts source has injectVersion fallback v${srcInjectFallback[1]} but the embedded extension.js has v${distInjectFallback[1]}. Re-run \`npm run companion:build && npm run companion:package\`.`,
+  );
+}
+
 console.log(
   `[assert-companion-vsix] OK — vsix ${expectedVersion} present, embedded version matches, activationEvents clean (${JSON.stringify(
     innerActivation,
-  )})`,
+  )}), compiled MIN_PATCHER_VERSION=${distMinPatcher[1]} + injectVersion fallback v${distInjectFallback[1]} match source`,
 );

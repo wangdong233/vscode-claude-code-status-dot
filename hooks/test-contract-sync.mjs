@@ -350,6 +350,100 @@ if (patchTokens !== null && hookTokens !== null) {
   }
 }
 
+// --- SRC_MODULES ↔ patch.ts `from "./src/...js"` imports parity (v0.2.8 round-2 HIGH) ---
+// installCompanionRuntimeFiles copies SRC_MODULES into INSTALL_DIR/src/ so
+// the standalone patch.js (re-exec'd by the companion after a CC auto-update)
+// can resolve its relative ESM specifiers (`./src/semver.js` etc.) at module
+// load. The list is hand-maintained in 4 places:
+//   patch.ts:        `const SRC_MODULES = ["semver.js", "jsonc.js", "surgical-json.js"]`
+//   patch.ts:        reportCompanionStatus (uses SRC_MODULES.length + .every)
+//   hooks/test-standalone-patch.mjs: SRC_MODULES local copy
+//   hooks/test-patcher-io.mjs:       hardcoded ['semver.js','jsonc.js','surgical-json.js']
+//
+// v0.2.7 regression shape: a future patch.ts that adds
+//   `import { foo } from "./src/foo.js"`
+// and forgets to update SRC_MODULES leaves installCompanion skipping the new
+// module → companion auto-heal crashes with ERR_MODULE_NOT_FOUND on the next
+// --patch-only. The v0.2.8 round-1 standalone e2e catches the EXISTING list
+// at the runtime layer, but it cannot catch a NEW import added without a
+// SRC_MODULES bump — that gap silently re-arms the v0.2.7 bug class. This
+// guard extracts BOTH the SRC_MODULES list AND the actual `from "./src/...js"`
+// imports from patch.ts source, then asserts set equality. A new import
+// without a SRC_MODULES bump fails this check directly.
+{
+  // Extract SRC_MODULES array literal from patch.ts.
+  const srcModulesMatch = patchSrc.match(/const\s+SRC_MODULES\s*=\s*\[([^\]]+)\]/);
+  check('patch.ts defines SRC_MODULES array literal (round-2 HIGH)', !!srcModulesMatch);
+  let srcModules = [];
+  if (srcModulesMatch) {
+    // Extract every double-quoted .js filename inside the brackets.
+    const re = /"([^"]+\.js)"/g;
+    let m;
+    while ((m = re.exec(srcModulesMatch[1])) !== null) srcModules.push(m[1]);
+  }
+  check('SRC_MODULES list is non-empty (round-2 HIGH)', srcModules.length > 0, 'got ' + JSON.stringify(srcModules));
+
+  // Extract the actual `import { ... } from "./src/<name>.js"` statements at
+  // the top of patch.ts. The `^\s*import` anchor (with the `m` flag) refuses
+  // to match `from "./src/..."` substrings that appear inside JSDoc or line
+  // comments — the prior naive `from\s+['"]\.\/src\/...` shape matched the
+  // very JSDoc examples that document this contract (false positives:
+  // "...js" and "foo.js"). Tolerate single/double quotes. Captures only the
+  // basename (e.g. "semver.js" from "./src/semver.js") for direct comparison
+  // with SRC_MODULES entries (which are basenames). The `[^;]*?` between
+  // `import` and `from` lazily matches the named-imports clause without
+  // crossing statement boundaries.
+  const imports = new Set();
+  const importRe = /^\s*import\s+[^;]*?from\s+['"]\.\/src\/([^'"/]+\.js)['"]/gm;
+  let im;
+  while ((im = importRe.exec(patchSrc)) !== null) imports.add(im[1]);
+  check(
+    'patch.ts has at least one `from "./src/...js"` import (round-2 HIGH)',
+    imports.size > 0,
+    'no imports found — the regex shape may have drifted',
+  );
+
+  // Parity assertion #1: every ./src import MUST appear in SRC_MODULES.
+  // A new import without a SRC_MODULES bump fails here (the v0.2.7 regression
+  // shape — companion would crash on the un-copied module).
+  const missingFromSrcModules = [...imports].filter((m) => !srcModules.includes(m));
+  check(
+    'every `from "./src/...js"` import appears in SRC_MODULES (round-2 HIGH: companion crash gate)',
+    missingFromSrcModules.length === 0,
+    missingFromSrcModules.length
+      ? 'imported but NOT in SRC_MODULES (installCompanion would skip the copy → ERR_MODULE_NOT_FOUND): ' +
+          missingFromSrcModules.join(', ')
+      : '',
+  );
+
+  // Parity assertion #2: every SRC_MODULES entry MUST have a corresponding
+  // import. An orphan entry (SRC_MODULES lists a module that patch.ts no
+  // longer imports) is wasted work at install time + confusing diagnostic
+  // surface — not a crash, but a stale-list signal that bites the next
+  // maintainer who tries to reason about the install contract.
+  const orphanedInSrcModules = srcModules.filter((m) => !imports.has(m));
+  check(
+    'every SRC_MODULES entry has a matching `from "./src/...js"` import (round-2 HIGH: no stale orphans)',
+    orphanedInSrcModules.length === 0,
+    orphanedInSrcModules.length
+      ? 'listed in SRC_MODULES but patch.ts does not import (stale list): ' + orphanedInSrcModules.join(', ')
+      : '',
+  );
+
+  // Sanity: SRC_MODULES contains the v0.2.4 architecture-split canonical trio.
+  // A future rename (e.g. semver.js → semver-utils.js) that touches both the
+  // import and SRC_MODULES would still pass the two parity checks above, but
+  // this pin forces the maintainer to also update the standalone e2e test
+  // (which hardcodes the same names) — a deliberate friction point.
+  for (const m of ['semver.js', 'jsonc.js', 'surgical-json.js']) {
+    check(
+      `SRC_MODULES contains ${m} (v0.2.4 canonical trio)`,
+      srcModules.includes(m),
+      'got ' + JSON.stringify(srcModules),
+    );
+  }
+}
+
 console.log('');
 if (fail === 0) {
   console.log(`All ${pass} contract-sync checks passed.`);

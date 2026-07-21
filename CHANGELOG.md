@@ -2,6 +2,55 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.2.8] - 2026-07-21
+
+**INSTALL_DIR/src/ 缺失修复**。v0.2.4 把 `patch.ts` 拆成 `src/{semver,jsonc,surgical-json}.ts` 三模块,编译产物 `dist/patch.js` 通过相对 ESM specifier 导入它们(`import { cmpVerStr } from "./src/semver.js"` 等)。但 `installCompanion()` 只把 `patch.js` 拷到 `~/.claude/cc-status-dot/`,**忘了同拷 `dist/src/*.js`**——companion 在 CC 自动更新覆盖 extension.js 后跑 `node ~/.claude/cc-status-dot/patch.js --patch-only` 时,Node ESM loader 在任何代码执行前解析这些 specifier,找不到文件直接抛 `ERR_MODULE_NOT_FOUND`,companion 只能上报模糊的 "auto-patch failed"。潜在自 v0.2.4,v0.2.7 CC 自动更新触发后暴露。
+
+### Fixed
+
+- **HIGH companion-auto-patch(`installCompanion` 缺 src/ 拷贝)**:在拷贝 `patch.js → INSTALL_DIR/patch.js` 之后,新增同源拷贝 `dist/src/{semver,jsonc,surgical-json}.js → INSTALL_DIR/src/`,复用既有 `atomicCopyFileSync`(tmp+rename,与 `patch.js`/`resources/`/`hooks/`/`token-rates.json` 同一原子保证);幂等 + 同 `installRuntimeFiles` 的 stale-sweep 模式(只清 `dstSrcDir/*.js` 中不在 `SRC_MODULES` 列表的孤儿);非致命 try/catch包裹(与现有 `patch.js` 拷贝分支一致)。
+- **MEDIUM 对称清理(`uninstallCompanion` 漏 src/)**:`--uninstall-companion` 现一并 `rmSync(INSTALL_DIR/src/, {recursive,force})`;`--revert` 路径经由 `removeInstallDir`(已 recursive rm INSTALL_DIR)自然覆盖。
+- **LOW 自查可观测(`reportCompanionStatus` 不显示 src/ 健康)**:`--status` 现输出 `INSTALL_DIR/src/: present (3 modules) | (missing — companion will crash with ERR_MODULE_NOT_FOUND on next --patch-only, re-run npx …)`,让用户在 companion 报错后能一眼定位。
+
+### Changed
+
+- `INJECT_VERSION` v0.2.7 → v0.2.8。IIFE body 未变,但 bump 是让既有 v0.2.7 装机用户自愈的关键触发器:用户重跑 `npx vscode-claude-code-status-dot@latest` 后,companion 启动时检测到 IIFE stamp v0.2.7 ≠ want v0.2.8 → 触发 restore+reinject → `installCompanion` 重跑 → 拷 `src/`(同时 `companion-config.json` 的 `patcherVersion` 写 0.2.8,companion 的 `MIN_PATCHER_VERSION` 0.2.8 检查通过)。
+- `companion/MIN_PATCHER_VERSION` 与 `injectVersion()` fallback 同步到 0.2.8 / v0.2.8。既有 v0.2.7 装机的 `companion-config.json` 写的是 `patcherVersion=0.2.7 < 0.2.8` → companion warn "stale patcher snapshot, re-run npx" 引导升级。
+- `HOOK_VERSION` 保持 v0.2.1(cc-status.js writer 契约未变 → hook banner hash 不变 → 无需 re-stamp)。
+- `companion/package.json` 版本(0.2.6)保持不变 —— `extension.ts` 内的版本字面量未动。**注意**:Round-2 在 `companion/extension.ts` 的 `getCmpVerStr()` 里**新增**了 `SAFE_TOKEN_RE` + `DANGEROUS` 双门正则对 `new Function(src)` 做防御性校验,这**属于 .vsix 运行时行为新增**(compiled 进 `companion/dist/extension.js`)。companion 版本号虽未 bump,但既有装机用户**需手动重装 `companion/cc-status-dot-companion-*.vsix`** 才能拿到该新增运行时保护(参见下方 Round-2 的 version-sync lockstep policy)。
+
+### Round-2(后续复审 pass)
+
+Round-1 修的是显性崩溃(ERR_MODULE_NOT_FOUND);Round-2 在复审中又挖出一组隐性漏洞,均不影响 patcher 主路径,但都属于 round-1 修复的"周边地带",发布前一并修。
+
+#### Fixed
+
+- **HIGH `extractCmpVerStrBody` 生产侧 null**:`companion-config.json` 的 `semverComparatorSrc` 字段是从 `src/semver.ts` 抽取的 `cmpVerStr` 函数体,companion 用它构造 `new Function('a','b', src)` 做版本比较。但 `extractCmpVerStrBody` round-1 实现只查 `<SCRIPT_DIR>/../src/semver.{ts,js}` 等 4 个 candidate,**生产 tarball 里根本没有 `src/*.ts`**(npm `files` 白名单只放行 `dist/`),所以 v0.2.4–v0.2.7 每个生产用户的 `companion-config.json` 写的都是 `semverComparatorSrc: null`。companion 在该字段为 null 时 fallback 到内建硬编码比较器(勉强能用,但完全绕过了"单一真相源"设计意图,且 fallback 路径从未被测试覆盖)。Round-2 把 candidate 列表改为:**先查 `<SCRIPT_DIR>/src/semver.js`(dev tsx 模式)→ 再查 `<SCRIPT_DIR>/../dist/src/semver.js`(compiled prod 模式,正确命中 tarball 里实际存在的文件)**。同时加 `SAFE_TOKEN_RE`(`^[A-Za-z0-9_.,;:()?<>!=|&+\\-*/%\\s"{}\\[\\]]+$`)白名单 + `DANGEROUS`(`/\\b(?:function|import|require|process|globalThis|window|eval|Function|fetch|setTimeout|setInterval|setImmediate|this|constructor|prototype|__proto__)\\b/`)黑名单双门,任何候选 body 必须先过两道门才写入 `semverComparatorSrc`,防御 future maintainer 误把含敏感原语的代码喂进 `new Function`。
+- **MEDIUM IIFE 效率回归**:round-1 给 IIFE 加了 `.tokens.json` 快照(SessionEnd 持久 token 跨 VSCode 重启),但忘记给 `aggregate()` 加 skip filter → 每 500ms tick 都把 ~50KB 的 `.tokens.json` 重新 parse 一遍做聚合,持续 CPU 占用。Round-2 在 aggregation loop 里加 `if (name === TOK_TOKENS_EXT) continue` 镜像 skip。
+- **MEDIUM source-vs-dist drift gate**:`hooks/assert-companion-vsix.mjs` + `hooks/test-version-sync.mjs` 各加一条断言 —— compiled `companion/dist/extension.js` 的 `MIN_PATCHER_VERSION` 字面量与 `injectVersion()` fallback 必须与 `companion/extension.ts` source 一致,防止 maintainer 改了 source 忘 `companion:build` → 既有装机 .vsix 里仍是旧字面量。
+- **MEDIUM companion-version lockstep policy**:文档化"companion/package.json 版本 ≠ patcher INJECT_VERSION"是 by-design(companion 仅在 extension.ts 行为变化时才 bump),但任何对 `companion/extension.ts` 的运行时行为变更(如本次 SAFE_TOKEN_RE 新增)**必须**在 CHANGELOG 显式记录"既有装机用户需重装 .vsix"。
+
+### Round-3(本轮修复)
+
+继续复审挖出的 3 项 MEDIUM(round-2 reviewer 报告):
+
+- **MEDIUM `installRuntimeFiles` SVG 拷贝非原子**:round-2 reviewer(integrity dimension)发现 `installRuntimeFiles` 的 SVG 循环(line ~4039)是 v0.2.6 round-3 原子拷贝纪律的**唯一漏网之鱼** —— 同函数内 hook(cc-status.js)、token-rates.json 都已迁到 `atomicCopyFileSync`,唯独 SVG 循环保留 `fs.copyFileSync`。ENOSPC/EINTR/SIGKILL 中途失败会留下截断的 `claude-logo-*.svg`,状态栏渲染为 broken-emoji,且 stale-sweep 因 filename 仍匹配 `OUR_SVGS` 不会清。Round-3 改用 `atomicCopyFileSync`(tmp+rename,POSIX rename 原子)。
+- **MEDIUM `test-standalone-patch.mjs` SRC_MODULES 硬编码**:round-2 reviewer(regression dimension)发现该 e2e test 用本地硬编码 `['semver.js','jsonc.js','surgical-json.js']`,未与 patch.ts 的 `SRC_MODULES` 单一真相源绑定。未来新增第 4 个 `import { foo } from "./src/foo.js"` + SRC_MODULES 条目时,`test-contract-sync.mjs` 的 §SRC_MODULES parity 会通过,但本 e2e 仍只校验原始三件套,**重新引发 v0.2.7 那类回归**(installCompanion 漏拷新模块 → companion re-patch 时 ERR_MODULE_NOT_FOUND)。Round-3 改用与 contract-sync 同款 regex 从 patch.ts 源码运行时抽取 SRC_MODULES,失败即 fail loudly。
+- **MEDIUM CHANGELOG 不准**:同 reviewer 指出本节最初版本声称 round-1 "未改 .vsix 运行时行为",但 round-2 的 `SAFE_TOKEN_RE`/`DANGEROUS` 双门是 compiled 进 `companion/dist/extension.js` 的新运行时行为。已在本节 `companion/package.json` 条目里更正(见上)。
+
+### Added — 测试
+
+- 断言数 +9(731 → 740):
+  - **hooks/test-standalone-patch.mjs(新建,6 项)**:e2e 回归门 —— 拷 `dist/patch.js + dist/src/` 到 tmp 目录,跑 `node tmp/patch.js --status` 断言 exit 0 + 无 `ERR_MODULE_NOT_FOUND` + 输出含 `[cc-status-dot]`;反向回归(删 `tmp/src/` 重跑)断言**会**崩溃,证明测试非 vacuous。v0.2.7 这个 test 会 FAIL,v0.2.8 PASS。
+  - **hooks/test-patcher-io.mjs(+3 项,v0.2.8 build-integrity gate)**:`dist/src/{semver,jsonc,surgical-json}.js` 三文件存在性断言,防 build 漏拷(独立于 standalone e2e 的 runtime 层 gate);dev tsx fallback 路径 skip。
+  - **hooks/test-iife.mjs IIFE.21c stamp 锁(0 项,断言迁移)**:`v0.2.7` 正则 → `v0.2.8`(INJECT_VERSION bump 必然导致 IIFE stamp 字面量变)。
+  - `package.json` 的 `test` 脚本链末尾追加 `&& node hooks/test-standalone-patch.mjs`,新增 `test:standalone` 快捷脚本。
+
+### 已知限制
+
+- **既有 v0.2.7 装机用户无法自愈**:companion re-exec 的就是那个崩的 patch.js,起不来 → 无法自动修复。**必须用户主动重跑 `npx vscode-claude-code-status-dot@latest`** 触发 `installCompanion` 重拷 `src/`。这是设计内禀限制,已在 `--status` 的 `INSTALL_DIR/src/` 行 + companion 的 stale-patcher warn 里讲清。建议升级提示在 README/CHANGELOG 显式说明。
+- **dev(tsx patch.ts)模式下不拷 `src/*.js`**:`SCRIPT_DIR=project root`,`src/` 下是 `*.ts` 而非 `*.js`,per-module `existsSync` false → 走 warn 分支(非致命,符合预期);编译模式 `dist/src/` 缺失则 warn "run `npm run build`"。
+
 ## [0.2.6] - 2026-07-20
 
 **回复内容驱动的蓝灯（blue-via-content）+ 卡黄修复 + 关键词精度收紧**。v0.2.5 之前蓝灯只来自 Notification/permission；v0.2.6 把 Claude 最后一条 Stop 回复的语义匹配也纳入 pending 来源（"等你测试反馈"/"let me know" 等明确待用户决策/反馈时亮蓝）。同时修复 v0.2.5 round-1 引入的两个正确性缺口：per-tab tick pending 检查未应用 decay 导致旧 done+pending 永假蓝，以及关键词表 3 个 HIGH 中文子串假阳性（"你定"/"看你的"/"告诉我"）。

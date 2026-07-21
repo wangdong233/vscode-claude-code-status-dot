@@ -4147,5 +4147,130 @@ checkPending(
   }
 }
 
+// --- §Q v0.2.9: /compact (PostCompact) clears interrupted red -----------------
+//
+// /compact aborts the in-flight turn → CC fires StopFailure (the SOLE
+// interrupted writer) → without the new PostCompact case, Q2's
+// preserveInterrupted branch in Stop keeps the 🔴 sticky until the next
+// UserPromptSubmit. Compact is NOT a real failure (the user explicitly
+// invoked it; the session continues with a compacted transcript). The
+// PostCompact case clears interrupted → done. Three sub-tests:
+//   §Q.1  StopFailure → PostCompact: red is cleared to done.
+//   §Q.2  PostCompact on a non-interrupted session is a no-op (preserves
+//          running / done / pending untouched).
+//   §Q.3  A real rate_limit StopFailure NOT followed by PostCompact stays
+//          interrupted (Q2 7d sticky intact — the fix doesn't regress the
+//          Q2 contract for genuine crashes).
+
+// §Q.1 StopFailure → PostCompact: interrupted is cleared to done.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  const failed = fire(home, 'StopFailure', { error: 'rate_limit' });
+  const failedOk = failed && failed.state === 'interrupted' && failed.error === 'rate_limit';
+  const final = fire(home, 'PostCompact');
+  const ok = failedOk && final && final.state === 'done' && final.error === undefined && final.pending === false;
+  if (ok) {
+    pass++;
+    console.log('  PASS  §Q.1 PostCompact clears compact-induced interrupted → done (red ball gone)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §Q.1 expected interrupted(error=rate_limit)→done(error=undefined,pending=false),' +
+        ' got failed.state=' +
+        (failed && failed.state) +
+        ' failed.error=' +
+        (failed && failed.error) +
+        ' final.state=' +
+        (final && final.state) +
+        ' final.error=' +
+        (final && final.error) +
+        ' final.pending=' +
+        (final && final.pending),
+    );
+  }
+}
+
+// §Q.2 PostCompact on a non-interrupted session is a NO-OP (preserves running
+//      untouched). Mirrors the user's compact-while-running scenario: the
+//      compact completes, the running turn continues, the next Stop will
+//      decide the terminal state. PostCompact must not invent a transition.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit'); // → running
+  const before = readState(home);
+  const beforeOk = before && before.state === 'running';
+  const final = fire(home, 'PostCompact');
+  // final === null means "no write" (the writer's no-op signal); the on-disk
+  // state is unchanged. final === before would also be acceptable (idempotent
+  // re-write of the same state) but the implementation returns null for the
+  // non-interrupted path so the file is byte-identical to before.
+  const ok = beforeOk && (final === null || (final && final.state === 'running'));
+  if (ok) {
+    pass++;
+    console.log('  PASS  §Q.2 PostCompact on running is no-op (preserve non-interrupted states untouched)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §Q.2 expected null-or-running, got before.state=' +
+        (before && before.state) +
+        ' final=' +
+        (final === null ? 'null' : final && final.state),
+    );
+  }
+}
+
+// §Q.3 REGRESSION GUARD: a real rate_limit StopFailure NOT followed by
+//      PostCompact stays interrupted (Q2 7d sticky intact). This is the
+//      "didn't break Q2" guarantee: the fix only adds a NEW clear path
+//      (PostCompact); the existing interrupted-sticky behavior for
+//      abandoned crashes (no PostCompact fires) is unchanged.
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'StopFailure', { error: 'rate_limit' });
+  // CC's delayed Stop from the failed turn — preserveInterrupted path.
+  const after = fire(home, 'Stop');
+  const ok = after && after.state === 'interrupted' && after.error === 'rate_limit';
+  if (ok) {
+    pass++;
+    console.log(
+      '  PASS  §Q.3 real StopFailure (no PostCompact) stays interrupted + error preserved (Q2 sticky intact)',
+    );
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §Q.3 expected interrupted+error=rate_limit, got state=' +
+        (after && after.state) +
+        ' error=' +
+        (after && after.error),
+    );
+  }
+}
+
+// §Q.4 PostCompact on a DONE session is a no-op (done stays done — compact
+//      on an idle session doesn't invent a transition).
+{
+  const home = newTempHome();
+  fire(home, 'UserPromptSubmit');
+  fire(home, 'Stop'); // → done
+  const before = readState(home);
+  const beforeOk = before && before.state === 'done';
+  const final = fire(home, 'PostCompact');
+  const ok = beforeOk && (final === null || (final && final.state === 'done'));
+  if (ok) {
+    pass++;
+    console.log('  PASS  §Q.4 PostCompact on done is no-op (done preserved)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §Q.4 expected null-or-done, got before.state=' +
+        (before && before.state) +
+        ' final=' +
+        (final === null ? 'null' : final && final.state),
+    );
+  }
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

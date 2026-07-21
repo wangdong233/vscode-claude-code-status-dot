@@ -2,6 +2,51 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.2.9] - 2026-07-21
+
+**修 /compact 误显红球（Q4）+ 三项证据驱动的性能 hygiene（Q5）。** Q4：用户报告 /compact 在长会话上短暂显红球且计入底部 🔴 SBI；调研定位 `/compact` 中止 in-flight turn 触发 StopFailure（唯一 interrupted writer）→ Q2 的 preserveInterrupted 让红 sticky 直到下个 UserPromptSubmit。Q5：四轮调研（CC 源码 + 项目代码 + 真实 fixture 实测）给出"插件本身不会卡 VSCode"的证据驱动结论，并修了 3 个测得的真实浪费点（~10 IPC/sec + 1.1ms/tick）。
+
+### Q4 — Fixed
+
+- **HIGH /compact 误显红球**（用户实报 e434c0a2 session）：根因不是 Stop/其他事件写 interrupted（验证过——`case StopFailure` 是唯一 interrupted writer），而是 `/compact` 流程的"compact 完成、会话继续"信号被静默丢弃：(a) `HOOK_EVENTS` 缺 `PostCompact`/`SessionStart`-compact（settings.json 不接线，hook 永不收到）；(b) `deriveStatus` 无对应 case（default 返回 null 不写）。/compact 中止 in-flight turn → CC 发 StopFailure → 写 interrupted → Q2 preserveInterrupted 保持 sticky → 红球持续到下个 UserPromptSubmit。修复：HOOK_EVENTS 加入 `PostCompact`（10 个事件），deriveStatus 加 `case 'PostCompact'`：仅当 `cur.state === 'interrupted'` 时清 → `done` + 清 error/pending；否则 no-op（return null，running/done/pending 一律保留）。SessionStart 仍未接（audit F-5 intact；PostCompact 单独覆盖 /compact 路径下所有 CC 版本）。
+- **风险闭环**：真 StopFailure（rate_limit/overloaded）未被 PostCompact 跟随 → 不变（Q2 7d sticky 保留）。/compact 瞬态最多 1 reader tick（500ms）的红闪（StopFailure 写入到 PostCompact 清除之间）；优于 v0.2.8 的"红到下个 prompt"（常达数分钟）。pinned by test-cc-status.js §Q.1-4（4 用例）。
+
+### Q5 — Changed（performance hygiene, evidence-driven）
+
+调研结论：**插件本身不会造成可感知 UI 卡顿**（worst 1.1% mean / 3.4% p99 EH CPU during streaming；<0.3% typical；writer hook 跑在 CC 子进程）。数字实测于真实 fixture（42MB jsonl + 185KB sidecar + 2.1GB outlier）。架构事实决定性：IIFE 跑在 EH（独立进程），不在 renderer——typing/copy/tab-switch 是 renderer-local 不等 EH。详见 docs/STATES.md §9（新增完整 perf 小节）+ README.md 性能小节（新增）。
+
+挖出的 3 个**测得**浪费点（合 ~10 IPC/sec + 1.1ms/tick）一并修：
+
+- **Fix 1（HIGH value, LOW risk）Uri 缓存**（`patch.ts:1828` 新加 `__ccsdUriCache` + `ccuri(p)` helper；`patch.ts:2240, 2249` 改 `vs.Uri.file` → `ccuri`）。VSCode EH-side `WebviewPanel.iconPath` setter 用**引用相等** dedup（`this.#iconPath !== value`，见 microsoft/vscode `extHostWebviewPanels.ts:106-116`），但 `vs.Uri.file()` 每次返新 Uri → dedup 永不触发 → 每 500ms × N panels 发 N 条冗余 $setIconPath IPC（4 panels = 8 IPC/sec 实测）。`ccuri(p)` memoize 同 path → 同 Uri 对象 → setter dedup 触发 → IPC skip。状态切换 + interrupted flash（交替 error.svg ↔ CC_DEFAULT）仍产生不同引用 → IPC 照发。CC 覆盖 iconPath 时下一 tick 500ms 内 re-assert（防橙漏出防御 intact）。Mock bench：8 IPC/sec → ~0 IPC/sec（**99.6% 降**）。
+- **Fix 2（MED value, LOW risk）token SBI text dedup**（`patch.ts:2154` 4 个 `tsbi.text=` 分支统一加 dedup）。与既有 `__ccsdTokSbiLastTip` tooltip dedup 模式（v0.2.6 round-3）**不对称**——tooltip 已 dedup，text 每 tick 无条件赋值 → 稳态 ~2 IPC/sec 冗余（idle/tokens 稳定时）。镜像同款模式：`if(globalThis.__ccsdTokSbiLastText!==X){...; tsbi.text=X;}`。4 个分支（normal tlabel + no-data "$(clock) 0 tok" + 2x "$(clock) —"）统一套用，无需 cache-reset（dedup 自然处理跨分支转换）。
+- **Fix 3（MED value, MED risk）`.offset` sidecar mtime+size 缓存**（`patch.ts:2006` computeLiveDelta 内）。长会话 sidecar 增至 185KB（527 buckets 实测）→ JSON.parse 每 tick **1.04ms = per-tick EH sync I/O 的 58%**（仅 streaming 时，idle/done/interrupted 早退）。镜像 §F 既有的 `__ccsdAgCache` 模式：`__ccsdOffCache` keyed on offPath，stat-first → cache hit reuse parsed sc；miss → re-read+parse+cache。Writer 原子 tmp+rename，(mtimeMs,size) 是可靠内容变更信号。Stale-cache 风险 bounded——stale offset 至多读多余 jsonl 字节，被 512KB cap 封顶，下个 hook fire（offset 唯一权威 writer）即更正，**无正确性影响**。Cache keyed on offPath（用户切 CC panel 时自然隔离）。无 prune（bounded by unique sessions per machine lifetime <100）。长会话 streaming per-tick EH I/O 1.9ms → ~0.8ms（**~2.4× 降**）。
+
+### 显式不改的点（审查主动拒绝，复杂度风险 >> 测得收益）
+
+- 不改 `computeLiveDelta` 为 async（fs.promises）——4-15ms sync 块有界且仅重度 streaming 时触发；async 级联重构 setInterval body + 错误处理 + per-panel tick 对称性。
+- 不删/不降频 `p.iconPath=ccuri(svg)` 每 tick 赋值——故意防 CC 原生橙图标漏出的防御。Fix 1 的 Uri 缓存已让稳态 IPC → ~0，无需进一步降频。
+- 不降 `TICK_MS=500`——降频延迟 running→done→idle 转换 + 破坏 notify-dedup 时序窗口。
+- 不动 SBI aggregate tick——`__ccsdAgCache` mtime+size dedup 已最优（v0.2.8 round-2 修了 .tokens.json 漏 parse）。
+- 不重构 `<sid>.offset` sidecar 结构（拆游标 + 历史 buckets 两文件）——是 EH parse + hook write 双开销的根因，但属 writer 侧 contract 变更，应单独提案。
+
+### Changed
+
+- `INJECT_VERSION` v0.2.8 → v0.2.9（IIFE body 变：Uri cache helper + ccuri() at 2 sites + token SBI text dedup at 4 branches + .offset sidecar cache in computeLiveDelta）。
+- `HOOK_EVENTS` 9 → 10 事件（加 `PostCompact`）。
+- `HOOK_VERSION` 保持 v0.2.1（writer IPC contract 未变——PostCompact 写 state:'done' 同 Stop 既有的 done shape；cc-status.js body 变 = 加 PostCompact case + 配套注释 → banner hash 重盖 `564ac28b → 4153997e`）。
+- `companion/MIN_PATCHER_VERSION` 与 `injectVersion()` fallback 同步到 0.2.9 / v0.2.9（companion/package.json 版本 0.2.6 → 0.2.7：extension.ts 内字面量变 = 运行时行为变更，故 bump companion；既有装机用户需重装 .vsix 才拿到新的 stale-patcher 检查阈值，prepublishOnly 会自动产 `cc-status-dot-companion-0.2.7.vsix`）。
+- `docs/STATES.md` §2 加 PostCompact 行 + SessionStart note refine；新增 §9 性能小节（测量数字 + 三项 hygiene 优化表 + 显式不改的点 + 数字快照）。
+- `README.md` 新增性能小节（精简版，详见 STATES.md §9）；原理小节"9 个 hooks" → "10 个 hooks"。
+
+### Tests
+
+- **hooks/test-cc-status.js §Q.1-4**（+4，v0.2.9 Q4）：writer 侧 PostCompact 行为全锁——StopFailure → PostCompact 清 interrupted → done（红消）；PostCompact on running/done 是 no-op；real StopFailure 无 PostCompact 跟随保持 interrupted + error（Q2 sticky 不破坏）。
+- **hooks/test-iife.mjs IIFE.125-132**（+8，v0.2.9 Q5）：Q5 三项 hygiene 的源码存在性 + 形态锁——`ccuri()` helper / `__ccsdUriCache` 声明 / `p.iconPath=ccuri(` 全替换；`__ccsdTokSbiLastText` dedup pattern 在 4 个 tsbi.text 分支；`__ccsdOffCache` mtime+size cache 在 computeLiveDelta（命中路径 + miss 写入路径）；唯一 `vs.Uri.file(` 出现在 ccuri 定义内（防漏改）。
+- **hooks/test-iife.mjs IIFE.21c stamp regex** v0.2.8 → v0.2.9（INJECT_VERSION bump 必然导致 IIFE stamp 字面量变）。
+- **hooks/test-iife.mjs IIFE.45 regex 更新**：`p.iconPath=vs.Uri.file` → `p.iconPath=ccuri`（Q5 Fix 1 改变了赋值外壳，per-tab iconPath 仍每 tick 赋值，仅 wrapping helper 变）。
+
+---
+
 ## [0.2.8] - 2026-07-21
 
 **INSTALL_DIR/src/ 缺失修复**。v0.2.4 把 `patch.ts` 拆成 `src/{semver,jsonc,surgical-json}.ts` 三模块,编译产物 `dist/patch.js` 通过相对 ESM specifier 导入它们(`import { cmpVerStr } from "./src/semver.js"` 等)。但 `installCompanion()` 只把 `patch.js` 拷到 `~/.claude/cc-status-dot/`,**忘了同拷 `dist/src/*.js`**——companion 在 CC 自动更新覆盖 extension.js 后跑 `node ~/.claude/cc-status-dot/patch.js --patch-only` 时,Node ESM loader 在任何代码执行前解析这些 specifier,找不到文件直接抛 `ERR_MODULE_NOT_FOUND`,companion 只能上报模糊的 "auto-patch failed"。潜在自 v0.2.4,v0.2.7 CC 自动更新触发后暴露。
@@ -57,7 +102,7 @@ Round-1 修的是显性崩溃(ERR_MODULE_NOT_FOUND);Round-2 在复审中又挖�
 
 ### Added — blue-via-content（pending 第三通道）
 
-- **writer 侧**（`hooks/cc-status.js`）：Stop case 读 `payload.last_assistant_message`，经 `lastMessageRequestsUserInput(msg)` 判断后写 `pending:true`。判断逻辑：(1) strip 代码块（```fenced``` / `inline` / ~~~alt-fence~~~）；(2) 命中 `AWAIT_USER_PHRASES`（38 条中英 idiom：`等你` / `你决定` / `请确认` / `let me know` / `your call` / `please confirm` 等）→ true；(3) fallback：末行 ≤60 字符独立问句且含用户代词（你/您/you）或动作动词（继续/确认/选/决定/proceed/confirm/choose 等）→ true；(4) `stop_hook_active=true` 跳过（CC 防死循环门）。设计哲学 **SPECIFICITY > RECALL**：假蓝比假绿更糟，故只列无歧义 idiom。
+- **writer 侧**（`hooks/cc-status.js`）：Stop case 读 `payload.last_assistant_message`，经 `lastMessageRequestsUserInput(msg)` 判断后写 `pending:true`。判断逻辑：(1) strip 代码块（`fenced` / `inline` / ~~~alt-fence~~~）；(2) 命中 `AWAIT_USER_PHRASES`（38 条中英 idiom：`等你` / `你决定` / `请确认` / `let me know` / `your call` / `please confirm` 等）→ true；(3) fallback：末行 ≤60 字符独立问句且含用户代词（你/您/you）或动作动词（继续/确认/选/决定/proceed/confirm/choose 等）→ true；(4) `stop_hook_active=true` 跳过（CC 防死循环门）。设计哲学 **SPECIFICITY > RECALL**：假蓝比假绿更糟，故只列无歧义 idiom。
 - **reader 侧**（`patch.ts` buildIIFE §H）：per-tab tick 优先级链 `__ccsdPending yield`（CC 原生蓝）→ `pend && st!=="idle"`（新 blue-via-content 渲染 `claude-logo-pending.svg` #58A6FF）→ state if-chain（running 黄 / done 绿 / interrupted 红 / idle 灰）。
 - **SVG 资源**：新增 `resources/claude-logo-pending.svg`（与 `done.svg` 几何完全一致，仅 badge-circle fill `#3FB950→#58A6FF` + `<title>` 文本）。`OUR_SVGS` 5 项（4 + pending）。
 - **聚合层**：底部 🔵 SBI 通过既有的 `j.pending===true || __ps[sid]` OR 链自动覆盖新通道，无新增代码。

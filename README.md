@@ -151,13 +151,13 @@ CC 自动更新会把 patch 整体覆盖掉。**v0.2.0 起**，`npx` 装的时�
 
 ## 🎨 状态色
 
-| 颜色 | 含义 | 触发 |
-|---|---|---|
-| 🟡 黄色 `#CCA700`（**静态**，无动画） | 运行中 | 发 prompt、工具调用前后（心跳）、subagent spawn |
-| 🟢 绿色 `#3FB950`（静态） | 本轮完成（不待用户） | CC 触发 `Stop` 且最后回复是中性完成（`已完成`/`Done.`）；**超 5 分钟自动转灰** |
-| 🔴 红色 `#F85149`（快闪） | 中断 / 出错 | CC 触发 `StopFailure`（限速、过载等） |
-| ⚪ 灰色 `#808080`（静态） | 空闲 | 初始 / 完成超 5 分钟 / 无状态文件 |
-| 🔵 蓝色 `#58A6FF`（静态） | 待用户输入（两类触发） | (a) **CC 弹授权框**：reader 让出图标给 CC 原生蓝点（**不覆盖**）；(b) **CC 最后回复含"待你决策"语义**（`等你`/`你决定`/`请确认`/`let me know`/`your call` 等）→ reader 渲染蓝色 `claude-logo-pending.svg`（覆盖 running-黄 / done-绿）。底部 🔵 灯两类都计数 |
+| 颜色                                  | 含义                   | 触发                                                                                                                                                                                                                                                         |
+| ------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 🟡 黄色 `#CCA700`（**静态**，无动画） | 运行中                 | 发 prompt、工具调用前后（心跳）、subagent spawn                                                                                                                                                                                                              |
+| 🟢 绿色 `#3FB950`（静态）             | 本轮完成（不待用户）   | CC 触发 `Stop` 且最后回复是中性完成（`已完成`/`Done.`）；**超 5 分钟自动转灰**                                                                                                                                                                               |
+| 🔴 红色 `#F85149`（快闪）             | 中断 / 出错            | CC 触发 `StopFailure`（限速、过载等）                                                                                                                                                                                                                        |
+| ⚪ 灰色 `#808080`（静态）             | 空闲                   | 初始 / 完成超 5 分钟 / 无状态文件                                                                                                                                                                                                                            |
+| 🔵 蓝色 `#58A6FF`（静态）             | 待用户输入（两类触发） | (a) **CC 弹授权框**：reader 让出图标给 CC 原生蓝点（**不覆盖**）；(b) **CC 最后回复含"待你决策"语义**（`等你`/`你决定`/`请确认`/`let me know`/`your call` 等）→ reader 渲染蓝色 `claude-logo-pending.svg`（覆盖 running-黄 / done-绿）。底部 🔵 灯两类都计数 |
 
 > running 静态黄点（无动画）；interrupted 红色快闪告警。完整状态契约（事件 / SVG / IPC / 通知）见 [`docs/STATES.md`](docs/STATES.md)。
 
@@ -232,20 +232,22 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 <details>
 <summary>📖 命令一览</summary>
 
-| 命令 | 作用 |
-|---|---|
-| `npx vscode-claude-code-status-dot` | 安装（patch extension.js + 接 hooks + 装 companion，幂等；自动清理旧版残留） |
-| `npx vscode-claude-code-status-dot --revert` | 还原（从 `.bak` 恢复 + 移除 hooks + 删 INSTALL_DIR，保留用户数据） |
-| `npx vscode-claude-code-status-dot --status` | dry-run 诊断报告，不改任何文件 |
+| 命令                                         | 作用                                                                         |
+| -------------------------------------------- | ---------------------------------------------------------------------------- |
+| `npx vscode-claude-code-status-dot`          | 安装（patch extension.js + 接 hooks + 装 companion，幂等；自动清理旧版残留） |
+| `npx vscode-claude-code-status-dot --revert` | 还原（从 `.bak` 恢复 + 移除 hooks + 删 INSTALL_DIR，保留用户数据）           |
+| `npx vscode-claude-code-status-dot --status` | dry-run 诊断报告，不改任何文件                                               |
 
 开发态把命令换成 `npx tsx patch.ts`（带同样参数）。
 
 或从源码（开发态）：
+
 ```bash
 git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
 cd vscode-claude-code-status-dot
 npx tsx patch.ts
 ```
+
 两种方式等价、幂等。IIFE 与 hook 都引用 `INSTALL_DIR` 绝对路径——**删项目源 / 清 npx 缓存都不影响已 patch 的扩展**。
 
 </details>
@@ -276,17 +278,17 @@ npx tsx patch.ts
 }
 ```
 
-| 配置项 | 默认 | 说明 |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | 通知总开关 |
-| `ccStatusDot.notifyWhenFocused` | `true` | 前台时也弹通知（macOS 系统通知 / Windows/Linux VSCode 消息）；设 `false` 仅后台时通知 |
-| `ccStatusDot.notifySound` | `"Glass"` | macOS 系统通知声音（done 与中断共用；`""` 静音；可选 Basso/Ping/Hero 等） |
-| `ccStatusDot.tokenStatsWindow` | `"all"` | 右下角 token SBI 的时间窗口。`all` = 累积（整个会话，不清零，默认）；`5min/10min/1h/24h/3d/7d/30d` = 滚动窗口（旧 turn 到期自动滑出，会显得"清零"） |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | token SBI 显示模式：`token` 仅 token / `cost` 仅 $ / `both` 两者 |
-| `ccStatusDot.tokenSbiVisible` | `true` | 显示 / 隐藏 token SBI |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | 流式输出期间 IIFE 每 tick 读 transcript 尾部增量，让 token 在 hook 触发之间也能实时更新；性能敏感机器可设 `false` 关闭 |
-| `ccStatusDot.showCost` | `true` | 显示 $（未知 model 自动隐藏，需 `token-rates.json` 有匹配条目） |
-| `ccStatusDot.warnThresholdUsd` | `0` | cost 跨阈通知（0 = 禁用；正数 = USD 阈值，每次跨越触发一次通知） |
+| 配置项                              | 默认      | 说明                                                                                                                                                |
+| ----------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.notify`                | `true`    | 通知总开关                                                                                                                                          |
+| `ccStatusDot.notifyWhenFocused`     | `true`    | 前台时也弹通知（macOS 系统通知 / Windows/Linux VSCode 消息）；设 `false` 仅后台时通知                                                               |
+| `ccStatusDot.notifySound`           | `"Glass"` | macOS 系统通知声音（done 与中断共用；`""` 静音；可选 Basso/Ping/Hero 等）                                                                           |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`   | 右下角 token SBI 的时间窗口。`all` = 累积（整个会话，不清零，默认）；`5min/10min/1h/24h/3d/7d/30d` = 滚动窗口（旧 turn 到期自动滑出，会显得"清零"） |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`  | token SBI 显示模式：`token` 仅 token / `cost` 仅 $ / `both` 两者                                                                                    |
+| `ccStatusDot.tokenSbiVisible`       | `true`    | 显示 / 隐藏 token SBI                                                                                                                               |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`    | 流式输出期间 IIFE 每 tick 读 transcript 尾部增量，让 token 在 hook 触发之间也能实时更新；性能敏感机器可设 `false` 关闭                              |
+| `ccStatusDot.showCost`              | `true`    | 显示 $（未知 model 自动隐藏，需 `token-rates.json` 有匹配条目）                                                                                     |
+| `ccStatusDot.warnThresholdUsd`      | `0`       | cost 跨阈通知（0 = 禁用；正数 = USD 阈值，每次跨越触发一次通知）                                                                                    |
 
 > **自定义模型定价**：`~/.claude/cc-status-dot/token-rates.json` 是热更定价表，默认覆盖 Anthropic 官方价；GLM 等未匹配 model 自动隐藏 `$`。加一条 glob 即可显示 `$`：
 
@@ -294,7 +296,7 @@ npx tsx patch.ts
 {
   "_default": null,
   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
-  "glm-*":           { "in": 0.5, "out": 1.5 }
+  "glm-*": { "in": 0.5, "out": 1.5 },
 }
 ```
 
@@ -316,6 +318,7 @@ CC 自动更新整体替换扩展目录，patched 文件被原版覆盖。**v0.2
 
 **`npx` 连不上？**
 兜底全局安装：
+
 ```bash
 npm i -g vscode-claude-code-status-dot
 vscode-claude-code-status-dot        # 装好后直接跑命令
@@ -335,15 +338,31 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 
 ---
 
+## ⚡ 性能（v0.2.9 证据驱动）
+
+**结论：本插件不会造成可感知 UI 卡顿**——EH（扩展宿主）占用最坏 1.1% mean / 3.4% p99 CPU（重度 streaming），typical <0.3%；writer hook 跑在 CC 子进程 ~1-2ms/event。所有数字实测于真实 fixture（42MB jsonl + 185KB sidecar + 2.1GB outlier）。详见 [`docs/STATES.md`](docs/STATES.md) §9。
+
+为什么不会卡？IIFE 跑在 EH（独立进程），**不在 renderer**。打字、切 tab、复制都是 renderer-local 操作，不等 EH。即便 worst-case 17ms p99 EH 阻塞，也只延迟其他扩展的 EH→renderer IPC 17ms（对用户不可见）。
+
+v0.2.9 修了 3 个**测得**的 hygiene 浪费点（每项单独小，合起来 ~10 IPC/sec + 1.1ms/tick）：
+
+| 优化                                  | 测得浪费（v0.2.8）                               | v0.2.9 修法                                     | 收益                           |
+| ------------------------------------- | ------------------------------------------------ | ----------------------------------------------- | ------------------------------ |
+| **Uri 缓存**（p.iconPath）            | 8 IPC/sec 稳态 churn（vs.Uri.file 引用不等触发） | `__ccsdUriCache` memoize → EH setter dedup 触发 | 8 IPC/sec → ~0（**99.6% 降**） |
+| **token SBI text dedup**（tsbi.text） | 2 IPC/sec（与 tooltip dedup 不对称）             | 镜像 `__ccsdTokSbiLastTip` tooltip dedup 模式   | 2 IPC/sec → 0                  |
+| **.offset sidecar 缓存**              | 1.04ms/tick parse（186KB 长会话 = 58% EH I/O）   | 镜像 `__ccsdAgCache` mtime+size 模式            | 1.1ms/tick → ~0（cache hit）   |
+
+---
+
 ## 🏗️ 原理 + 文档
 
 **patch CC extension.js（注入定时器设 tab 图标）+ CC hooks 写状态 + 完成/中断通知。** 完整文档：
 
-- [`docs/STATES.md`](docs/STATES.md)——**状态契约（唯一真相源）**：五态（灰/黄/绿/红/蓝）+ 底部 4 灯聚合 / 事件映射 / IPC / 通知
+- [`docs/STATES.md`](docs/STATES.md)——**状态契约（唯一真相源）**：五态（灰/黄/绿/红/蓝）+ 底部 4 灯聚合 / 事件映射 / IPC / 通知 / 性能（§9）
 - [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)——图标注入原理（anchor / IIFE / SVG 绑定）
 - [`docs/USAGE.md`](docs/USAGE.md)——使用指南（安装 / 排错 / 还原）
 
-> 本项目修改 CC 扩展的 `extension.js`（已备份，`--revert` 完整还原），并写入 `~/.claude/settings.json`（首次备份）。hook 脚本**永不阻塞 CC**——任何错误静默退出。**9 个 hooks**（含 Notification 落盘 pending）。
+> 本项目修改 CC 扩展的 `extension.js`（已备份，`--revert` 完整还原），并写入 `~/.claude/settings.json`（首次备份）。hook 脚本**永不阻塞 CC**——任何错误静默退出。**10 个 hooks**（v0.2.9 加 `PostCompact` 清 /compact 误判红球；含 Notification 落盘 pending）。
 
 ---
 
@@ -353,10 +372,9 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 
 <div align="center">
 
-微信 | 支付宝
-:-: | :-:
-<img src="docs/images/support-wechat.jpg" height="200" alt="微信"> | <img src="docs/images/support-alipay.jpg" height="200" alt="支付宝">
-
+|                                微信                                |                                支付宝                                |
+| :----------------------------------------------------------------: | :------------------------------------------------------------------: |
+| <img src="docs/images/support-wechat.jpg" height="200" alt="微信"> | <img src="docs/images/support-alipay.jpg" height="200" alt="支付宝"> |
 
 </div>
 

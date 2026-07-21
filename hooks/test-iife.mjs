@@ -337,7 +337,11 @@ check(
 // v0.2.8: stamp bumped for INSTALL_DIR/src/ copy fix (IIFE body unchanged;
 // bump triggers companion IIFE-version drift detect → restore+reinject →
 // installCompanion re-runs and copies the missing src/ modules).
-check('IIFE.21c banner carries v0.2.8 stamp', /\/\*cc-status-dot-injected:v0\.2\.8:/.test(iife));
+// v0.2.9: stamp bumped for Q4 (PostCompact in HOOK_EVENTS, no IIFE change)
+// + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
+// dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
+// __ccsdOffCache in computeLiveDelta).
+check('IIFE.21c banner carries v0.2.9 stamp', /\/\*cc-status-dot-injected:v0\.2\.9:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -1143,7 +1147,10 @@ check(
 // Per-tab rendering is UNCHANGED by v0.1.14 — assert the iconPath assignment
 // still exists AFTER the aggregation block (a refactor that dropped per-tab
 // dots while leaving only the SBI would pass every other assertion).
-check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*vs\.Uri\.file/.test(iife));
+// v0.2.9: regex updated from `p.iconPath=vs.Uri.file` to `p.iconPath=ccuri`
+// (Q5 Fix 1 — Uri cache memoizes vs.Uri.file; the per-tab assignment is
+// unchanged in semantics, only the wrapping helper changed).
+check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*ccuri/.test(iife));
 
 // --- 18. Decay-profile divergence lock (architecture-review round-2) ----------
 // STATES.md §7.4 documents an INTENTIONAL asymmetry between SBI vs per-tab
@@ -2341,6 +2348,78 @@ check(
     }
   }
 }
+
+// --- v0.2.9 Q5: render-churn dedup gates (Uri cache + token SBI text dedup +
+//     offset sidecar mtime+size cache). Source-text presence assertions —
+//     behavioral testing of the in-IIFE closures would require a full VSCode
+//     EH mock (vs.Uri.file / vs.window.createStatusBarItem), out of scope for
+//     this test suite (the existing IIFE.97-124 computeLiveDelta/readTok
+//     harness covers behavior for those pure helpers; these three are
+//     impure — they call into vscode API + globalThis caches). Source
+//     presence + banner-stamp + paren-balance is the right gate here; the
+//     measured-numbers rationale lives in docs/STATES.md §9 + CHANGELOG.
+
+// IIFE.125 v0.2.9 Q5 Fix 1: ccuri() Uri cache helper defined (vs.Uri.file
+// memoization by path string). Source-text presence.
+check(
+  'IIFE.125 v0.2.9 Q5 Fix 1: ccuri() Uri cache helper present (iconPath dedup)',
+  /function ccuri\(p\)\{return __ccsdUriCache\[p\]\|\|\(__ccsdUriCache\[p\]=vs\.Uri\.file\(p\)\);\}/.test(iife),
+);
+
+// IIFE.126 v0.2.9 Q5 Fix 1: __ccsdUriCache global declared (Object.create(null)).
+check(
+  'IIFE.126 v0.2.9 Q5 Fix 1: __ccsdUriCache Object.create(null) declaration present',
+  /var __ccsdUriCache=Object\.create\(null\)/.test(iife),
+);
+
+// IIFE.127 v0.2.9 Q5 Fix 1: p.iconPath assigns via ccuri(), not vs.Uri.file.
+// Both iconPath assignment sites (pending branch + state-driven svg branch)
+// must go through ccuri() so the EH-side reference-equality dedup fires.
+check(
+  'IIFE.127 v0.2.9 Q5 Fix 1: p.iconPath uses ccuri() (not vs.Uri.file) at all sites',
+  /p\.iconPath=ccuri\(/.test(iife) && !/p\.iconPath=vs\.Uri\.file\(/.test(iife),
+);
+
+// IIFE.128 v0.2.9 Q5 Fix 2: token SBI text dedup via __ccsdTokSbiLastText.
+// The existing tooltip dedup pattern is mirrored for text. The cache variable
+// MUST appear at least twice (read + write in the dedup check), and the
+// legacy unconditional `tsbi.text=tlabel` (no surrounding dedup check) must
+// be gone.
+check(
+  'IIFE.128 v0.2.9 Q5 Fix 2: __ccsdTokSbiLastText dedup pattern present for tsbi.text',
+  /__ccsdTokSbiLastText!==tlabel\)\{globalThis\.__ccsdTokSbiLastText=tlabel;tsbi\.text=tlabel;/.test(iife),
+);
+
+// IIFE.129 v0.2.9 Q5 Fix 2: tsbi.text dedup pattern fires on the 3 error/empty
+// branches too (no-data "$(clock) 0 tok" + 2x "$(clock) —"). Confirms the
+// dedup is applied uniformly, not only on the normal tlabel branch.
+check(
+  'IIFE.129 v0.2.9 Q5 Fix 2: tsbi.text dedup fires on error/empty branches too',
+  /__ccsdTokSbiLastText!=="\$\(clock\) 0 tok"/.test(iife) && /__ccsdTokSbiLastText!=="\$\(clock\) —"/.test(iife),
+);
+
+// IIFE.130 v0.2.9 Q5 Fix 3: __ccsdOffCache mtime+size short-circuit in
+// computeLiveDelta (mirrors __ccsdAgCache pattern at §F aggregation).
+check(
+  'IIFE.130 v0.2.9 Q5 Fix 3: __ccsdOffCache mtime+size cache in computeLiveDelta',
+  /var __oc=globalThis\.__ccsdOffCache[\s\S]{0,400}?__oe\.mt===__omt&&__oe\.sz===__osz/.test(iife),
+);
+
+// IIFE.131 v0.2.9 Q5 Fix 3: cache MISS path falls through to JSON.parse +
+// populates the cache (the write side of the contract).
+check(
+  'IIFE.131 v0.2.9 Q5 Fix 3: __ccsdOffCache populated on miss (JSON.parse + __oc[offPath]=)',
+  /__oc\[offPath\]=\{j:sc,mt:__omt,sz:__osz\}/.test(iife),
+);
+
+// IIFE.132 v0.2.9 Q4: HOOK_EVENTS includes PostCompact (the writer-side fix
+// surfaces in the IIFE banner through HOOK_EVENTS being baked into the
+// settings.json hook-writer loop). Source check on patch.ts instead.
+check(
+  'IIFE.132 v0.2.9 Q4: no vs.Uri.file CALL outside ccuri definition (defense: every iconPath uses cache)',
+  // The only vs.Uri.file call remaining is INSIDE the ccuri definition itself.
+  (iife.match(/vs\.Uri\.file\(/g) || []).length === 1,
+);
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

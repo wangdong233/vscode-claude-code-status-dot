@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.1:564ac28b*/
+/*cc-status-dot-hook:v0.2.1:4153997e*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -726,6 +726,31 @@ function deriveStatus(payload, cur) {
         return null;
       }
       return DELETE;
+
+    // v0.2.9 (Q4 compact-clear): CC finished /compact (or auto-compact).
+    // /compact aborts the in-flight turn → CC fires StopFailure (the SOLE
+    // interrupted writer) → without this clear, Q2's preserveInterrupted
+    // branch in Stop keeps the 🔴 sticky until the next UserPromptSubmit.
+    // Compact is NOT a real failure (the user explicitly invoked it; the
+    // session continues with a compacted transcript) — clear interrupted
+    // → done. Preserve running/done/pending untouched (compact is a no-op
+    // for those): a running session compacted mid-turn will get its next
+    // state from the upcoming Stop/UserPromptSubmit; a done session stays
+    // done. Mirrors UserPromptSubmit's "session continues" semantic but
+    // for the compact-resume path. Only acts when cur.state is interrupted
+    // — the case we are correcting. A real rate_limit/overloaded
+    // StopFailure NOT followed by PostCompact stays interrupted (Q2 7d
+    // sticky intact — see test §Q.3). pinned by test-cc-status.js §Q.1-3.
+    case 'PostCompact':
+      if (cur && cur.state === 'interrupted') {
+        return {
+          state: 'done',
+          since: now,
+          activeSubagents: inflight != null ? inflight : a,
+          pending: false,
+        };
+      }
+      return null;
 
     default:
       return null;

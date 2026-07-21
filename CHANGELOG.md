@@ -2,6 +2,26 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.3.1] - 2026-07-21
+
+**图表 webview CSP hardening：script-src 从 `unsafe-inline` 改为 VSCode nonce 最佳实践。** v0.3.0 引入的 token 速率图表 webview panel 原先用 `script-src 'unsafe-inline'`（功能正常，webview 数据是 postMessage 传数字无 XSS 向量，但 unsafe-inline 非最佳安全姿态）。本版按 VSCode 官方 webview CSP 指南改 nonce：每 panel 创建生成新 nonce，inline script 标签带 `nonce` 属性，CSP meta 用 `script-src 'nonce-NONCE'`。调研裁决 `style-src 'unsafe-inline'` 保留（VSCode 自身注入主题 CSS 变量为 inline style，非cing style-src 需同时 pin VSCode 注入样式，不现实；CSS XSS 风险远低于 JS，且无不可信输入流入 webview）。
+
+### Changed — CSP nonce hardening（v0.3.0 webview panel 安全姿态提升）
+
+- **`script-src` 从 `unsafe-inline` 改为 per-call nonce**（`patch.ts` `__ccsdRateChartHtml`）：每次 `panel.webview.html = ...` 赋值生成新 nonce，注入 CSP meta + inline `<script>` 标签的 `nonce` 属性。去掉 `script-src 'unsafe-inline'`，符合 VSCode 官方 webview CSP 示例。
+- **`__ccsdGetNonce()` helper 新增**（IIFE 顶层 sibling）：主路径 `require("crypto").randomBytes(16).toString("base64")`（128 bit 熵 / 24 字符，IIFE 跑 Extension Host 真 Node.js，crypto 恒可用）；fallback 路径 32 字符 Math.random alphanumeric（防御性——crypto 异常时兜底）。nonce 在 `__ccsdRateChartHtml` 内生成（非 module scope），保证每次 HTML 构建都 mint 新 nonce（不缓存 HTML 字符串、不跨 panel 重用）。
+- **`style-src 'unsafe-inline'` 保留**：调研裁决（VSCode 自身注入主题 CSS 变量为 inline style + VSCode 官方示例也用 `style-src ${cspSource} 'unsafe-inline'` + CSS XSS 风险远低于 JS + 无不可信输入流入 webview）。
+
+### Tests
+
+- **`test-iife.mjs` IIFE.147 翻转**：原断言 `script-src 'unsafe-inline'` 存在 → 翻转为断言 `script-src 'nonce-` + `<script ... nonce=` 配对（nonce 形式）。
+- **`test-iife.mjs` IIFE.153a/b/c 新增**：153a 断言 `__ccsdGetNonce` helper 存在且用 `crypto.randomBytes`；153b 回归 guard `style-src 'unsafe-inline'` 未被误删；153c 负向 guard `script-src 'unsafe-inline'` 不再出现（belt + suspenders，防止未来编辑静默回退 hardening）。
+- **`test-iife.mjs` IIFE.21c stamp** v0.3.0 → v0.3.1（banner stamp 同步）。
+
+### Version
+
+- `package.json` 0.3.0 → 0.3.1；`patch.ts` `INJECT_VERSION` v0.3.0 → v0.3.1；`companion/package.json` 0.3.0 → 0.3.1；`companion/extension.ts` `MIN_PATCHER_VERSION` 0.3.0 → 0.3.1 + `injectVersion()` fallback v0.3.0 → v0.3.1。`HOOK_VERSION`（v0.2.1）+ `cc-status.js` hash 不变（writer 无改动）。
+
 ## [0.3.0] - 2026-07-21
 
 **右下角 token 计数：B/T 单位 + 瞬时 tok/s 速率 + sparkline + webview 大图。** 基于 5 路深度调研（A 实时性审计 + B LLM 拦截可行性 + C OSS 调研 + D 速率/图表设计 + E 单位格式）。用户两提案：提案1（LLM 调用层拦截）→ 调研 B 裁决 NO-GO（架构错位——CC 的 API 调用在 CLI 子进程，patch 触不到；只文档化路径于 `docs/LLM-INTERCEPT-DESIGN.md`）；提案2（瞬时速率 + 动态图表）→ 全面落地。

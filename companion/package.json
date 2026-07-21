@@ -2,7 +2,7 @@
   "name": "cc-status-dot-companion",
   "displayName": "cc-status-dot Companion",
   "description": "Detects Claude Code extension auto-updates and silently re-applies the cc-status-dot patch. Ships inside the vscode-claude-code-status-dot npm package — install via: npx vscode-claude-code-status-dot",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,

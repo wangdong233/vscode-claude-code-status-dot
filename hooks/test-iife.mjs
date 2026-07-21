@@ -358,7 +358,7 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-check('IIFE.21c banner carries v0.3.0 stamp', /\/\*cc-status-dot-injected:v0\.3\.0:/.test(iife));
+check('IIFE.21c banner carries v0.3.1 stamp', /\/\*cc-status-dot-injected:v0\.3\.1:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -2545,18 +2545,21 @@ check('IIFE.145 v0.3.0 QuickPick offers "Show live rate chart" entry', iife.incl
 // IIFE.146 showRateChart function present (webview panel with strict CSP).
 check('IIFE.146 v0.3.0 showRateChart function present', /function\s+showRateChart\s*\(\s*\)/.test(iife));
 
-// IIFE.147 webview strict CSP (no remote scripts; only inline + data: images).
-// The CSP appears in the IIFE source as: content="default-src \\'none\\';
-// script-src \\'unsafe-inline\\'; ..." (both apostrophes per token escaped
-// because the outer JS string is single-quoted). The bridge between
-// Content-Security-Policy and default-src crosses literal " chars
-// (`Content-Security-Policy" content="default-src`), so the bridge pattern
-// uses [\s\S]*? (any char, non-greedy) rather than [^"]*. Each `\\?` makes
-// the backslash optional so the regex also matches the unescaped comment
-// mention of the CSP earlier in the IIFE.
+// IIFE.147 webview strict CSP — v0.3.1 hardening: script-src switched from
+// 'unsafe-inline' to a per-call nonce. The CSP appears in the IIFE source as:
+// content="default-src \\'none\\'; script-src \\'nonce-'+nonce+'\\'; ..." (the
+// nonce concatenation breaks out of the single-quoted JS string, and the
+// trailing \\' re-opens it). The bridge between Content-Security-Policy and
+// default-src crosses literal " chars (`Content-Security-Policy" content="default-src`),
+// so the bridge pattern uses [\s\S]*? (any char, non-greedy) rather than [^"]*.
+// Each `\\?` makes the backslash optional so the regex matches both the
+// escaped code form (\\') and any unescaped mention. The final
+// `<script[^>]*nonce=` confirms the inline script tag carries the matching
+// nonce attribute (without it the script would be blocked by the CSP and the
+// chart would render blank).
 check(
-  'IIFE.147 v0.3.0 rate chart webview strict CSP (default-src none + unsafe-inline script)',
-  /Content-Security-Policy[\s\S]*?default-src\s+\\?'\\?none\\?'[\s\S]*?script-src\s+\\?'\\?unsafe-inline\\?'/.test(
+  'IIFE.147 v0.3.1 rate chart webview CSP uses nonce for script-src (no unsafe-inline)',
+  /Content-Security-Policy[\s\S]*?default-src\s+\\?'\\?none\\?'[\s\S]*?script-src\s+\\?'\\?nonce-[\s\S]*?<script[^>]*nonce=/.test(
     iife,
   ),
 );
@@ -2636,6 +2639,48 @@ check(
     /var\(--vscode-descriptionForeground/.test(iife) &&
     /var\(--vscode-editorWidget-border/.test(iife),
   'webview hardcoded #1e1e1e/#ddd/#4fc3f7/#ffb74d must be wrapped in VSCode theme CSS variables so light theme is readable',
+);
+
+// IIFE.153a v0.3.1 hardening: __ccsdGetNonce helper defined once at IIFE
+// top-level scope (sibling of __ccsdRateChartHtml, NOT inside it — defining
+// inside would re-create the function on every panel open). Primary path is
+// crypto.randomBytes (cryptographic strength, 128 bits / 16 bytes base64-
+// encoded = 24 chars); the Math.random fallback only fires if require("crypto")
+// ever throws (defensive — the IIFE runs in VSCode's Extension Host = real
+// Node.js, so crypto is always available). Both branches return values in the
+// CSP nonce grammar ([A-Za-z0-9+/=], trailing = padding is CSP-legal).
+check(
+  'IIFE.153a v0.3.1 __ccsdGetNonce helper present (crypto.randomBytes primary, Math.random fallback)',
+  /function\s+__ccsdGetNonce\s*\(\s*\)/.test(iife) && /require\(\s*["']crypto["']\s*\)\.randomBytes/.test(iife),
+  'nonce helper must use crypto.randomBytes for cryptographic strength (Math.random fallback only if require throws)',
+);
+
+// IIFE.153b v0.3.1 hardening: style-src 'unsafe-inline' deliberately KEPT.
+// VSCode itself injects theme CSS variables into the webview as inline styles,
+// and the chart CSS relies on var(--vscode-editor-background) etc. (asserted by
+// IIFE.152); noncing style-src would require also pinning VSCode's injected
+// styles, which is impractical. VSCode's own official webview CSP examples ship
+// `style-src ${cspSource} 'unsafe-inline'`. CSS is dramatically lower-risk than
+// JS (no script execution), and zero untrusted input flows into the webview
+// (postMessage carries numeric samples only). This test is a regression guard
+// that the style-src hardening was NOT accidentally removed alongside the
+// script-src nonce change.
+check(
+  'IIFE.153b v0.3.1 style-src unsafe-inline retained (VSCode-recommended; CSS XSS risk negligible)',
+  /style-src\s+\\?'\\?unsafe-inline\\?'/.test(iife),
+  'style-src must keep unsafe-inline (VSCode injects theme CSS vars as inline styles; noncing style-src is impractical)',
+);
+
+// IIFE.153c v0.3.1 hardening: NO script-src 'unsafe-inline' remains anywhere in
+// the IIFE (belt + suspenders negative guard). The v0.3.0 code had it in both
+// the CSP meta line and the descriptive comment; v0.3.1 rephrased the comment
+// to avoid the literal token so this negative assertion can hold. A stray
+// future edit that reintroduces unsafe-inline for script-src would silently
+// weaken the hardening — this test catches that.
+check(
+  'IIFE.153c v0.3.1 NO script-src unsafe-inline remains (nonce-only posture)',
+  !/script-src\s+\\?'\\?unsafe-inline\\?'/.test(iife),
+  'script-src must not use unsafe-inline (nonce replaces it); check CSP meta line + comments for stray mentions',
 );
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

@@ -290,9 +290,9 @@ check(
     'decayDone=' + perTabDecayDoneIdx + ' pend=' + pendIdx,
   );
   check(
-    'IIFE.12e per-tab tick applies running-stale decay BEFORE pending check (v0.5.2: running>SBI_RUNNING_STALE_MS + transcript-fresh gate →idle)',
-    perTabDecayRunningIdx >= 0 && pendIdx >= 0 && perTabDecayRunningIdx < pendIdx,
-    'decayRunning=' + perTabDecayRunningIdx + ' pend=' + pendIdx,
+    'IIFE.12e v0.5.4: per-tab running→idle decay REMOVED (proposal 2: gray only from green/done, never from yellow/running; active workflows stay yellow)',
+    perTabDecayRunningIdx < 0,
+    'decayRunning should be ABSENT (got idx=' + perTabDecayRunningIdx + ' — running must not decay to idle)',
   );
   check(
     'IIFE.12f per-tab decay chain sits AFTER __ccsdPending yield (yield still wins for CC-native blue)',
@@ -370,7 +370,7 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-check('IIFE.21c banner carries v0.5.3 stamp', /\/\*cc-status-dot-injected:v0\.5\.3:/.test(iife));
+check('IIFE.21c banner carries v0.5.3 stamp', /\/\*cc-status-dot-injected:v0.5.4:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -936,10 +936,8 @@ check(
 // keeps growing). The since-based stuck-drift catch is preserved (drifted Stop
 // heartbeats refresh the state-file mtime but NOT the transcript).
 check(
-  'IIFE.37b SBI stale-running heuristic (since > SBI_RUNNING_STALE_MS, then __ccsdTranscriptFresh gate →idle, v0.5.2)',
-  /else if\s*\(\s*st\s*===\s*"running"\s*\)\s*\{\s*if\s*\(\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*SBI_RUNNING_STALE_MS\s*\)\s*\{\s*if\s*\(\s*!__ccsdTranscriptFresh\s*\(\s*j\s*,\s*files\s*\[\s*i\s*\]\s*\.\s*slice\s*\(\s*0\s*,\s*-5\s*\)\s*,\s*SBI_RUNNING_STALE_MS\s*\)\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}\s*\}\s*\}/.test(
-    iife,
-  ),
+  'IIFE.37b v0.5.4: SBI running→idle decay REMOVED (proposal 2: gray only from green/done; running stays yellow, active workflows no longer false-gray)',
+  !/st\s*===\s*"running"\s*\)\s*\{\s*if\s*\(\s*since.*SBI_RUNNING_STALE_MS.*st\s*=\s*"idle"/.test(iife),
 );
 // e2e-test round-2: lock the VALUE of SBI_RUNNING_STALE_MS, not just its
 // use. The sibling constants DONE_TO_IDLE_MS (IIFE.14) and

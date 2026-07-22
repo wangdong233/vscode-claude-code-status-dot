@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.3";
+const INJECT_VERSION = "v0.5.4";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -2250,8 +2250,8 @@ function buildIIFE(resDir: string): string {
         `/*§4 reader rule: done>5min→idle — IDLE sessions don't count toward the green light.*/`,
         `if(st==="done"&&since&&(Date.now()-since)>DONE_TO_IDLE_MS){st="idle";}`,
         `/*§7.2 stale-running (v0.2.6: since-based, not mtime). since is the *→running transition time (set fresh by UserPromptSubmit / SubagentStart; PRESERVED by Stop inflight>0 path cc-status.js:390-401 — NOT refreshed — so a drifted inflight>0 stuck-running session has an old since even though mtime is fresh from the Stop heartbeat write). Mirrors the done>5min rule one branch up: decay on since, not mtime. __mt is still computed above for the cache-key short-circuit (mtime+size == content-change signal) but is no longer the decay signal. v0.5.2 (#4): before downgrading, gate on __ccsdTranscriptFresh — a session whose transcript (.jsonl) was modified within SBI_RUNNING_STALE_MS is ACTIVELY streaming (long turn / subagent wait freezes 'since' but the jsonl keeps growing) → do NOT decay. statSync only fires on decay-candidates (since already past THRESH), bounding cost.*/`,
-        `else if(st==="running"){if(since&&(Date.now()-since)>SBI_RUNNING_STALE_MS){if(!__ccsdTranscriptFresh(j,files[i].slice(0,-5),SBI_RUNNING_STALE_MS)){st="idle";}}}`,
-        `/*§7.5 interrupted retention: since>INTERRUPTED_RETENTION_MS(24h)→idle — keys off the TERMINAL timestamp (since), not mtime, so orphan SubagentStop/Notification writes that refresh mtime while preserving since (cc-status.js lines ~232/250/291) cannot postpone the 24h decay indefinitely. Mirrors the done>5min rule one branch up. Bounds 🔴 growth from abandoned crashes; file is NOT deleted (diagnostic value preserved).*/`,
+        ,
+        /*v0.5.4 (user proposal 2): REMOVED running→idle decay. gray(idle) now ONLY reachable from done(green)>5min, NEVER from running(yellow). Root cause: the prior decay (since>30min + __ccsdTranscriptFresh gate) falsely grayed ACTIVE workflows whose main transcript was idle while subagents ran — no reliable "workflow active" signal exists (Workflow-tool agents don't fire SubagentStart hook → activeSubagents=0; main transcript goes stale during workflow idle). Proposal 2 (state-machine: gray only from green) sidesteps detection. Trade-off: truly stuck-running (CC crash/drift) stays yellow — accepted (stuck-yellow >> false-gray for active work). done>5min→idle + interrupted>24h→idle UNCHANGED.*/ `/*§7.5 interrupted retention: since>INTERRUPTED_RETENTION_MS(24h)→idle — keys off the TERMINAL timestamp (since), not mtime, so orphan SubagentStop/Notification writes that refresh mtime while preserving since (cc-status.js lines ~232/250/291) cannot postpone the 24h decay indefinitely. Mirrors the done>5min rule one branch up. Bounds 🔴 growth from abandoned crashes; file is NOT deleted (diagnostic value preserved).*/`,
         `else if(st==="interrupted"&&since&&(Date.now()-since)>INTERRUPTED_RETENTION_MS){st="idle";}`,
         `if(st==="running")ag.running++;`,
         `else if(st==="done")ag.done++;`,
@@ -2453,8 +2453,8 @@ function buildIIFE(resDir: string): string {
         `var now=Date.now();`,
         `/*v0.5.2 (#4): decay st to idle BEFORE the pending check so a done>5min or running-stale session with j.pending=true does not false-stick 🔵 forever. UNIFIED with §F: both surfaces now share ONE threshold (SBI_RUNNING_STALE_MS, 30min — the prior 15min per-tab value is retired) so the tab and the bottom 🟡 can NEVER disagree in a 15-30min window again. Before the running→idle downgrade, gate on __ccsdTranscriptFresh(j,sid,…) — a session whose transcript (.jsonl) grew within the threshold is ACTIVELY streaming (long turn / subagent wait freezes 'since' but the jsonl keeps growing) → do NOT decay. This is the root-cause fix for the false-decay of genuinely-active long workflows keyed off the *→running transition timestamp. Same since-based defensive form (since && now-since>THRESH && since<now, guards since=0 corrupt files + future timestamps).*/`,
         `if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS){st="idle";}`,
-        `else if(st==="running"&&since&&(now-since)>SBI_RUNNING_STALE_MS&&since<now){if(!__ccsdTranscriptFresh(j,sid,SBI_RUNNING_STALE_MS)){st="idle";}}`,
-        `/*reader pending (Notification OR Stop last-message semantic match): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
+        ,
+        /*v0.5.4 (proposal 2): REMOVED per-tab running→idle decay (mirrors §F). gray only from done(green)>5min below, NEVER from running. Active workflows stay yellow; stuck-running stays yellow (accepted). __ccsdTranscriptFresh now dead for running — retained but no longer on running path.*/ `/*reader pending (Notification OR Stop last-message semantic match): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
         `if(pend && st!=="idle"){try{p.iconPath=ccuri(favOf(pth.join(RES,"claude-logo-pending.svg"),sid))}catch(e){}return}`,
         `var svg;`,
         `if(st==="interrupted"){svg=(flashSeq%2===0)?favOf(pth.join(RES,"claude-logo-error.svg"),sid):CC_DEFAULT}`,

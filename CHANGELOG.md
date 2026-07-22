@@ -2,6 +2,53 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.5.3] - 2026-07-22
+
+**5 维全面审查修 critical/high/medium 至零 blocking。** 4 维独立审查（code-standards / data-logic / business-logic / e2e-integration / 简单架构）交叉定位用户报的 F1/F2/F7 根因 + 一处 writer 设计前后矛盾 + 6 处 code-standards 卫生债。本版不引入新功能，全为根因修与卫生清理；v0.2.7-v0.5.2 既有功能全保留。
+
+### Fixed — F1 右键背景 tab 收藏错会话（HIGH，business-logic + e2e + 架构 三维同指根因）
+
+- **根因**：`favToggleTab` 把「被右键的 tab」与「活动 tab」用一个全局 `__ccsdActiveSid` 焊死——右键背景 CC tab 时收藏/移除的是活动 tab 的会话。
+- **修**：`companion/extension.ts:favToggleTab` 改签名 `favToggleTab(resourceUri?: unknown)` 接住 `editor/title/context` 自动传入的 resourceUri（CC webview 的合成 URI 不携带 sid，故仅作 API 契约 + 前向兼容，`void resourceUri` 丢弃）。新增「尽力而为 sid 解析」：读 `vscode.window.tabGroups.activeTabGroup.activeTab.label` 与新增的 `globalThis.__ccsdSidToTitle` 桥做**精确标题匹配**（非子串匹配，防相互包含误命中）——VSCode 在某些平台会先激活右键的 tab，此时精确命中即恢复正确 sid；未命中则回退 `__ccsdActiveSid`（既有行为不变）。全部 try/catch——`tabGroups` 为 EH-only，永不崩 toggle。
+
+### Fixed — F2 收藏标签显 UUID/目录名 非会话名（HIGH，data-logic + e2e + 架构 三维同指根因）
+
+- **根因**：toggle 时 label 只从 `cwd basename` → `sid.slice(0,8)`（不透明 UUID 前缀）回落，从不读 transcript 首条 user prompt；既未暴露权威标题源 `panelTab.title` 到 globalThis，也未利用 transcript。
+- **修（companion 侧，自包含）**：新增 `deriveLabelFromTranscript(transcriptPath)` helper——有界读 transcript jsonl 前 256KB，找第一条 `type:"user"` 且**非 tool_result 回复**（跳过含 `tool_use_id`/`type:"tool_result"` 块的 user turn），抽取 text 块、折叠空白、截断 64 字符。label 优先级改为**四级回落**：① 桥标题 `__ccsdSidToTitle[sid]`（live）→ ② transcript 首条 user prompt → ③ cwd basename → ④ UUID 前缀。任一可读名称可达即不再显 UUID。
+- **修（IIFE 侧，桥接）**：`patch.ts` IIFE 新增 sid→title 桥——§A preamble 初始化 `globalThis.__ccsdSidToTitle`；per-tick（500ms）刷新 `globalThis.__ccsdSidToTitle[sid] = t.__ccsdTitle || t.panelTab.title`（replA/replB 已在每次事件 fire 时保鲜 `t.__ccsdTitle`，故 rename_tab 标题变更在下一 tick 流入）；§Z onDidDispose 对称删除。companion 只读不写。
+
+### Fixed — Notification 在 interrupted 上设 pending:true 与 Stop suppress 矛盾（MEDIUM，business-logic）
+
+- **根因**：Stop handler 自 v0.2.7 Q2 起 `preserveInterrupted` 时**显式 suppress pending**（注释："interrupted dominates pending for SBI counting ... a blue dot on top of a red one would mislead. Keep the red sticky."）；Notification 分支却**无条件** `pending:true`——在已 interrupted 会话上覆写 sticky 红，IIFE per-tab tick `if(pend && st!=="idle")` 先于 interrupted 分支触发，tab 显蓝非红。
+- **修**：`hooks/cc-status.js` Notification case 加 `suppressPending = curState === 'interrupted'`，与 Stop 的 `preserveInterrupted` 设计对齐。`curState==='running'/'done'` 仍 `pending:true`（常见 permission-prompt 路径不变）。`test-cc-status.js` 测试 18/18b 翻转：`final.pending === false`（错误保留契约不变——test 18 仍断言 `error === 'rate_limit'`，test 18b 仍断言无 cur.error 时不发明 error）。
+
+### Fixed — F7 命令文案双前缀（MEDIUM，code-standards + 架构 二维）
+
+- **根因**：8 个 `package.nls.*` 文件的 7 个命令 `title` 都内嵌 `category` 前缀（如 "CC Favorites: Add/Remove File"），VSCode 命令面板按 `${category}: ${title}` 渲染 → "CC Favorites: CC Favorites: Add/Remove File"。56 条字符串（7 命令 × 8 语言）冗余。
+- **修**：从每个 title 移除 category 前缀（让 `category` 字段供给面板前缀），上下文菜单（仅显 title）现为 "Add/Remove File"（语境内清晰）。8 语言一致应用，全部文件 JSON 仍合法。
+
+### Changed — code-standards 卫生债清理（HIGH ×1 + MEDIUM ×4）
+
+- **HIGH 死代码**：`patch.ts` `tokWinDetailLiteral`（声明后零引用；其 6 行注释谎称"eliminates 2 of the 5 copies"——detail-string 副本已在重构中删，仅剩未用的数组字面量）删除 + 注释改写。`tokWinKeysLiteral`（QuickPick 仍消费）保留。
+- **MEDIUM 陈旧注释**：`companion/extension.ts:745` 注释"IIFE does NOT read favorites.json in v0.4.0 (Q3 design: tab composite star is deferred to v0.5)"——v0.5.0 起 IIFE **已读** favorites.json（`readFavSet`/`favOf`），两条子句均假。改写反映 v0.5.0+ 现实。
+- **MEDIUM 无效 lint 指令**：`companion/extension.ts` 7 处 `// eslint-disable-next-line @typescript-eslint/no-explicit-any`——项目**无 eslint 配置 + 无 eslint devDep**，且每处标注的都是 `Record<string, unknown>`（非 `any`），纯 cargo-cult。全删（cast 保留，类型安全）。
+- **MEDIUM 格式守门遗漏**：`package.json` `format:check`/`format`/`lint-staged` 仅覆盖 `patch.ts`/`hooks/**`，`companion/extension.ts`（1623 行 TS）零守门——回归可静默落地。三处 glob 增补 `companion/extension.ts`，镜像 patch.ts 既有纪律。
+- **MEDIUM tsconfig 不强制 noUnusedLocals**：`tsconfig.json` + `companion/tsconfig.json` 均加 `"noUnusedLocals": true, "noUnusedParameters": true`。开启后 tsc 立即暴露第 2 处未用形参 `reportExtensionPatchHealth(extDir, extSrc)` 的 `extDir`（函数体仅用 `extSrc`）——一并删除形参 + 同步唯一调用点。下次孤儿符号 CI 即失败。
+
+### Tests
+
+- **`hooks/test-iife.mjs`**：IIFE.21c stamp v0.5.2→v0.5.3；新增 IIFE.161（§A preamble 初始化 `__ccsdSidToTitle`）/ IIFE.162（per-tick 从 `t.__ccsdTitle||t.panelTab.title` 刷新）/ IIFE.163（§Z onDidDispose 删除条目）。
+- **`hooks/test-cc-status.js`**：测试 18/18b 翻转 `pending:true`→`pending:false`（Notification on interrupted 现与 Stop preserveInterrupted 一致），注释解释 v0.5.3 设计对齐；错误保留契约断言不变。
+- **`hooks/test-favorites.mjs`**：新增 FAV.33（favToggleTab 接 resourceUri 形参）/ FAV.34（`__ccsdSidToTitle` + `activeTabGroup?.activeTab` + 精确标题匹配）/ FAV.35（`deriveLabelFromTranscript` helper 签名）/ FAV.36（跳过 tool_result user-messages）。
+- **`hooks/cc-status.js`**：banner hash 重算 03913c83 → efeba149（HOOK_VERSION v0.2.1 不变——hash 门检测 intra-version drift）。
+
+### Version
+
+- **版本 5-way pin** bump：`package.json` 0.5.2→0.5.3；`patch.ts INJECT_VERSION` v0.5.2→v0.5.3；`companion/package.json` 0.5.2→0.5.3（lockstep）；`companion/extension.ts MIN_PATCHER_VERSION` 0.5.2→0.5.3 + `injectVersion()` fallback v0.5.2→v0.5.3（test-version-sync.mjs 强制 5-way 一致）。`HOOK_VERSION`（v0.2.1）不变；`cc-status.js` 内容变 → banner hash 重算。IIFE body bytes 变 → INJECT banner sha1 自动重算（v0.5.3:ea3684f1）。
+- **立场红线全守**：5 态点 / 4 灯 / permission / token SBI / Q1-Q7 / v0.2.8 src/v0.3.1 nonce/v0.4.0 收藏视图+导航 / v0.5.0 金线+右键 / v0.5.1 内联速率 / v0.5.2 decay 统一+内容门 全保留；IIFE 括号配平（`()=0 []=0 {}=0`，`node --check` 通过）。
+- **不动 finding（经核非误报）**：business-logic 称 `SOFT_IDIOM_RE` 遗漏 'waiting for you'/'over to you' —— **核为误报**：这两个短语在 `AWAIT_USER_PHRASES_RE`（line 345-346）内，馈入 `AWAIT_USER_RE` 后**始终无条件胜出**（line 418 `return true`），不受 SOFT report-closer body-gate 影响；SOFT_IDIOM_RE 是**另一份更小的次要列表**，仅在被长正文门 gate 时使用，这两个短语本就不该在 SOFT 内。不动。
+- **延期 LOW**：F5（聚合 2s 整树 fire(undefined) 刷新过粗——无抢焦点直接证据，perf/UX 调优待 telemetry）/ F6（OPEN EDITORS 视图右键收藏——R-INT-02 覆盖盲区，需 openEditors/context 菜单探索）/ F3（closed session circle-slash 图标语义——`comment-off` 更友好但 LOW）/ F4 多窗口 favorites.json read-modify-write lost-update（理论性，无 CAS；writeFavAtomic 已用 tmp+rename）/ 集成测试为源码正则 pinning 非 behavior 验证（R-CHG-03，独立 PR）。
+
 ## [0.5.2] - 2026-07-22
 
 **证据驱动修 4 件用户反馈 + 审计 findings。** 5 路对抗调研定位根因：#1 蓝→黄闪（writer 内容启发式对调研报告尾问过触发）、#2 焦点被抢（**证据排除——非插件锅**）、#3 拷贝延迟（**证据排除——非插件锅**，但顺手移除死调试日志器）、#4 长黄→灰（per-tab/聚合 decay 阈值分歧 + `since` 键对活动 workflow 假阳性）。审计另修 F4（死 decay 三元），记录 F5/F6/F7 为 LOW 延期。

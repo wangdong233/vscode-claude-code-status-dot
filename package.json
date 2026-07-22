@@ -1,6 +1,6 @@
 {
   "name": "vscode-claude-code-status-dot",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Colorize Claude Code's VSCode tab icon with 4-state status dots (idle/running/done/interrupted), add a bottom status-bar 4-light aggregate (done/running/pending/interrupted), and surface per-session token usage / cost on the right side of the status bar — all via a minimal, reversible patch.",
   "type": "module",
   "license": "MIT",
@@ -26,8 +26,8 @@
     "companion:install": "cd companion && npm install --no-audit --no-fund",
     "companion:build": "cd companion && npm run build",
     "companion:package": "cd companion && npm run package:vsix",
-    "format:check": "prettier --check patch.ts hooks/**/*.js hooks/**/*.mjs",
-    "format": "prettier --write patch.ts hooks/**/*.js hooks/**/*.mjs",
+    "format:check": "prettier --check patch.ts hooks/**/*.js hooks/**/*.mjs companion/extension.ts",
+    "format": "prettier --write patch.ts hooks/**/*.js hooks/**/*.mjs companion/extension.ts",
     "prepare": "husky"
   },
   "keywords": [
@@ -69,6 +69,7 @@
   "lint-staged": {
     "patch.ts": "prettier --check",
     "hooks/**/*.js": "prettier --check",
-    "hooks/**/*.mjs": "prettier --check"
+    "hooks/**/*.mjs": "prettier --check",
+    "companion/extension.ts": "prettier --check"
   }
 }

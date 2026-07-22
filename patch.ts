@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.2";
+const INJECT_VERSION = "v0.5.3";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -1758,13 +1758,16 @@ function buildIIFE(resDir: string): string {
     // discipline as cfgLiteral: patch.ts SOURCE is ASCII-only, the baked IIFE
     // contains literal UTF-8 emoji bytes (see cfgLiteral above).
     const dimEmLiteral = JSON.stringify(SBI_DIM_EM);
-    // v0.2.4 (code-style MEDIUM fix): bake TOK_WIN_KEYS as both a slash-
-    // joined detail string and a JSON-stringified array, then interpolate
-    // into the QuickPick template literal below. Eliminates 2 of the 5
-    // independent copies of the window-key sequence (patch.ts IIFE detail
-    // string + picker list); the writer's TOK_WIN_KEYS + docstring + test
-    // corpus are the remaining 3, each documented + cross-pinned.
-    const tokWinDetailLiteral = TOK_WIN_KEYS.join(" / ");
+    // v0.2.4 (code-style MEDIUM fix): bake TOK_WIN_KEYS as a JSON-stringified
+    // array, then interpolate into the QuickPick template literal below
+    // (showTokQuickPick's tokenStatsWindow picker). Eliminates 1 of the 5
+    // independent copies of the window-key sequence (patch.ts IIFE picker
+    // list); the writer's TOK_WIN_KEYS + docstring + test corpus + the former
+    // slash-joined detail string are the remaining 4. v0.5.3 (code-standards
+    // HIGH cleanup): the slash-joined `tokWinDetailLiteral` sibling that USED
+    // to live here was dead (declared, never interpolated — only the array
+    // form below is consumed) and its 6-line comment actively lied about
+    // 'eliminating 2 of the 5 copies'; both removed.
     const tokWinKeysLiteral = JSON.stringify([...TOK_WIN_KEYS]);
     // v0.2.5 round-3 (MEDIUM): bake TOK_WIN_MS as a JS-object literal so the
     // IIFE can look up the rolling-window span (ms) for the currently-selected
@@ -1860,6 +1863,15 @@ function buildIIFE(resDir: string): string {
         // frozen-prototype scenarios (rare; the outer event parameter is `e`
         // so we use `catch(_)` to avoid shadowing it).
         `try{if(!globalThis.__ccsdSidToPanel)globalThis.__ccsdSidToPanel=Object.create(null);if(t.__ccsdSid)globalThis.__ccsdSidToPanel[t.__ccsdSid]=t.panelTab;}catch(_){}`,
+        // v0.5.3 (F1/F2 e2e HIGH): sid→title bridge. The per-panel tick
+        // refreshes globalThis.__ccsdSidToTitle[sid] every 500ms (below) so the
+        // companion's favToggleTab can resolve the RIGHT-CLICKED background tab
+        // (vs the welded __ccsdActiveSid) by matching activeTab.label, and so
+        // favorites labels can prefer the live tab title over a cwd/UUID
+        // fallback. Initialized here in the §A preamble (idempotent — the
+        // t.__ccsdDotStarted guard above guarantees one-time-per-panel); cleared
+        // in §Z onDidDispose. The companion reads this map read-only.
+        `try{if(!globalThis.__ccsdSidToTitle)globalThis.__ccsdSidToTitle=Object.create(null);}catch(_){}`,
         `var fs=require("fs"),pth=require("path"),vs=require("vscode"),os=require("os");`,
         // v0.4.0 round-2 (ARCH-6 HIGH): bake STATE_DIR as an absolute path
         // literal (computed once at patch time from patch.ts:219 const + the
@@ -2376,6 +2388,14 @@ function buildIIFE(resDir: string): string {
         // bounds the multi-panel race to ONE overwrite per panel-activate
         // event (the user actually switches tabs) instead of every 500ms.
         `if(p.active===true){globalThis.__ccsdActiveSid=sid;globalThis.__ccsdLastActiveSid=sid}else if(typeof p.active==="undefined"&&!globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=sid}globalThis.__ccsdLastActiveSid=sid;`,
+        // v0.5.3 (F1/F2): refresh the sid→title bridge every tick so rename_tab
+        // updates flow through (t.__ccsdTitle is kept fresh by replA/replB on
+        // every event fire; t.panelTab.title is the live webview label). The
+        // companion's favToggleTab reads this to (a) resolve the right-clicked
+        // background tab via activeTab.label and (b) label favorites with the
+        // real session title. Best-effort, wrapped in try/catch — a missing
+        // title just leaves the bridge entry stale (companion falls back).
+        `try{if(globalThis.__ccsdSidToTitle&&sid){var __tt=t.__ccsdTitle||(t.panelTab&&t.panelTab.title)||"";if(__tt)globalThis.__ccsdSidToTitle[sid]=__tt;}}catch(_){}`,
         `var st=null,since=null,err="",pend=false;`,
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
@@ -2448,7 +2468,7 @@ function buildIIFE(resDir: string): string {
         `},${TICK_MS});`,
         // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}/*v0.4.0 FAV BRIDGE §Z: release this panel's entry in the sid→panel map so the companion's Favorites tree sees the session as closed (node grayed out, click degrades to Copy resume cmd). Symmetric to the §A preamble publish; uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdSidToPanel&&t.__ccsdSid)delete globalThis.__ccsdSidToPanel[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid=""}})}catch(e){}`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}/*v0.4.0 FAV BRIDGE §Z: release this panel's entry in the sid→panel map so the companion's Favorites tree sees the session as closed (node grayed out, click degrades to Copy resume cmd). Symmetric to the §A preamble publish; uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdSidToPanel&&t.__ccsdSid)delete globalThis.__ccsdSidToPanel[t.__ccsdSid]}catch(_){}/*v0.5.3 FAV BRIDGE §Z: release this panel's entry in the sid→title map (symmetric to the sid→panel delete above + the §A title init).*/try{if(globalThis.__ccsdSidToTitle&&t.__ccsdSid)delete globalThis.__ccsdSidToTitle[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid=""}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -4585,7 +4605,7 @@ function reportBakedNodeHealth(): void {
  *  A+B), injected IIFE version + content-hash drift, and baked RES path
  *  staleness. Each line surfaces a separate detection result so a user
  *  inspecting --status knows exactly which axis is fresh vs. stale. */
-function reportExtensionPatchHealth(extDir: string, extSrc: string): void {
+function reportExtensionPatchHealth(extSrc: string): void {
     const patched = isExtensionPatched(extSrc);
     log(`extension.js patched: ${patched ? "YES" : "no"}`);
     if (!patched) return;
@@ -4715,7 +4735,7 @@ function reportStatus(): void {
     }
     const extJs = path.join(dir, "extension.js");
     const extSrc = fs.existsSync(extJs) ? fs.readFileSync(extJs, "utf8") : "";
-    reportExtensionPatchHealth(dir, extSrc);
+    reportExtensionPatchHealth(extSrc);
     reportLegacyResidue(dir);
     reportRuntimeFiles();
     reportCompanionStatus();

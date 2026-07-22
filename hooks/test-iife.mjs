@@ -370,7 +370,7 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-check('IIFE.21c banner carries v0.5.2 stamp', /\/\*cc-status-dot-injected:v0\.5\.2:/.test(iife));
+check('IIFE.21c banner carries v0.5.3 stamp', /\/\*cc-status-dot-injected:v0\.5\.3:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -2755,6 +2755,32 @@ check(
   /function\(sid\)\{try\{if\(sid&&globalThis\.__ccsdSidToPanel&&globalThis\.__ccsdSidToPanel\[sid\]\)/.test(iife) &&
     /return false/.test(iife),
   'focusSession must NOT throw or show error UI on miss (race with panel close is normal)',
+);
+
+// IIFE.161-163 v0.5.3 FAV BRIDGE §A/§tick/§Z — sid→title map. The companion's
+// favToggleTab resolves the RIGHT-CLICKED background tab (F1) by matching
+// activeTabGroup.activeTab.label against this map, and labels favorites with
+// the live title (F2). The map is initialized in the §A preamble (idempotent),
+// refreshed every 500ms tick (rename_tab picks up), and cleared in §Z
+// onDidDispose — same lifecycle discipline as the v0.4 __ccsdSidToPanel map
+// (IIFE.154/155). See companion/extension.ts:favToggleTab for the consumer.
+check(
+  'IIFE.161 v0.5.3 FAV BRIDGE §A — __ccsdSidToTitle initialized in preamble',
+  /if\(!globalThis\.__ccsdSidToTitle\)globalThis\.__ccsdSidToTitle=Object\.create\(null\)/.test(iife),
+  '§A preamble must init the sid→title map so the companion can resolve right-clicked tabs + label favorites',
+);
+
+check(
+  'IIFE.162 v0.5.3 FAV BRIDGE §tick — __ccsdSidToTitle[sid] refreshed from t.__ccsdTitle/panelTab.title each tick',
+  /globalThis\.__ccsdSidToTitle\[sid\]=__tt/.test(iife) &&
+    /var __tt=t\.__ccsdTitle\|\|\(t\.panelTab&&t\.panelTab\.title\)\|\|""/.test(iife),
+  'per-tick refresh picks up rename_tab title changes (t.__ccsdTitle kept fresh by replA/replB)',
+);
+
+check(
+  'IIFE.163 v0.5.3 FAV BRIDGE §Z — onDidDispose deletes __ccsdSidToTitle[sid]',
+  /if\(globalThis\.__ccsdSidToTitle&&t\.__ccsdSid\)delete globalThis\.__ccsdSidToTitle\[t\.__ccsdSid\]/.test(iife),
+  '§Z onDidDispose must clear the title entry (symmetric to the sid→panel delete at IIFE.155)',
 );
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.1:03913c83*/
+/*cc-status-dot-hook:v0.2.1:efeba149*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -656,12 +656,26 @@ function deriveStatus(payload, cur) {
         cur && (cur.state === 'running' || cur.state === 'done' || cur.state === 'interrupted') ? cur.state : 'running';
       const curSince = cur && typeof cur.since === 'number' && cur.since > 0 ? cur.since : now;
       const preserveError = curState === 'interrupted' && typeof cur.error === 'string' && cur.error;
+      // v0.5.3 (business-logic MEDIUM): suppress pending when curState is
+      // already 'interrupted', mirroring the Stop case's preserveInterrupted
+      // design (cc-status.js Stop handler + the rationale stamped there:
+      // 'interrupted already dominates pending for SBI counting ... a blue dot
+      // on top of a red one would mislead. Keep the red sticky.'). Pre-fix this
+      // branch wrote pending:true unconditionally, so a Notification (permission
+      // prompt) firing on an already-interrupted session overwrote the sticky
+      // red and the per-tab tick rendered BLUE (patch.ts IIFE.12a:
+      // `if(pend && st!=='idle')` fires before the interrupted branch). The
+      // Stop handler deliberately suppresses pending on preserveInterrupted to
+      // avoid exactly that blue-on-red flash; this aligns Notification with
+      // that invariant. curState==='running'/'done' still gets pending:true
+      // (the common permission-prompt path is unchanged).
+      const suppressPending = curState === 'interrupted';
       return {
         state: curState,
         since: curSince,
         ...(preserveError ? { error: cur.error } : {}),
         activeSubagents: a,
-        pending: true,
+        pending: !suppressPending,
       };
     }
 

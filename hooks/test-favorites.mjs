@@ -657,6 +657,39 @@ check(
   'the empty-sid branch in favToggleTab (companion/extension.ts) must show an info message ("cc-status-dot: no active Claude Code session...") and return — the no-op safety net referenced by the FAV.31 commentary; FAV.20 only checks the sid literals and cannot detect this guard being deleted',
 );
 
+// FAV.33-36 v0.5.3 — F1 (right-clicked background tab) + F2 (label from
+// transcript) fixes. These are source-contract pins (mirrors the test-iife.mjs
+// philosophy): they lock the new bridge wiring + helper signatures so a
+// regression that re-welds favToggleTab to __ccsdActiveSid or drops the
+// transcript-label helper fails CI.
+check(
+  'FAV.33 v0.5.3 favToggleTab accepts a resourceUri parameter (editor/title/context menu contract, F1)',
+  /function\s+favToggleTab\s*\(\s*resourceUri\s*\??\s*:\s*unknown\s*\)/.test(companionSrc),
+  'VSCode editor/title/context auto-passes resourceUri; accepting it (even if unused for CC webview tabs) is the API contract',
+);
+
+check(
+  'FAV.34 v0.5.3 favToggleTab resolves right-clicked tab via __ccsdSidToTitle + activeTabGroup.activeTab.label (F1)',
+  /__ccsdSidToTitle/.test(companionSrc) &&
+    /activeTabGroup\?\.activeTab/.test(companionSrc) &&
+    /Object\.keys\(map\)\.find\(\(k\)\s*=>\s*map\[k\]\s*===\s*activeLabel\)/.test(companionSrc),
+  'must attempt exact-title match against the IIFE bridge before falling back to __ccsdActiveSid',
+);
+
+check(
+  'FAV.35 v0.5.3 deriveLabelFromTranscript helper declared (F2 — label from first user prompt, not UUID/cwd)',
+  /function\s+deriveLabelFromTranscript\s*\(\s*transcriptPath\s*:\s*string\s*\)\s*:\s*string\s*\|\s*null/.test(
+    companionSrc,
+  ),
+  'dedicated helper that reads the transcript jsonl for the first real user prompt (skips tool_result replies)',
+);
+
+check(
+  'FAV.36 v0.5.3 deriveLabelFromTranscript skips tool_result user-messages (avoid labeling a favorite with tool output)',
+  /type\s*===\s*["']tool_result["']/.test(companionSrc) && /tool_use_id/.test(companionSrc),
+  'user turns that carry tool_result blocks are tool replies, not prompts — must be skipped',
+);
+
 // cleanup
 try {
   fs.rmSync(tmpDir, { recursive: true, force: true });

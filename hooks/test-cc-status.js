@@ -463,30 +463,34 @@ checkBoth(
 }
 
 // 18. Notification on an interrupted session preserves interrupted state +
-//     adds pending:true (e.g. user is prompted while an error is showing).
-//     v0.1.20 contract fix (data-logic round-2 review): Notification now
-//     ALSO preserves cur.error, mirroring SubagentStop's preserveError
-//     guard. The pre-fix Notification branch returned {state, since,
-//     pending:true} with NO error field, so a StopFailure→Notification
-//     sequence on the same session silently dropped the error enum from
-//     disk (writeJsonAtomic overwrote the file). The reader's notify()
-//     would then surface generic "interrupted" wording instead of the
-//     specific failure reason (e.g. "tool_blocked"). This test locks the
-//     symmetric contract: any path that preserves cur.state on an
-//     interrupted session MUST also preserve cur.error.
+//     error, and SUPPRESSES pending (v0.5.3 business-logic MEDIUM consistency
+//     fix with the Stop case's preserveInterrupted design).
+//     v0.1.20 contract fix (data-logic round-2 review): Notification still
+//     preserves cur.error, mirroring SubagentStop's preserveError guard. The
+//     pre-fix Notification branch returned {state, since, pending:true} with
+//     NO error field, so a StopFailure→Notification sequence on the same
+//     session silently dropped the error enum from disk. This test locks the
+//     symmetric contract: any path that preserves cur.state on an interrupted
+//     session MUST also preserve cur.error.
+//     v0.5.3: pending is now FALSE on interrupted (was TRUE pre-v0.5.3). The
+//     Stop handler's preserveInterrupted already suppressed pending to 'keep
+//     the red sticky' (interrupted dominates pending in SBI counting; a blue
+//     dot on red misleads). Notification now mirrors that invariant so a
+//     permission prompt arriving on an already-interrupted session does NOT
+//     flash the tab blue. The error-preservation contract above is UNCHANGED.
 {
   const home = newTempHome();
   fire(home, 'UserPromptSubmit');
   fire(home, 'StopFailure', { error: 'rate_limit' });
   const final = fire(home, 'Notification');
-  const ok = final && final.state === 'interrupted' && final.pending === true && final.error === 'rate_limit';
+  const ok = final && final.state === 'interrupted' && final.pending === false && final.error === 'rate_limit';
   if (ok) {
     pass++;
-    console.log('  PASS  18. Notification on interrupted preserves state + error, sets pending=true');
+    console.log('  PASS  18. Notification on interrupted preserves state + error, suppresses pending (v0.5.3)');
   } else {
     fail++;
     console.log(
-      '  FAIL  18. expected interrupted+pending=true+error=rate_limit, got state=' +
+      '  FAIL  18. expected interrupted+pending=false+error=rate_limit, got state=' +
         (final && final.state) +
         ' pending=' +
         (final && final.pending) +
@@ -500,21 +504,22 @@ checkBoth(
 //      cur.error is absent (a hand-edited or pre-v0.1.20 file may have
 //      {state:'interrupted'} with no error field). Locks the guard's strict
 //      type check — only a string error from cur is preserved (no
-//      defaulting to 'interrupted' or any other enum).
+//      defaulting to 'interrupted' or any other enum). v0.5.3: pending is
+//      also false here (same suppressed-on-interrupted rule as test 18).
 {
   const home = newTempHome();
   // Plant an interrupted file with NO error field (mimics a hand-edited
   // / pre-v0.1.20 disk state).
   plantStatus(home, SID, { state: 'interrupted', since: Date.now(), activeSubagents: 0 });
   const final = fire(home, 'Notification');
-  const ok = final && final.state === 'interrupted' && final.pending === true && final.error === undefined;
+  const ok = final && final.state === 'interrupted' && final.pending === false && final.error === undefined;
   if (ok) {
     pass++;
-    console.log('  PASS  18b. Notification on interrupted (no cur.error) does NOT invent error');
+    console.log('  PASS  18b. Notification on interrupted (no cur.error) does NOT invent error, suppresses pending');
   } else {
     fail++;
     console.log(
-      '  FAIL  18b. expected interrupted+pending=true+error=undefined, got state=' +
+      '  FAIL  18b. expected interrupted+pending=false+error=undefined, got state=' +
         (final && final.state) +
         ' pending=' +
         (final && final.pending) +

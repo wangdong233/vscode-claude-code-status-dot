@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.2";
+const MIN_PATCHER_VERSION = "0.5.3";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.2";
+    return effectiveConfig?.injectVersion ?? "v0.5.3";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -525,7 +525,6 @@ function runPatcher(): Promise<PatchResult> {
 /** Detect → patch → reload, gated by the per-extDir globalThis Set. Designed
  *  to be safe to call from activation on every startup. */
 async function detectAndPatch(): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const g = globalThis as Record<string, unknown>;
     const ranDirs = (g[ALREADY_RAN_KEY] as Set<string> | undefined) ?? new Set<string>();
     g[ALREADY_RAN_KEY] = ranDirs;
@@ -628,7 +627,6 @@ function scheduleLaterRetry(extDir: string): void {
         // If the IIFE global is now present, CC has re-loaded the patched
         // extension in this EH (user manually reloaded, or some other path
         // activated CC fresh) — no prompt needed.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const g = globalThis as Record<string, unknown>;
         if (g.__ccsdSbi !== undefined) return;
         // Disk says patched but EH memory doesn't have the IIFE globals → the
@@ -687,7 +685,6 @@ function startRepatchWatcher(extDir: string): void {
     if (repatchTimer) return; // idempotent — only one watcher per EH lifetime
     const baseline = readRepatchFlag();
     let lastTs = baseline?.ts ?? 0;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const g = globalThis as Record<string, unknown>;
     const prompted = (g[PROMPTED_REPATCH_KEY] as Set<string> | undefined) ?? new Set<string>();
     g[PROMPTED_REPATCH_KEY] = prompted;
@@ -709,7 +706,6 @@ function startRepatchWatcher(extDir: string): void {
         // that did the patch, or CC re-activated post-reload already).
         // See scheduleLaterRetry for the __ccsdSbi-vs-__ccsdSbis rationale
         // (singular only since v0.1.17; plural name was renamed away).
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const mem = globalThis as Record<string, unknown>;
         if (mem.__ccsdSbi !== undefined) return;
         prompted.add(key);
@@ -742,9 +738,11 @@ function startRepatchWatcher(extDir: string): void {
 //
 // Persistence: ~/.claude/cc-tab-status/favorites.json (= IIFE's STATE_DIR,
 // patch.ts:219). Companion is the SOLE writer (atomic tmp+rename, mirrors
-// patch.ts:1662 writeAtomicSync). IIFE does NOT read favorites.json in v0.4.0
-// (Q3 design: tab composite star is deferred to v0.5; v0.4 stars are a
-// ThemeIcon in the Favorites view only).
+// patch.ts:1662 writeAtomicSync). Since v0.5.0 the IIFE ALSO reads
+// favorites.json (readFavSet, mtime+size cached at patch.ts:1918) to paint
+// the -fav gold-line tab icon variant via favOf() (patch.ts:1924); the
+// companion remains the sole WRITER, so the IIFE↔favorites coupling is
+// read-only on the IIFE side.
 //
 // CC coupling: the session-toggle handler reads `globalThis.__ccsdActiveSid`
 // (already maintained by the IIFE — see scheduleLaterRetry:621 for the
@@ -991,7 +989,6 @@ type FavNode =
  *  getChildren call by reading globalThis.__ccsdSidToPanel (published by the
  *  IIFE's §A preamble — see docs/FAVORITES-DESIGN.md §4.2). */
 function openSidSet(): Set<string> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const g = globalThis as Record<string, unknown>;
     const map = g.__ccsdSidToPanel as Record<string, unknown> | undefined;
     if (!map || typeof map !== "object") return new Set();
@@ -1202,18 +1199,140 @@ function favToggleFile(uri?: vscode.Uri): void {
     favoritesProvider?.refresh();
 }
 
-/** Toggle the active CC session (per globalThis.__ccsdActiveSid) in/out of
- *  favorites. Reads the sid's <sid>.json (when present) to snapshot cwd /
- *  transcript_path / model / state — the entry is self-contained so the
- *  favorite survives CC's own SessionEnd cleanup of <sid>.json. Idempotent
- *  on sid. */
-function favToggleTab(): void {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+/** Derive a short, human-readable label for a favorite from the session's
+ *  transcript jsonl (the first real user prompt). v0.5.3 (F2 HIGH): the
+ *  pre-fix toggle fell back to `cwd basename` then `sid.slice(0,8)` (an
+ *  opaque UUID prefix), so the Favorites tree showed meaningless labels.
+ *  Reading the first user prompt mirrors how the user identifies the session
+ *  themselves ("the chat where I asked about X").
+ *
+ *  Bounded + defensive: reads only the first ~256KB (the first user turn is
+ *  near the top), swallows all fs/JSON errors (returns null → caller falls
+ *  back to cwd/UUID), and skips tool_result user-messages (which carry
+ *  `tool_use_id` and opaque payload, not a prompt). Returns null for an empty
+ *  / whitespace-only / control-char-only result so the caller's cwd/UUID
+ *  fallback still applies. */
+function deriveLabelFromTranscript(transcriptPath: string): string | null {
+    if (!transcriptPath) return null;
+    let raw: string;
+    try {
+        // Bounded read — the first user prompt is overwhelmingly in the first
+        // few KB. 256KB is a generous ceiling that still bounds I/O on huge
+        // transcripts (long sessions grow to many MB).
+        const fd = fs.openSync(transcriptPath, "r");
+        try {
+            const sz = Math.min(256 * 1024, fs.fstatSync(fd).size);
+            if (sz <= 0) return null;
+            const buf = Buffer.alloc(sz);
+            const br = fs.readSync(fd, buf, 0, sz, 0);
+            raw = buf.toString("utf8", 0, br);
+        } finally {
+            fs.closeSync(fd);
+        }
+    } catch {
+        return null;
+    }
+    if (!raw) return null;
+    const lines = raw.split("\n");
+    for (const ln of lines) {
+        const trim = ln.trim();
+        if (!trim) continue;
+        let obj: unknown;
+        try {
+            obj = JSON.parse(trim);
+        } catch {
+            continue;
+        }
+        if (!obj || typeof obj !== "object") continue;
+        const o = obj as Record<string, unknown>;
+        if (o.type !== "user") continue;
+        const msg = o.message as Record<string, unknown> | undefined;
+        if (!msg || typeof msg !== "object") continue;
+        const content = msg.content;
+        // User text prompt: content is a bare string, OR an array containing a
+        // {type:"text", text:"…"} block. SKIP tool_result arrays (those are CC
+        // feeding tool output back, not a user prompt) — detected via a
+        // tool_use_id-bearing or type:"tool_result" block.
+        let text: string | null = null;
+        if (typeof content === "string") {
+            text = content;
+        } else if (Array.isArray(content)) {
+            // If ANY block is a tool_result, this user turn is a tool reply,
+            // not a prompt — skip to the next user line.
+            const isToolReply = content.some(
+                (b) =>
+                    b &&
+                    typeof b === "object" &&
+                    ((b as Record<string, unknown>).type === "tool_result" ||
+                        typeof (b as Record<string, unknown>).tool_use_id === "string"),
+            );
+            if (isToolReply) continue;
+            const textBlock = content.find(
+                (b) => b && typeof b === "object" && (b as Record<string, unknown>).type === "text",
+            ) as Record<string, unknown> | undefined;
+            if (textBlock && typeof textBlock.text === "string") text = textBlock.text;
+        }
+        if (!text) continue;
+        // Collapse whitespace + strip control chars; truncate to a tree-friendly
+        // width. 64 chars fits the Favorites row without ellipsis-flip on most
+        // sidebars; longer labels add noise, not signal.
+        const cleaned = text
+            .replace(/[\x00-\x1f\x7f]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        if (!cleaned) continue;
+        return cleaned.length > 64 ? cleaned.slice(0, 63) + "…" : cleaned;
+    }
+    return null;
+}
+
+/** Toggle a CC session in/out of favorites. v0.5.3 (F1 HIGH): accepts the
+ *  resourceUri that VSCode's editor/title/context menu auto-passes (was
+ *  dropped on the floor pre-fix, and the handler welded the right-clicked
+ *  background tab to __ccsdActiveSid — the ACTIVE tab — so right-clicking a
+ *  non-active CC tab collected/removed the wrong session). Resolution order:
+ *    1. best-effort: match vscode.window.tabGroups.activeTab.label against the
+ *       IIFE's globalThis.__ccsdSidToTitle bridge — if VSCode activated the
+ *       right-clicked tab (platform-dependent) this nails the exact sid.
+ *    2. fallback: globalThis.__ccsdActiveSid / __ccsdLastActiveSid (unchanged).
+ *  The resourceUri itself is not decodable for a CC webview tab (synthetic
+ *  URI, no sid), so it's accepted for API correctness + forward-compat only.
+ *
+ *  v0.5.3 (F2 HIGH): label now prefers (a) the live title from the bridge,
+ *  then (b) the transcript's first user prompt (deriveLabelFromTranscript),
+ *  then (c) cwd basename, then (d) sid.slice(0,8). Pre-fix only (c)/(d) ran,
+ *  so labels showed opaque UUIDs / dir names. */
+function favToggleTab(resourceUri?: unknown): void {
+    void resourceUri; // accepted for menu contract; CC webview URIs carry no sid
     const g = globalThis as Record<string, unknown>;
-    const sid =
+    // F1: best-effort — resolve the sid behind the right-clicked tab via the
+    // title bridge + the active tab's label. VSCode's editor/title/context
+    // fires after the right-clicked tab becomes tabGroups.activeTab on some
+    // platforms; when it does, matching the label against __ccsdSidToTitle
+    // recovers the EXACT sid (vs the welded active-sid fallback). All wrapped
+    // in try/catch — vscode.window.tabGroups is EH-only and must never crash
+    // the toggle.
+    let sid =
         (typeof g.__ccsdActiveSid === "string" && g.__ccsdActiveSid) ||
         (typeof g.__ccsdLastActiveSid === "string" && g.__ccsdLastActiveSid) ||
         "";
+    try {
+        const titleMap = g.__ccsdSidToTitle;
+        if (titleMap && typeof titleMap === "object") {
+            const map = titleMap as Record<string, string>;
+            const activeTab = vscode.window.tabGroups?.activeTabGroup?.activeTab;
+            const activeLabel = activeTab && typeof activeTab.label === "string" ? activeTab.label : "";
+            if (activeLabel) {
+                // Find a known CC sid whose bridge title matches the active tab
+                // label. Exact match only — a substring match would false-hit
+                // when one session title contains another.
+                const matched = Object.keys(map).find((k) => map[k] === activeLabel);
+                if (matched) sid = matched;
+            }
+        }
+    } catch {
+        /* tabGroups unavailable (defensive) — keep the active-sid fallback */
+    }
     if (!sid) {
         void vscode.window.showInformationMessage(
             "cc-status-dot: no active Claude Code session. Open a CC tab first, then re-run this command.",
@@ -1254,11 +1373,27 @@ function favToggleTab(): void {
         )
             model = ((j.tokens as Record<string, unknown>).last_model as string).trim();
         if (typeof j.state === "string") state = j.state;
-        // Best-effort label: prefer transcript's first user prompt later (TODO
-        // for v0.5); for now use cwd basename + state — short, identifiable.
-        if (cwd) label = path.basename(cwd) || label;
     } catch {
         /* file missing/corrupt — proceed with sid-derived defaults */
+    }
+    // v0.5.3 (F2): label precedence — bridge title (live), then transcript's
+    // first user prompt, then cwd basename, then UUID prefix. Each tier is
+    // best-effort; the first non-empty wins so a favorite NEVER shows an opaque
+    // UUID when a human-readable name is reachable.
+    try {
+        const titleMap = g.__ccsdSidToTitle as Record<string, string> | undefined;
+        const bridgeTitle = titleMap && typeof titleMap === "object" ? titleMap[sid] : "";
+        if (typeof bridgeTitle === "string" && bridgeTitle.trim()) {
+            const t = bridgeTitle.trim();
+            label = t.length > 64 ? t.slice(0, 63) + "…" : t;
+        }
+    } catch {
+        /* bridge unreadable — fall through to transcript */
+    }
+    if (label === sid.slice(0, 8)) {
+        const fromTranscript = transcript_path ? deriveLabelFromTranscript(transcript_path) : null;
+        if (fromTranscript) label = fromTranscript;
+        else if (cwd) label = path.basename(cwd) || label;
     }
     const now = Date.now();
     doc.sessions.push({
@@ -1308,7 +1443,6 @@ async function favOpen(node: FavNode): Promise<void> {
     }
     // sessionOpen — reveal the panel.
     const sid = node.session.sid;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const g = globalThis as Record<string, unknown>;
     const map = g.__ccsdSidToPanel as { reveal?: () => void; [k: string]: unknown } | undefined;
     const panel = map && (map[sid] as { reveal?: () => void } | undefined);

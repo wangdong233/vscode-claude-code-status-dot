@@ -135,7 +135,7 @@ companion 树节点点击 handler：`const p = globalThis.__ccsdSidToPanel?.[sid
 
 **CC panel 的 viewType 由 CC 扩展私有注册**，companion 不能用 `vscode.window.createWebviewPanel("claudeVSCodePanel", ...)` 冒充——VSCode 会拒（viewType 注册是扩展私有行为，未注册的扩展不能用别人的 viewType）。
 
-**裁决**：已闭会话**不实施重开**。Favorites 视图中已闭会话灰显（`$(circle-slash)` + 文案"(closed)"），右键菜单提供：
+**裁决**：已闭会话**不实施重开**。Favorites 视图中已闭会话灰显（`$(comment)` + 文案"(closed)"），右键菜单提供：
 
 - **"Copy `claude -r <sid>` to Clipboard"**（companion 调 `vscode.env.clipboard.writeText`）
 - **"Open Terminal with `claude -r <sid>`"**（companion 调 `vscode.window.createTerminal`，cwd 用 sid 的 `cwd` 字段，预填命令）——用户在集成终端继续，明确不是 webview panel。
@@ -459,6 +459,9 @@ companion 树节点点击 handler：`const p = globalThis.__ccsdSidToPanel?.[sid
     "menus": {
       "explorer/context": [
         { "command": "ccStatusDot.fav.toggleFile", "when": "!explorerResourceIsFolder", "group": "ccsd_favorites@1" },
+        // v0.5.3 (F6): also bind toggleTab here (gated resourceScheme != 'file')
+        // so CC webview tabs in the Open Editors view get the favorite command
+        // on right-click. toggleTab handler ignores resourceUri → safe reuse.
       ],
       "editor/title/context": [
         { "command": "ccStatusDot.fav.toggleTab", "when": "resourceScheme == webview", "group": "ccsd_favorites@1" },
@@ -518,7 +521,7 @@ companion 树节点点击 handler：`const p = globalThis.__ccsdSidToPanel?.[sid
 **TreeItem `contextValue` 命名约定**（viewItem 分型，抄 kdcro101 FAVORITE_FILE/GROUP 模式）：
 
 - `ccsdFavfavSessionOpen` — 已开会话（图标 `$(comment-discussion)` + 金星 `$(star-full)` overlay 通过 description 实现）
-- `ccsdFavfavSessionClosed` — 已闭会话（灰显，`$(circle-slash)`）
+- `ccsdFavfavSessionClosed` — 已闭会话（灰显，`$(comment)`）
 - `ccsdFavfavFile` — 文件（`$(file)`）
 
 ---

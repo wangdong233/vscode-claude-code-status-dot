@@ -1084,7 +1084,13 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
         // preserve selection across the icon/label refresh.
         item.id = "ccsdFav:session:" + s.sid;
         item.contextValue = isOpen ? "ccsdFavSessionOpen" : "ccsdFavSessionClosed";
-        item.iconPath = isOpen ? new vscode.ThemeIcon("comment-discussion") : new vscode.ThemeIcon("circle-slash");
+        // v0.5.3 (F3): closed-session icon — use "comment" (single quiet chat
+        // bubble, same codicon family as the open-session "comment-discussion")
+        // instead of "circle-slash" which renders as a prohibition/error glyph
+        // (🚫) and misleads users into thinking the session errored. "comment"
+        // reads as "inactive conversation" — visually coherent with the open
+        // variant. Long-stable codicon; no fallback risk.
+        item.iconPath = isOpen ? new vscode.ThemeIcon("comment-discussion") : new vscode.ThemeIcon("comment");
         item.description = isOpen
             ? `${String(s.state || "open").slice(0, 12)}`
             : `(closed)${s.state ? " " + String(s.state).slice(0, 8) : ""}`;
@@ -1312,6 +1318,10 @@ function favToggleTab(resourceUri?: unknown): void {
     // recovers the EXACT sid (vs the welded active-sid fallback). All wrapped
     // in try/catch — vscode.window.tabGroups is EH-only and must never crash
     // the toggle.
+    // v0.5.3 (F6): this handler is now ALSO bound to explorer/context (gated
+    // by resourceScheme != 'file') to cover CC webview tabs in the Open Editors
+    // view. The resourceUri from explorer/context is equally undecodable, so
+    // the same active-sid + title-bridge fallback applies unchanged.
     let sid =
         (typeof g.__ccsdActiveSid === "string" && g.__ccsdActiveSid) ||
         (typeof g.__ccsdLastActiveSid === "string" && g.__ccsdLastActiveSid) ||
@@ -1549,7 +1559,7 @@ async function favBrowse(): Promise<void> {
         for (const s of doc.sessions) {
             const isOpen = open.has(s.sid);
             items.push({
-                label: (isOpen ? "$(comment-discussion) " : "$(circle-slash) ") + s.label,
+                label: (isOpen ? "$(comment-discussion) " : "$(comment) ") + s.label,
                 description: s.sid.slice(0, 8),
                 detail: isOpen ? `state: ${s.state || "?"} — click to focus` : `closed — click for resume hint`,
                 node: { kind: isOpen ? "sessionOpen" : "sessionClosed", session: s },

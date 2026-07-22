@@ -27,7 +27,26 @@
 - **根因**：8 个 `package.nls.*` 文件的 7 个命令 `title` 都内嵌 `category` 前缀（如 "CC Favorites: Add/Remove File"），VSCode 命令面板按 `${category}: ${title}` 渲染 → "CC Favorites: CC Favorites: Add/Remove File"。56 条字符串（7 命令 × 8 语言）冗余。
 - **修**：从每个 title 移除 category 前缀（让 `category` 字段供给面板前缀），上下文菜单（仅显 title）现为 "Add/Remove File"（语境内清晰）。8 语言一致应用，全部文件 JSON 仍合法。
 
-### Changed — code-standards 卫生债清理（HIGH ×1 + MEDIUM ×4）
+### Fixed — F3 closed-session 收藏图标显禁止符 circle-slash（LOW→fixed，round 2 收尾）
+
+- **根因**：`companion/extension.ts` 两处（TreeItem `iconPath` closed 分支 + QuickPick `label`）为 closed session 用了 codicon `circle-slash`——合法 codicon，但渲染为「圆圈中一道斜杠」（🚫 禁止/错误符号），语义是 error/forbidden，用户误以为会话出错而非仅「已关闭」。grep 确认全仓仅此两处 `circle-slash`（`package.json` view 用 `star-full`，无关）。
+- **修**：两处 closed 分支的 `circle-slash` → `comment`（单个聊天气泡，与 open 的 `comment-discussion` 同族但更「安静」，表达 inactive 会话，视觉一致性优于跨族换图标）。`comment` 为长存 codicon，无 fallback 风险。不改 `package.json`（view 用 `star-full` 与此正交）。
+
+### Fixed — F6 Open Editors 视图右键缺收藏命令（PARTIAL→fixed，round 2 收尾）
+
+- **根因**：`companion/package.json` 现状——`ccStatusDot.fav.toggleTab` 仅声明在 `editor/title/context`（编辑器 tab 栏右键），`explorer/context`（Explorer 窗格 + Open Editors 视图的原生 list 右键）只有 `toggleFile`。Open Editors 视图（`workbench.explorer.openEditorsView`，见 `docs/OPEN-EDITORS-research.md:15`）的 item 右键经 `explorer/context` 路由，CC webview tab 在此视图右键拿不到收藏命令。
+- **修**：`explorer/context` 数组追加 `{ command: "ccStatusDot.fav.toggleTab", when: "resourceScheme != 'file' && !explorerResourceIsFolder && config.ccStatusDot.fav.includeInExplorerContextMenu", group: "ccsd_favorites@2" }`（与现有 toggleFile `@1` 并列）。三重门控：`resourceScheme != 'file'` 确保不污染普通文件树（文件 resourceScheme=='file' 被过滤，走 toggleFile）；`!explorerResourceIsFolder` 过滤文件夹；`config.ccStatusDot.fav.includeInExplorerContextMenu` 复用既有 config 门。`favToggleTab` handler 已 `void resourceUri` 走 `__ccsdActiveSid`/`__ccsdLastActiveSid` + `__ccsdSidToTitle` 桥解析 sid，对 CC webview tab 直接生效，handler 零改动。
+- **边界（平台限制，非插件可解）**：webview EditorInput 在 Open Editors 视图右键是否一定经 `explorer/context` 路由有 VSCode 版本变量（社区证据支持，但 `vscode-discussions #1122` 确认无 Open Editors 专属菜单 API）。若 PoC 不通，则属 VSCode 平台无解项——此时 tab 栏右键（`editor/title/context`）+ 命令面板两路仍可用。
+
+### Investigated — F5 用户反馈「连续失去焦点」（非插件锅, 证据驱动定性, 零代码改动）
+
+- **定性结论**：**非插件锅**（NO）。用户「连续失去焦点」是 CC 本体 webview React 流式重渲染所致（CC 按 jsonl block 刷，issue #27361 是实时性根本限；流式期间 React tree reconciliation 抢输入框焦点），与 cc-status-dot 无因果关系。插件无任何热路径抢焦点机制。
+- **证据 (a) iconPath 频率分析（排除 webview 重渲染抢焦点假设）**：patch.ts 每 panel 有 500ms tick（`TICK_MS=500`），每 tick 无条件命中 4 个 `p.iconPath=ccuri(...)` 赋值点之一。但 `ccuri(p)`（patch.ts:1904 `var __ccsdUriCache=Object.create(null);function ccuri(p){return __ccsdUriCache[p]||(__ccsdUriCache[p]=vs.Uri.file(p));}`）按路径串 memoize `vs.Uri.file(p)`——同路径→同一 Uri 对象引用→VSCode EH 侧 `WebviewPanel.iconPath` setter 按引用相等去重（`this.#iconPath !== value`，见 v0.2.9 Q5 Fix 1 注释 patch.ts:1888-1903）→稳态 IPC 被跳过（mock 基准 8 IPC/s → ~0 IPC/s，99.6% 降低）。v0.5.0 `-fav` 路径：`favOf(svgPath,sid)` 返回路径**串**（原样或 `-fav.svg`），下游 `ccuri()` 按完整 `-fav` 串独立缓存，dedup 等效。iconPath IPC 仅在真实状态跃迁 / interrupted 闪烁（error↔CC_DEFAULT 设计行为）/ CC-clobber 重申时触发——稳态不每 tick 刷。设 `WebviewPanel.iconPath` 只更新 tab 图标装饰（一次 IPC），不重渲 webview DOM、不抢输入焦点。
+- **证据 (b) steal-focus 候选逐一定性（全清）**：
+  - patch.ts IIFE：grep 实测 `.focus()`=0，`.reveal()`=0，`setContext`/`executeCommand`=0（热路径零抢焦点 API）。唯一 `.reveal()`（patch.ts:2104）在 `FAV_FOCUS_CMD` 命令 handler 内，仅由 companion `favOpen()` 用户点击收藏时按需触发，绝不在 tick/watchFile 热路径。IIFE 未挂任何 `onDidChangeViewState`/`onDidChangeVisibility`/webview 事件（grep 0）。
+  - companion `reloadWindow`×4（extension.ts:585/597/645/721）全按需（设置保存 handler / repatchWatcher 的用户点「Reload Window」）；`setContext`×1（extension.ts:1036）在 `refresh()` 内受签名变更门控（`if(sig===this.lastSig)return`，≤每真实跃迁一次，只设 when-clause 键不抢焦点）；`panel.reveal()`×1（extension.ts:1451）+ `focusSession`×1（:1476）在 `favOpen()` 命令（用户点击收藏）。
+  - 4 个定时器（500ms 面板 tick / 500ms SBI tick / 2s favoritesWatcher / 30s repatchWatcher）含零抢焦点调用。EH 侧 sync I/O（`readFileSync`/`computeLiveDelta`）跑在 Extension Host 进程，不在 renderer（CC 输入框所在进程），物理上无法抢/阻塞 CC 输入焦点。
+- **禁用复测法（3 步隔离，供用户终验）**：(1) 撤销 CC 扩展补丁——运行本包 `restore` 命令（或 `npx cc-status-dot@latest restore`）恢复 CC 原始 `extension.js`，然后 `Developer: Reload Window`，关掉 IIFE 的 500ms tick + iconPath/icon IPC；(2) 禁用 companion 扩展——Extensions 面板搜 `cc-status-dot-companion` → Disable，再 Reload Window，关掉 2s/30s watcher + Favorites tree；(3) 仅在此隔离状态下（cc-status-dot 完全不介入 CC 的 EH/extension.js）仍连续失焦 → 确定为 CC 本体 workflow React 流式重渲染，与本插件无关。旁证：失焦伴随「卡顿」且只在 CC 流式输出期间出现 = CC webview React 树按 jsonl block 刷新重渲染的特征。
 
 - **HIGH 死代码**：`patch.ts` `tokWinDetailLiteral`（声明后零引用；其 6 行注释谎称"eliminates 2 of the 5 copies"——detail-string 副本已在重构中删，仅剩未用的数组字面量）删除 + 注释改写。`tokWinKeysLiteral`（QuickPick 仍消费）保留。
 - **MEDIUM 陈旧注释**：`companion/extension.ts:745` 注释"IIFE does NOT read favorites.json in v0.4.0 (Q3 design: tab composite star is deferred to v0.5)"——v0.5.0 起 IIFE **已读** favorites.json（`readFavSet`/`favOf`），两条子句均假。改写反映 v0.5.0+ 现实。
@@ -47,7 +66,7 @@
 - **版本 5-way pin** bump：`package.json` 0.5.2→0.5.3；`patch.ts INJECT_VERSION` v0.5.2→v0.5.3；`companion/package.json` 0.5.2→0.5.3（lockstep）；`companion/extension.ts MIN_PATCHER_VERSION` 0.5.2→0.5.3 + `injectVersion()` fallback v0.5.2→v0.5.3（test-version-sync.mjs 强制 5-way 一致）。`HOOK_VERSION`（v0.2.1）不变；`cc-status.js` 内容变 → banner hash 重算。IIFE body bytes 变 → INJECT banner sha1 自动重算（v0.5.3:ea3684f1）。
 - **立场红线全守**：5 态点 / 4 灯 / permission / token SBI / Q1-Q7 / v0.2.8 src/v0.3.1 nonce/v0.4.0 收藏视图+导航 / v0.5.0 金线+右键 / v0.5.1 内联速率 / v0.5.2 decay 统一+内容门 全保留；IIFE 括号配平（`()=0 []=0 {}=0`，`node --check` 通过）。
 - **不动 finding（经核非误报）**：business-logic 称 `SOFT_IDIOM_RE` 遗漏 'waiting for you'/'over to you' —— **核为误报**：这两个短语在 `AWAIT_USER_PHRASES_RE`（line 345-346）内，馈入 `AWAIT_USER_RE` 后**始终无条件胜出**（line 418 `return true`），不受 SOFT report-closer body-gate 影响；SOFT_IDIOM_RE 是**另一份更小的次要列表**，仅在被长正文门 gate 时使用，这两个短语本就不该在 SOFT 内。不动。
-- **延期 LOW**：F5（聚合 2s 整树 fire(undefined) 刷新过粗——无抢焦点直接证据，perf/UX 调优待 telemetry）/ F6（OPEN EDITORS 视图右键收藏——R-INT-02 覆盖盲区，需 openEditors/context 菜单探索）/ F3（closed session circle-slash 图标语义——`comment-off` 更友好但 LOW）/ F4 多窗口 favorites.json read-modify-write lost-update（理论性，无 CAS；writeFavAtomic 已用 tmp+rename）/ 集成测试为源码正则 pinning 非 behavior 验证（R-CHG-03，独立 PR）。
+- **延期 LOW**：F4 多窗口 favorites.json read-modify-write lost-update（理论性，无 CAS；writeFavAtomic 已用 tmp+rename）/ 集成测试为源码正则 pinning 非 behavior 验证（R-CHG-03，独立 PR）。F3/F5/F6 见上方本批 round 2 收尾条目（F3/F6 已修，F5 证据驱动定性为非插件锅）。
 
 ## [0.5.2] - 2026-07-22
 

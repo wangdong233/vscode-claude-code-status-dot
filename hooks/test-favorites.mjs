@@ -572,6 +572,21 @@ check(
 );
 
 check(
+  'FAV.37 package.json contributes explorer/context menu for toggleTab (Open Editors coverage, v0.5.3 F6)',
+  companionPkg.contributes &&
+    companionPkg.contributes.menus &&
+    Array.isArray(companionPkg.contributes.menus['explorer/context']) &&
+    companionPkg.contributes.menus['explorer/context'].some(
+      (m) =>
+        m.command === 'ccStatusDot.fav.toggleTab' &&
+        typeof m.when === 'string' &&
+        m.when.includes("resourceScheme != 'file'") &&
+        m.when.includes('!explorerResourceIsFolder') &&
+        m.when.includes('config.ccStatusDot.fav.includeInExplorerContextMenu'),
+    ),
+);
+
+check(
   'FAV.29 package.json contributes view/item/context for open/remove/copyResume',
   companionPkg.contributes &&
     companionPkg.contributes.menus &&

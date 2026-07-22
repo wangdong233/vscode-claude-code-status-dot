@@ -85,6 +85,11 @@
           "command": "ccStatusDot.fav.toggleFile",
           "when": "!explorerResourceIsFolder && config.ccStatusDot.fav.includeInExplorerContextMenu",
           "group": "ccsd_favorites@1"
+        },
+        {
+          "command": "ccStatusDot.fav.toggleTab",
+          "when": "resourceScheme != 'file' && !explorerResourceIsFolder && config.ccStatusDot.fav.includeInExplorerContextMenu",
+          "group": "ccsd_favorites@2"
         }
       ],
       "editor/title/context": [

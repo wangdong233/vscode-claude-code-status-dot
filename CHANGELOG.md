@@ -2,6 +2,42 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.5.2] - 2026-07-22
+
+**证据驱动修 4 件用户反馈 + 审计 findings。** 5 路对抗调研定位根因：#1 蓝→黄闪（writer 内容启发式对调研报告尾问过触发）、#2 焦点被抢（**证据排除——非插件锅**）、#3 拷贝延迟（**证据排除——非插件锅**，但顺手移除死调试日志器）、#4 长黄→灰（per-tab/聚合 decay 阈值分歧 + `since` 键对活动 workflow 假阳性）。审计另修 F4（死 decay 三元），记录 F5/F6/F7 为 LOW 延期。
+
+### Fixed — Issue #4 长黄→灰 + decay 根治（HIGH，根因修非仅对齐数字）
+
+- **decay 阈值统一**：`SINCE_STALE_MS`（per-tab 15min）退役；per-tab §H tick 与聚合 §F tick 现在**共用单一 `SBI_RUNNING_STALE_MS`（30min）**。消除 15-30min 窗口"tab 已 ⚪ 灰、底部 🟡 仍黄"的不一致（用户实测痛点）。
+- **decay key 从 `since` 转移时间 → 加 transcript 活动门（根因修）**：新增 IIFE helper `__ccsdTranscriptFresh(j,sid,staleMs)`——降级前先 stat 会话 transcript（`.jsonl`）mtime，若在阈值内有写入（仍在流式输出 assistant token）则**不降级**。长 turn / 等 subagent 会冻结 `since`（无 mid-tool heartbeat）但 jsonl 持续增长，故活动 workflow 不再假阳性转灰。路径解析镜像 `computeLiveDelta`（`transcript_path` 优先，cwd-escape 兜底）。stuck-drift 案例（伪 Stop heartbeat 只刷状态文件 mtime 不刷 transcript）→ transcript 仍陈旧 → since-decay 仍正常触发（v0.2.6 修复完整保留）。statSync 仅在 since 已过阈的 decay-candidate 上触发，开销有界。
+- **残余缺口**（文档化）：单个工具执行 >30min 且**无流式输出**（长静默 Bash / `sleep 1800`）期间 jsonl 不增长 → 活动门无效 → 仍假阳性；下一个 PreToolUse/PostToolUse 刷新 `since` 后恢复。完全根治需 CC 提供 mid-tool heartbeat（未来）。
+- **F4 死代码移除**：§H SVG 选择的 running/done decay 三元（v0.2.6 round-2 把 decay 移到 pending check 之前后，这里的 idle 分支已成死代码）移除，单一 decay 站点消除 copy-paste-with-divergence。
+
+### Fixed — Issue #1 蓝点闪（writer 内容启发式对报告尾问过触发，MEDIUM）
+
+- **`hooks/cc-status.js` `lastMessageRequestsUserInput` fallback 收窄**：用户案例（长调研报告 + "要不要继续？"）走 fallback 路径（AWAIT_USER_PHRASES 习语表无 "要不要/是否继续"）。fallback 的 `USER_DIRECTED_RE` 拆为 **HARD**（你/您/you/确认/决定/选/should I/shall I/can you/could you/may I——高精度，无视正文长度始终胜）vs **SOFT** 续问词（继续/需要/想要/proceed/continue/need/want——低精度，当尾问行前的正文 > `REPORT_CLOSER_BODY_CHARS=120` 字符时判为报告结尾 → `false`）。bare `confirm`/`choose` 从 fallback 删除（其常见形式 "please confirm"/"could you confirm"/"you choose" 已被习语表覆盖）。习语表（`AWAIT_USER_RE`）**不动**——仅收紧用户案例实际命中的 fallback 路径。
+- **保留的设计意图**：§AA.3（"请确认是否继续"→true，HARD 习语）/§AA.7（"Should I proceed?"→true，HARD）/§AA.8（独立短问"需要继续吗？"→true，SOFT 短正文）。不可消除的残余：CC 在一个**真实**独立问句后立即自动续跑，仍会蓝→黄闪——那是 CC 事件序，内容过滤器无法 ex ante 判知。
+
+### Changed — Issue #3 死调试日志器移除（MEDIUM，F3）
+
+- **移除 `__ccsdDbg` + `_panel-debug.log` + `__ccsdRenderMap`**（`patch.ts` IIFE）：该日志器自承注释 "v0.2.9-debug...Remove after root cause confirmed + fix landed"，Q7 修复已于 v0.2.9.1 落地（移除 `__ccsdPending` yield）但日志器漏删，存活到 v0.5.1。取证 857KB `_panel-debug.log`（14716 ELSE + 11873 NOSID 事件）证伪其"罕见"注释——持续 6 次/秒无节流 `fs.statSync`+`fs.appendFileSync` 打在 EH 热路径（不在 §9 性能预算内）。纯删除（日志只写不读，grep 确认无运行时读者）。用户可删 `~/.claude/cc-tab-status/_panel-debug.log`。
+
+### Not Fixed — Issue #2 焦点被抢 & Issue #3 拷贝延迟（证据排除，非插件锅）
+
+- **#2 焦点**：穷举 grep 两个 500ms tick body + companion 2s 轮询的抢焦点 API（`executeCommand`/`.reveal(`/`.focus(`/`clipboard`/`showTextDocument`/`activeTextEditor`/`showQuickPick`/`showInputBox`）→ 热路径**零命中**；插件从不碰 `panelTab.webview`（CC 输入框住在该 iframe 内）→ 物理上无法聚焦 CC 输入框。仅用户点击触发的命令（favOpen/QuickPick）才调 reveal/showTextDocument。焦点抢最可能是 CC 自身 webview React 在流式 chunk 重渲染时 re-focus `<input>`。**不改代码**；确认法：禁用 companion 扩展复测，若焦点仍被抢则 100% 非本插件。
+- **#3 拷贝延迟**：EH（IIFE 所在）与 renderer（CC 输入框/剪贴板）进程隔离；per-500ms-tick 同步 I/O 实测 0.28ms（0.056% budget）不可能拥塞 renderer 文本输入。`ccuri` Uri 缓存健康（同路径复用同一 Uri → VSCode EH 侧 iconPath setter 引用相等去重 → 稳态 ~0 IPC/sec）；热路径不碰剪贴板。延迟更可能来自 CC webview 流式 token 渲染负载。**不改 tick**（降频/异步化不会缓解 renderer 侧延迟，反牺牲状态点响应性）。唯一真实 tick-perf 缺陷是 #3 的死日志器（已修）。
+
+### Tests
+
+- **`hooks/test-iife.mjs`**：IIFE.21c stamp v0.5.1→v0.5.2；IIFE.12b/12c 重写（__ccsdDbg 移除后的 no-sid/else 路径 regex）+ 新增 IIFE.12b2（__ccsdDbg/`_panel-debug.log`/`__ccsdRenderMap` 全 absent 的负面断言）；IIFE.12e per-tab running decay literal 改为 SBI_RUNNING_STALE_MS + `__ccsdTranscriptFresh` 门；IIFE.37b §F running decay regex 加 transcript 门；§18 decay 锁块整体重写——IIFE.46（SINCE_STALE_MS 全 IIFE absent）/IIFE.46a（`__ccsdTranscriptFresh` helper 定义）/IIFE.46b（SBI 引用 SBI_RUNNING_STALE_MS+INTERRUPTED_RETENTION_MS）/IIFE.46b2（per-tab 引用 SBI_RUNNING_STALE_MS+`__ccsdTranscriptFresh`，仍不引用 INTERRUPTED_RETENTION_MS）/IIFE.46c（F4 简化 running 分支 + 死三元 absent）/IIFE.46d（无 `var SINCE_STALE_MS=`）。
+- **`hooks/test-cc-status.js`**：新增 §AA.22a-g 7 例（长报告+"要不要继续？"→false；长报告+"请确认是否继续"→true HARD 习语；长报告+"是否继续？"→false SOFT；独立短问"需要继续吗？"→true；EN 长报告+"want to continue?"→false；中正文+"需要继续吗？"→true 阈下；EN 长报告+"Should I continue?"→true HARD）。`cc-status.js` banner hash 重算（9fa57b5c → 6027b21f，HOOK_VERSION v0.2.1 不变——hash 门检测 drift）。
+
+### Version
+
+- **版本 5-way pin** bump：`package.json` 0.5.1→0.5.2；`patch.ts INJECT_VERSION` v0.5.1→v0.5.2；`companion/package.json` 0.5.1→0.5.2（lockstep）；`companion/extension.ts MIN_PATCHER_VERSION` 0.5.1→0.5.2 + `injectVersion()` fallback v0.5.1→v0.5.2（test-version-sync.mjs 强制）。`HOOK_VERSION`（v0.2.1）不变；`cc-status.js` 内容变 → banner hash 重算。IIFE body bytes 变 → INJECT banner sha1 自动重算。
+- **立场红线全守**：5 态点 / 4 灯 / permission / token SBI 既有 / Q1-Q7 / v0.2.8 src/v0.3.1 nonce/v0.4.0 收藏视图+导航 / v0.5.0 金线+右键 / v0.5.1 内联速率 全保留；IIFE 括号配平。
+- **LOW findings 记录延期**：F5（per-tab interrupted decay 7d 对齐——abandoned interrupted+pending 蓝点，7d 边缘场景）；F6（`__ccsdOffCache`/rate maps onDidDispose prune——跨 panel 共享 sid 的 prune 风险，`__ccsdRenderMap` 泄漏已随 F3 闭合）；F7（`decayState`/`statCache` 共享 helper 架构重构——独立 PR）。
+
 ## [0.5.1] - 2026-07-22
 
 **三件修复 + i18n：token SBI 内联速率（图表移除）+ 右键 tab 修复 + companion package.nls 8 语言。** 实施前做了对抗调研（结论：速率本已内联——真正的诉求是"图表冗余 + 分隔符不一致"；右键 `resourceScheme == 'webview'` 是永久 false 因为 plain WebviewPanel 不填该 context key；package.nls 只覆盖 contributes 表面）。

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.1:9fa57b5c*/
+/*cc-status-dot-hook:v0.2.1:03913c83*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -381,12 +381,42 @@ function lastMessageRequestsUserInput(msg) {
   // The old /```[\s\S]*?```/ closed at the FIRST ``` (the inner fence's
   // opening), leaking the inner content into the prose pass. CommonMark
   // forbids same-length nested fences, so the backreference is correct.
+  // v0.5.2 (#1 blue→yellow flash, round-2): the report-closer body-length
+  // gate now covers the IDIOM path too, not only the fallback. A long
+  // research/progress report whose trailing line is a SOFT feedback-ask /
+  // continuer idiom ("want me to continue?" / "let me know." / "your
+  // thoughts?") must NOT light blue — those close reports just as well as
+  // they ask a blocking question. HARD decision/confirmation idioms (please
+  // confirm / could you confirm / you choose / your decision / … and ALL ZH
+  // idioms, which never match the EN-only SOFT regex below) still win
+  // regardless of body length. The threshold is shared with the fallback.
+  const REPORT_CLOSER_BODY_CHARS = 120;
+  // EN SOFT feedback-ask / continuer idioms — subject to the report-closer
+  // body gate when NO HARD idiom co-occurs. ZH idioms never match here so
+  // they always win (the report-closer FP class is EN-only in practice; ZH
+  // 决定/确认/选 markers are high-precision per v0.2.6 round-2/3).
+  const SOFT_IDIOM_RE =
+    /(want me to|let me know|your thoughts|your feedback|your input on|what do you think|what you think|would you like|your take|your move|wait for you to)/i;
+  // EN HARD decision / confirmation idioms — always a blocking wait. When a
+  // HARD idiom co-occurs with a SOFT one in the same message, HARD wins.
+  const HARD_IDIOM_RE =
+    /(please confirm|please approve|please authorize|could you confirm|can you confirm|you choose|your decision|your choice|your pick|your call|you pick|you decide)/i;
   const s = msg
     .replace(/^(?: {4}|\t).*$/gm, ' ')
     .replace(/(`{3,})[\s\S]*?\1/g, ' ')
     .replace(/(~{3,})[\s\S]*?\1/g, ' ')
     .replace(/`[^`\n]*`/g, ' ');
-  if (AWAIT_USER_RE.test(s)) return true;
+  if (AWAIT_USER_RE.test(s)) {
+    // SOFT-only (a soft idiom AND no hard idiom) → apply the same report-
+    // closer body-length gate as the fallback below. Anything else (hard
+    // idiom, ZH idiom, or a soft+hard co-occurrence) wins unconditionally.
+    if (SOFT_IDIOM_RE.test(s) && !HARD_IDIOM_RE.test(s)) {
+      const lastIdiom = s.trim().split(/\n+/).pop() || '';
+      const bodyBeforeIdiom = s.trim().length - lastIdiom.length;
+      if (bodyBeforeIdiom > REPORT_CLOSER_BODY_CHARS) return false;
+    }
+    return true;
+  }
   // Fallback: short standalone question to the user (ZH/EN). Catches
   // "需要继续吗？" / "Should I proceed?" not covered by an idiom above.
   // Length gate (<=60 chars) avoids rhetorical Qs inside long expositions.
@@ -397,11 +427,42 @@ function lastMessageRequestsUserInput(msg) {
   // "What did the refactor break?") don't false-trigger. A bare "?" ending
   // is no longer sufficient — the question must clearly direct the user
   // to act/answer.
+  //
+  // v0.5.2 (#1 blue→yellow flash): split the markers into HARD (user-
+  // directed / decision / confirmation — high precision, win REGARDLESS of
+  // preceding body length) vs SOFT continuers (bare 继续/需要/想要/proceed/
+  // continue/need/want — low precision: "要不要继续？" / "需要继续吗？" /
+  // "是否继续？" match a long RESEARCH-REPORT closer just as well as a
+  // genuine blocking question). When the prose BEFORE the trailing question
+  // line exceeds REPORT_CLOSER_BODY_CHARS AND only a SOFT continuer matched,
+  // treat the question as a report closer → false (no pending, no blue-dot
+  // flash on the tab). HARD markers (你/您/you/确认/决定/选/should I/shall I/
+  // can you/could you/may I) win regardless of body length, preserving
+  // §AA.3/§AA.7/§AA.8 + the standalone "需要继续吗？" short-body design intent.
+  // The idiom list (AWAIT_USER_RE above) is UNTOUCHED — this scopes ONLY the
+  // fallback path the user's "调研报告 + 要不要继续" case actually hits (the
+  // idiom list contains NO 要不要/是否继续 entry, so that case falls through
+  // to here). bare confirm/choose are dropped from the fallback because their
+  // common forms (please confirm / could you confirm / you choose) are already
+  // covered by AWAIT_USER_PHRASES — keeping them here would only re-expose the
+  // report-closer class the SOFT gate now suppresses.
   const last = s.trim().split(/\n+/).pop() || '';
   if (last.length > 60 || !/[？?]\s*$/.test(last)) return false;
-  const USER_DIRECTED_RE =
-    /(你|您|you|继续|确认|决定|选|需要|想要|proceed|confirm|choose|continue|need|want|should i|shall i|can you|could you|may i)/i;
-  return USER_DIRECTED_RE.test(last);
+  const HARD_DIRECTED_RE = /(你|您|you|确认|决定|选|should i|shall i|can you|could you|may i)/i;
+  if (HARD_DIRECTED_RE.test(last)) return true;
+  const SOFT_CONTINUE_RE = /(继续|需要|想要|proceed|continue|need|want)/i;
+  if (!SOFT_CONTINUE_RE.test(last)) return false;
+  // Report-closer exclusion: a long body preceding the trailing question is
+  // strong evidence the question is a polite "要不要继续?" appended to a
+  // research/progress report, not a blocking wait. bodyBefore is the byte
+  // length of all prose before the last newline-separated line (includes the
+  // newlines themselves — slightly over-estimates, which is conservative in
+  // the right direction: more likely to classify as report → false).
+  // REPORT_CLOSER_BODY_CHARS is hoisted to the top of this function (shared
+  // with the idiom-path gate above).
+  const bodyBefore = s.trim().length - last.length;
+  if (bodyBefore > REPORT_CLOSER_BODY_CHARS) return false;
+  return true;
 }
 
 /**

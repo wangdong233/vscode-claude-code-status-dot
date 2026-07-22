@@ -115,9 +115,48 @@ function check(name, cond, detail) {
 
 // --- Replica of the IIFE aggregation body (patch.ts buildIIFE) ---------------
 // Reads every <sid>.json under <home>/.claude/cc-tab-status and applies the
-// SAME decay/bucket rules the IIFE does. `now` is injectable so time-based
-// decay tests are deterministic (no real-time waiting). Returns the raw
-// uncapped counts; callers apply cap() + sbiBlockText() to get the per-SBI texts.
+// SAME decay/bucket rules the IIFE does — INCLUDING the v0.5.2 (#4)
+// __ccsdTranscriptFresh activity gate on the running→idle decay (a session
+// whose transcript (.jsonl) grew within SBI_RUNNING_STALE_MS is actively
+// streaming → not false-decayed; mirrored by transcriptFresh() below). `now`
+// is injectable so time-based decay tests are deterministic (no real-time
+// waiting) — NOTE transcriptFresh() uses real Date.now() for the jsonl mtime
+// comparison, matching the IIFE which does NOT take a `now` param; plant a
+// real-fresh .jsonl to exercise the gate. Returns the raw uncapped counts;
+// callers apply cap() + sbiBlockText() to get the per-SBI texts.
+
+// Mirror of the IIFE's __ccsdTranscriptFresh(j,sid,staleMs) (patch.ts buildIIFE
+// §F running-decay branch). A running session whose transcript (.jsonl) was
+// modified within staleMs is ACTIVELY streaming (long turn / subagent wait
+// freezes 'since' but the jsonl keeps growing) → do NOT false-decay to idle.
+// Resolves the jsonl path the SAME way computeLiveDelta does: prefer
+// j.transcript_path (authoritative, persisted by the hook); else the
+// cwd→projects escape fallback (/[^a-zA-Z0-9._-]/g → '-'). Uses `home` in
+// place of os.homedir() (the replica's home IS the IIFE's os.homedir() in
+// tests). Uses real Date.now() — NOT the injectable `now` — because the IIFE
+// source does not parameterize time here either; a test that time-travels
+// `now` to age `since` must plant a real-fresh .jsonl (mtime ≈ Date.now()) to
+// exercise the "fresh transcript blocks decay" path. Any miss (no
+// transcript_path, no cwd, jsonl absent, statSync throw) → false (safe decay).
+function transcriptFresh(j, sid, staleMs, home) {
+  try {
+    if (!j || !sid) return false;
+    let jsonlPath = null;
+    if (typeof j.transcript_path === 'string' && j.transcript_path) {
+      jsonlPath = j.transcript_path;
+    } else if (typeof j.cwd === 'string' && j.cwd) {
+      const escaped = j.cwd.replace(/[^a-zA-Z0-9._-]/g, '-');
+      jsonlPath = path.join(home, '.claude', 'projects', escaped, sid + '.jsonl');
+    }
+    if (!jsonlPath) return false;
+    const stt = fs.statSync(jsonlPath);
+    if (!stt || !stt.isFile()) return false;
+    return Date.now() - stt.mtimeMs < staleMs;
+  } catch (_) {
+    return false;
+  }
+}
+
 function aggregate(home, now = Date.now(), pendingSet = null) {
   const DIR = path.join(home, '.claude', 'cc-tab-status');
   const ag = { running: 0, done: 0, interrupted: 0, idle: 0, pending: 0 };
@@ -159,7 +198,16 @@ function aggregate(home, now = Date.now(), pendingSet = null) {
       // elapsed. since-decay fires correctly because since is preserved
       // across the same path. Mirrors done>5min one branch up.
       else if (st === 'running') {
-        if (since && now - since > SBI_RUNNING_STALE_MS) st = 'idle';
+        // v0.5.2 (#4): before downgrading stale-running to idle, gate on
+        // transcriptFresh — a session whose transcript (.jsonl) grew within
+        // SBI_RUNNING_STALE_MS is ACTIVELY streaming (long turn / subagent
+        // wait freezes 'since' but the jsonl keeps growing) → do NOT decay.
+        // Mirrors patch.ts §F __ccsdTranscriptFresh exactly. transcriptFresh
+        // uses real Date.now() (see its comment); `now` only governs the
+        // since-threshold comparison.
+        if (since && now - since > SBI_RUNNING_STALE_MS) {
+          if (!transcriptFresh(j, f.slice(0, -5), SBI_RUNNING_STALE_MS, home)) st = 'idle';
+        }
       }
       // v0.1.13/v0.1.14 interrupted>24h → idle, keyed on SINCE (the terminal
       // timestamp). v0.2.4 follow-up (round-2 data-logic fix): previously
@@ -465,6 +513,73 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
     '§1.6b  stale-running+pending → idle; pending NOT counted (the false-stick fix)',
     ag.idle === 1 && ag.running === 0 && ag.pending === 0,
     'ag.running=' + ag.running + ' ag.pending=' + ag.pending + ' ag.idle=' + ag.idle,
+  );
+}
+
+// §1.6c  v0.5.2 (#4): stale since (>30min) BUT fresh transcript (.jsonl grown
+// within the threshold) → STAYS running. This is the root-cause fix for the
+// false-decay of genuinely-active long workflows: a long streaming turn / a
+// parent session blocked waiting on a subagent FREEZES 'since' (no *→running
+// re-transition) while the .jsonl keeps growing — the transcript mtime is the
+// real activity signal. §1.6b above has NO .jsonl planted so transcriptFresh
+// returns false → decay; here we plant a fresh .jsonl (mtime ≈ now) so the
+// gate returns true → no decay. This is the FIRST behavior test to cover the
+// transcriptFresh gate (prior to v0.5.2 round-2 the replica had no such gate,
+// so this core guarantee had ZERO behavior coverage — only structural regexes
+// in test-iife.mjs guarded the IIFE source). Two path variants are exercised:
+// (c1) transcript_path absolute, (c2) cwd→projects escape fallback.
+{
+  // §1.6c1: transcript_path variant — plant an explicit absolute .jsonl path.
+  const home = newTempHome();
+  const sid = 'long-stream-c1';
+  const jsonlAbs = path.join(home, '.claude', 'projects', sid, sid + '.jsonl');
+  fs.mkdirSync(path.dirname(jsonlAbs), { recursive: true });
+  fs.writeFileSync(jsonlAbs, '{"type":"assistant","message":{"content":"streaming..."}}\n');
+  writeStatus(home, sid, {
+    state: 'running',
+    since: Date.now() - 31 * 60 * 1000, // OLD since (past the 30min threshold)
+    transcript_path: jsonlAbs, // authoritative jsonl path (fresh mtime)
+    activeSubagents: 0,
+    pending: false,
+  });
+  const ag = aggregate(home, Date.now() + 31 * 60 * 1000); // age `since` past threshold
+  check(
+    '§1.6c1  stale-since + FRESH transcript_path → STAYS running (transcriptFresh gate, v0.5.2 #4)',
+    ag.running === 1 && ag.idle === 0,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // §1.6c2: cwd→projects escape variant — NO transcript_path; the gate falls
+  // back to <home>/.claude/projects/<escaped-cwd>/<sid>.jsonl. Plant it fresh.
+  const home = newTempHome();
+  const sid = 'long-stream-c2';
+  const cwd = '/Users/test/work';
+  const escaped = cwd.replace(/[^a-zA-Z0-9._-]/g, '-'); // '-Users-test-work'
+  const jsonlFallback = path.join(home, '.claude', 'projects', escaped, sid + '.jsonl');
+  fs.mkdirSync(path.dirname(jsonlFallback), { recursive: true });
+  fs.writeFileSync(jsonlFallback, '{"type":"assistant","message":{"content":"..."}}\n');
+  writeStatus(home, sid, {
+    state: 'running',
+    since: Date.now() - 31 * 60 * 1000, // OLD since
+    cwd: cwd, // triggers the escape fallback inside transcriptFresh
+    activeSubagents: 0,
+    pending: false,
+  });
+  const ag = aggregate(home, Date.now() + 31 * 60 * 1000);
+  check(
+    '§1.6c2  stale-since + FRESH cwd-fallback transcript → STAYS running (escape path)',
+    ag.running === 1 && ag.idle === 0,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+  // §1.6c3: SAME setup but REMOVE the fresh transcript → transcriptFresh
+  // returns false → decay to idle (the gate is the ONLY thing preventing it).
+  fs.unlinkSync(jsonlFallback);
+  const ag2 = aggregate(home, Date.now() + 31 * 60 * 1000);
+  check(
+    '§1.6c3  stale-since + NO transcript → decays to idle (gate returns false)',
+    ag2.running === 0 && ag2.idle === 1,
+    'ag2.running=' + ag2.running + ' ag2.idle=' + ag2.idle,
   );
 }
 

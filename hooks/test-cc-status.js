@@ -3561,6 +3561,106 @@ checkPending(
   'interrupted',
 );
 
+// --- §AA.22 v0.5.2 (#1 blue→yellow flash): report-closer exclusion -----------
+// The user's flash: a long RESEARCH/PROGRESS report whose trailing line is a
+// soft-continuer question ("要不要继续？" / "是否继续？" / "want to continue?")
+// was treated as a blocking wait → pending=true → tab flashed blue, then CC
+// auto-continued (PreToolUse) → cleared pending → yellow. The fix splits the
+// fallback markers into HARD (你/您/you/确认/决定/选/should I/shall I/can you/
+// could you/may I — win regardless of body length) vs SOFT continuers (继续/
+// 需要/想要/proceed/continue/need/want — suppressed when the prose BEFORE the
+// trailing question line exceeds REPORT_CLOSER_BODY_CHARS=120). These pin BOTH
+// the suppression (report closer → false) and the HARD/short-body survivors.
+// The idiom list (AWAIT_USER_RE) is untouched — only the fallback path the
+// user's case hits (the list contains NO 要不要/是否继续 entry).
+const LONG_REPORT_ZH =
+  '调研完成。本轮审查覆盖三个模块的代码结构、依赖关系与近期变更历史。模块 A 耦合度最高，存在 12 处直接依赖，重构风险大；模块 B 通过接口隔离，中等风险；模块 C 独立性最好，建议优先从这里动手。整体改动预计 3-5 个 PR，每个独立可回滚，可在下周开始。';
+// §AA.22a: the user's EXACT case — long report + "要不要继续？" → false
+checkPending(
+  '§AA.22a Stop long ZH report + "要不要继续？" -> pending=false (v0.5.2 report-closer SOFT-continuer suppression)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_ZH + '\n要不要继续？' }),
+  false,
+);
+// §AA.22b: HARD idiom "请确认" wins via AWAIT_USER_RE regardless of body length
+checkPending(
+  '§AA.22b Stop long ZH report + "请确认是否继续" -> pending=true (HARD idiom 请确认 wins over report length)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_ZH + '\n请确认是否继续？' }),
+  true,
+);
+// §AA.22c: SOFT continuer 继续 on a long report → false
+checkPending(
+  '§AA.22c Stop long ZH report + "是否继续？" -> pending=false (SOFT 继续 suppressed by long body)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_ZH + '\n是否继续？' }),
+  false,
+);
+// §AA.22d: standalone short soft-continuer question (body 0) → true (design intent)
+checkPending(
+  '§AA.22d Stop standalone "需要继续吗？" -> pending=true (SOFT 需要, short body — design intent preserved)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: '需要继续吗？' }),
+  true,
+);
+// §AA.22e: EN long report + "want to continue?" → false (SOFT want/continue; no
+// idiom match — "want me to" is the idiom, not bare "want")
+const LONG_REPORT_EN =
+  'Research complete. I audited the three modules for coupling, dependency direction, and recent change history. Module A is the most coupled with 12 direct edges and high refactor risk; Module B is interface-isolated (medium risk); Module C is the most independent and the recommended starting point. The work splits into 3-5 independent, individually-revertible PRs.';
+checkPending(
+  '§AA.22e Stop long EN report + "want to continue?" -> pending=false (SOFT want/continue suppressed)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nwant to continue?' }),
+  false,
+);
+// §AA.22f: medium body (<120 chars) + soft continuer → true (below threshold)
+checkPending(
+  '§AA.22f Stop medium body + "需要继续吗？" -> pending=true (body < REPORT_CLOSER_BODY_CHARS threshold)',
+  fire(newTempHome(), 'Stop', {
+    last_assistant_message: '我已修复登录页的两个 bug，并补了单元测试，全绿。\n需要继续吗？',
+  }),
+  true,
+);
+// §AA.22g: long report + "Should I continue?" → true (HARD "should i" wins)
+checkPending(
+  '§AA.22g Stop long EN report + "Should I continue?" -> pending=true (HARD should-i wins over report length)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nShould I continue?' }),
+  true,
+);
+// §AA.22h-n: v0.5.2 round-2 — the report-closer gate now covers the IDIOM
+// path, not only the fallback. The v0.5.2 round-1 fix (§AA.22a-g) gated ONLY
+// the fallback SOFT continuer (bare want/continue/need) because the user's ZH
+// case ("要不要继续?") has NO idiom-list entry and falls through to the
+// fallback. But the EN equivalents of that exact case hit the IDIOM list
+// instead: "want me to continue?" matches the 'want me to' idiom (L314) and
+// "let me know." matches 'let me know' (L304) — both returned true
+// UNCONDITIONALLY at the old `if (AWAIT_USER_RE.test(s)) return true;` line,
+// flashing blue on a long report. These pin the closed gap on the idiom path.
+// §AA.22h: long EN report + "want me to continue?" → false (SOFT idiom 'want
+// me to' gated by long body — the precise EN equivalent of the user's ZH case)
+checkPending(
+  '§AA.22h Stop long EN report + "want me to continue?" -> pending=false (SOFT idiom want-me-to gated by long body)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nwant me to continue?' }),
+  false,
+);
+// §AA.22i: long EN report + "let me know." → false (SOFT idiom 'let me know'
+// gated by long body; no trailing '?' required — the idiom itself is the signal)
+checkPending(
+  '§AA.22i Stop long EN report + "let me know." -> pending=false (SOFT idiom let-me-know gated by long body)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nlet me know.' }),
+  false,
+);
+// §AA.22j: standalone short "want me to continue?" → true (SOFT idiom, short
+// body — design intent preserved, mirrors §AA.22d for the fallback path)
+checkPending(
+  '§AA.22j Stop standalone "want me to continue?" -> pending=true (SOFT idiom, short body — design intent preserved)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: 'want me to continue?' }),
+  true,
+);
+// §AA.22k: long report + SOFT and HARD idioms co-occurring → true (HARD
+// 'please confirm' wins over the SOFT 'let me know' — guards the both-present
+// case so a genuine blocking confirmation never gets suppressed)
+checkPending(
+  '§AA.22k Stop long EN report + "Please confirm. Let me know." -> pending=true (HARD please-confirm wins over co-occurring SOFT)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nPlease confirm. Let me know.' }),
+  true,
+);
+
 // --- §AB v0.2.6 round-2: keyword-accuracy regression locks (HIGH/MEDIUM) ---
 // The v0.2.6 round-1 list had three HIGH-severity ZH false-positive vectors
 // and three MEDIUM EN/fallback vectors. Round-2 tightened the list (removed

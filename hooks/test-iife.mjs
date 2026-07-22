@@ -211,11 +211,22 @@ check(
 );
 check(
   'IIFE.12b no-sid path renders idle fallback (Q7, never native orange)',
-  /if\(!sid\)\{__ccsdDbg[^}]*claude-logo-idle\.svg/.test(iife),
+  /if\(!sid\)\{try\{p\.iconPath=ccuri[^}]*claude-logo-idle\.svg/.test(iife),
 );
 check(
   'IIFE.12c else read-fail path renders idle fallback (Q7)',
-  /else\{__ccsdDbg\("ELSE[^}]*claude-logo-idle\.svg/.test(iife),
+  /else\{try\{p\.iconPath=ccuri[^}]*claude-logo-idle\.svg/.test(iife),
+);
+// v0.5.2 (#3/F3): the v0.2.9-debug __ccsdDbg anomaly logger + _panel-debug.log
+// + __ccsdRenderMap were removed (their own comment said to remove after the
+// Q7 fix landed — it landed in v0.2.9.1 but the logger survived through v0.5.1,
+// firing unthrottled fs.statSync+appendFileSync ~6×/sec). Assert the symbols
+// are GONE from the baked IIFE so a regression that re-adds the dead logger
+// surfaces here.
+check(
+  'IIFE.12b2 v0.2.9-debug __ccsdDbg logger REMOVED from IIFE (F3)',
+  !/__ccsdDbg(?:Log)?\b/.test(iife) && !/_panel-debug\.log/.test(iife) && !/__ccsdRenderMap/.test(iife),
+  'a debug logger / render-map reference survived — these were removed in v0.5.2',
 );
 // v0.2.6 blue-via-content: per-panel reader pending branch. The IIFE's
 // per-panel tick reads j.pending from the status file and renders our blue
@@ -251,15 +262,16 @@ check(
 }
 {
   // v0.2.6 round-2 (HIGH reader-logic fix): pin decay-BEFORE-pending-check
-  // ordering. Round-1 placed the done>5min / running-stale-15min decay
-  // INSIDE the SVG selection (after the pend check) — leaving `st` RAW at
-  // the pend check, so a done+pending session stuck blue forever. This block
-  // asserts:
+  // ordering. Round-1 placed the done>5min / running-stale decay INSIDE the
+  // SVG selection (after the pend check) — leaving `st` RAW at the pend check,
+  // so a done+pending session stuck blue forever. This block asserts:
   //   (a) the per-tab tick now contains a decay chain `st="idle"`
   //       assignment BEFORE the pend check;
-  //   (b) the decay chain uses per-tab constants (DONE_TO_IDLE_MS for done,
-  //       SINCE_STALE_MS for running) — NOT SBI_RUNNING_STALE_MS nor
-  //       INTERRUPTED_RETENTION_MS (preserves IIFE.46b divergence lock);
+  //   (b) v0.5.2 (#4): the decay chain now shares the §F threshold
+  //       (DONE_TO_IDLE_MS for done, SBI_RUNNING_STALE_MS for running) +
+  //       gates the running→idle downgrade on __ccsdTranscriptFresh — the
+  //       prior 15min SINCE_STALE_MS per-tab constant is retired so the tab
+  //       and the bottom 🟡 can never disagree in a 15-30min window;
   //   (c) `var now=Date.now()` is hoisted BEFORE the decay chain (the chain
   //       reads `now` so it must be defined first);
   //   (d) the decay chain sits BETWEEN the __ccsdPending yield and the pend
@@ -269,7 +281,7 @@ check(
   const pendIdx = iife.indexOf('pend && st!=="idle"');
   const perTabDecayDoneIdx = iife.indexOf('if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS){st="idle";}');
   const perTabDecayRunningIdx = iife.indexOf(
-    'else if(st==="running"&&since&&(now-since)>SINCE_STALE_MS&&since<now){st="idle";}',
+    'else if(st==="running"&&since&&(now-since)>SBI_RUNNING_STALE_MS&&since<now){if(!__ccsdTranscriptFresh(j,sid,SBI_RUNNING_STALE_MS)){st="idle";}}',
   );
   const perTabNowIdx = iife.indexOf('var now=Date.now();');
   check(
@@ -278,7 +290,7 @@ check(
     'decayDone=' + perTabDecayDoneIdx + ' pend=' + pendIdx,
   );
   check(
-    'IIFE.12e per-tab tick applies running-stale decay BEFORE pending check (HIGH round-2: running>15min→idle)',
+    'IIFE.12e per-tab tick applies running-stale decay BEFORE pending check (v0.5.2: running>SBI_RUNNING_STALE_MS + transcript-fresh gate →idle)',
     perTabDecayRunningIdx >= 0 && pendIdx >= 0 && perTabDecayRunningIdx < pendIdx,
     'decayRunning=' + perTabDecayRunningIdx + ' pend=' + pendIdx,
   );
@@ -358,7 +370,7 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-check('IIFE.21c banner carries v0.5.1 stamp', /\/\*cc-status-dot-injected:v0\.5\.1:/.test(iife));
+check('IIFE.21c banner carries v0.5.2 stamp', /\/\*cc-status-dot-injected:v0\.5\.2:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -917,9 +929,15 @@ check(
 // stuck-yellow-at-scale bug) would surface. The cache-probe __mt is still
 // computed above (used for mtime+size content-change short-circuit) but is
 // no longer the decay signal.
+// v0.5.2 (#4): the running→idle downgrade is now GATED on
+// __ccsdTranscriptFresh(j, files[i].slice(0,-5), …) — a session whose
+// transcript (.jsonl) grew within SBI_RUNNING_STALE_MS is actively streaming
+// and must NOT decay (long turn / subagent-wait freezes `since` but the jsonl
+// keeps growing). The since-based stuck-drift catch is preserved (drifted Stop
+// heartbeats refresh the state-file mtime but NOT the transcript).
 check(
-  'IIFE.37b SBI stale-running heuristic (since > SBI_RUNNING_STALE_MS→idle, v0.2.6)',
-  /else if\s*\(\s*st\s*===\s*"running"\s*\)\s*\{\s*if\s*\(\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*SBI_RUNNING_STALE_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}\s*\}/.test(
+  'IIFE.37b SBI stale-running heuristic (since > SBI_RUNNING_STALE_MS, then __ccsdTranscriptFresh gate →idle, v0.5.2)',
+  /else if\s*\(\s*st\s*===\s*"running"\s*\)\s*\{\s*if\s*\(\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*SBI_RUNNING_STALE_MS\s*\)\s*\{\s*if\s*\(\s*!__ccsdTranscriptFresh\s*\(\s*j\s*,\s*files\s*\[\s*i\s*\]\s*\.\s*slice\s*\(\s*0\s*,\s*-5\s*\)\s*,\s*SBI_RUNNING_STALE_MS\s*\)\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}\s*\}\s*\}/.test(
     iife,
   ),
 );
@@ -1169,66 +1187,78 @@ check(
 // unchanged in semantics, only the wrapping helper changed).
 check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*ccuri/.test(iife));
 
-// --- 18. Decay-profile divergence lock (architecture-review round-2) ----------
-// STATES.md §7.4 documents an INTENTIONAL asymmetry between SBI vs per-tab
-// decay. v0.2.6 round-1 partially COLLAPSED this asymmetry: the per-tab tick
-// now applies a running decay (SINCE_STALE_MS 15min since→idle) where before
-// it had none, fixing the stuck-yellow bug (CC Stop inflight drift +
-// preserveSince → tab永黄). But the asymmetry is PRESERVED in NAMING:
-//   - SBI tick body references SBI_RUNNING_STALE_MS (30min, since) AND
-//     INTERRUPTED_RETENTION_MS (24h, since) — aggregation decay.
-//   - per-tab tick body references SINCE_STALE_MS (15min, since) for running
-//     decay only; does NOT reference SBI_RUNNING_STALE_MS nor
-//     INTERRUPTED_RETENTION_MS. The distinct name keeps the two decay
-//     surfaces grep-separable and preserves the v0.2.4 invariant below.
-// A future edit that collapsed per-tab running decay to use
-// SBI_RUNNING_STALE_MS (same threshold as SBI) would fail IIFE.46b; a refactor
-// that dropped running/interrupted decay from the SBI tick would fail IIFE.46.
+// --- 18. Decay-profile UNIFICATION lock (v0.5.2 #4) ---------------------------
+// HISTORY: through v0.5.1 the per-tab tick and the §F aggregate tick maintained
+// PARALLEL copies of the running-decay logic with subtly different thresholds —
+// per-tab SINCE_STALE_MS=15min vs aggregate SBI_RUNNING_STALE_MS=30min. The
+// architecture-review round-2 (IIFE.46b) deliberately LOCKED that divergence.
+// v0.5.2 (#4) COLLAPSES it: both surfaces now share ONE threshold
+// (SBI_RUNNING_STALE_MS, 30min) AND ONE activity predicate
+// (__ccsdTranscriptFresh — transcript .jsonl mtime), so the tab and the bottom
+// 🟡 can never disagree in a 15-30min window, and a genuinely-active long
+// workflow no longer false-decays when `since` (the *→running transition time)
+// is frozen mid-turn. The retired SINCE_STALE_MS constant and the dead
+// SVG-selection decay ternaries (F4) are asserted ABSENT below so the
+// copy-paste-with-divergence cannot silently return.
 {
-  // The SBI tick body is setInterval(... 500) inside the __ccsdSbiTimer
-  // branch; the per-tab tick body is `var timer=setInterval(... 500)` further
-  // down. Split the IIFE at the per-tab tick's setInterval to isolate the
-  // two bodies.
+  // SINCE_STALE_MS must be GONE from the entire IIFE (constant + every
+  // reference). A regression that re-introduced the 15min per-tab split would
+  // re-open the 15-30min tab-gray/bottom-yellow window the user reported.
+  check(
+    'IIFE.46 v0.5.2: SINCE_STALE_MS fully RETIRED from the IIFE (no constant, no reference)',
+    !/SINCE_STALE_MS/.test(iife),
+    'SINCE_STALE_MS survived — the per-tab/SBI decay divergence must stay collapsed',
+  );
+  // __ccsdTranscriptFresh helper must be defined once and consumed by BOTH ticks.
+  check(
+    'IIFE.46a __ccsdTranscriptFresh activity-gate helper defined in IIFE (v0.5.2 #4 root-cause fix)',
+    /function\s+__ccsdTranscriptFresh\s*\(\s*j\s*,\s*sid\s*,\s*staleMs\s*\)/.test(iife),
+    'the transcript-mtime activity gate is the root-cause fix for stale-`since` false-decay',
+  );
+  // Split the IIFE at the per-tab tick to isolate the two decay sites.
   const perTabAnchor = 'var timer=setInterval(function(){';
   const splitIdx = iife.indexOf(perTabAnchor);
   const sbiPart = splitIdx >= 0 ? iife.slice(0, splitIdx) : iife;
   const perTabPart = splitIdx >= 0 ? iife.slice(splitIdx) : '';
   check(
-    'IIFE.46 SBI tick body references both SBI_RUNNING_STALE_MS and INTERRUPTED_RETENTION_MS',
+    'IIFE.46b SBI tick body references SBI_RUNNING_STALE_MS + INTERRUPTED_RETENTION_MS (aggregate decay)',
     /SBI_RUNNING_STALE_MS/.test(sbiPart) && /INTERRUPTED_RETENTION_MS/.test(sbiPart),
-    'SBI tick should apply running-stale + interrupted-24h decay',
+    'SBI tick should apply running-stale + interrupted-retention decay',
   );
+  // v0.5.2 INVERTS the old IIFE.46b: per-tab now DOES reference
+  // SBI_RUNNING_STALE_MS (unified threshold). It still does NOT reference
+  // INTERRUPTED_RETENTION_MS — interrupted per-tab decay is the only remaining
+  // divergence (F5, deferred as LOW; abandoned interrupted+pending is a 7d
+  // edge case, not the user's running-decay report).
   check(
-    'IIFE.46b per-tab tick body references NEITHER SBI_RUNNING_STALE_MS nor INTERRUPTED_RETENTION_MS (intentional divergence — per-tab running decay uses the distinct SINCE_STALE_MS constant)',
-    !/SBI_RUNNING_STALE_MS/.test(perTabPart) && !/INTERRUPTED_RETENTION_MS/.test(perTabPart),
-    'per-tab tick should NOT reference SBI_RUNNING_STALE_MS nor INTERRUPTED_RETENTION_MS (uses SINCE_STALE_MS instead)',
+    'IIFE.46b2 v0.5.2: per-tab tick references SBI_RUNNING_STALE_MS (unified with §F) + __ccsdTranscriptFresh, still NOT INTERRUPTED_RETENTION_MS',
+    /SBI_RUNNING_STALE_MS/.test(perTabPart) &&
+      /__ccsdTranscriptFresh/.test(perTabPart) &&
+      !/INTERRUPTED_RETENTION_MS/.test(perTabPart),
+    'per-tab running decay must share the §F threshold + transcript gate; interrupted per-tab decay stays deferred',
   );
-  // v0.2.6 round-1: lock the per-tab running decay branch — the visible
-  // symptom of the stuck-yellow bug was this branch missing entirely. The
-  // regex asserts: (1) per-tab tick references SINCE_STALE_MS; (2) the
-  // running branch renders idle.svg when now-since>SINCE_STALE_MS (since
-  // guard + future-timestamp guard `since<now`); (3) otherwise running.svg.
-  // A regression that dropped this decay (back to unconditional
-  // running.svg) would fail this assertion — surfacing the stuck-yellow bug.
+  // v0.5.2 (F4): the per-tab SVG-selection running/done decay ternaries are
+  // REMOVED as dead code (decay now happens once, BEFORE the pending check).
+  // Assert the simplified unconditional branches + that NO SINCE_STALE_MS
+  // ternary survived in the SVG switch.
   check(
-    'IIFE.46c per-tab running decay uses SINCE_STALE_MS (since-based, v0.2.6 stuck-yellow fix)',
-    /SINCE_STALE_MS/.test(perTabPart) &&
-      /else if\s*\(\s*st\s*===\s*"running"\s*\)\s*\{\s*svg\s*=\s*\(\s*since\s*&&\s*\(\s*now\s*-\s*since\s*>\s*SINCE_STALE_MS\s*\)\s*&&\s*since\s*<\s*now\s*\)\s*\?\s*pth\.join\s*\(\s*RES\s*,\s*"claude-logo-idle\.svg"\s*\)\s*:\s*pth\.join\s*\(\s*RES\s*,\s*"claude-logo-running\.svg"\s*\)\s*\}/.test(
-        perTabPart,
-      ),
-    'per-tab running branch should decay to idle.svg when since>SINCE_STALE_MS',
+    'IIFE.46c v0.5.2 (F4): per-tab SVG running/done branches simplified (dead decay ternaries removed); decay consolidated above the pending check',
+    /else if\s*\(\s*st\s*===\s*"running"\s*\)\s*\{\s*svg\s*=\s*favOf\s*\(\s*pth\.join\s*\(\s*RES\s*,\s*"claude-logo-running\.svg"\s*\)\s*,\s*sid\s*\)\s*\}/.test(
+      perTabPart,
+    ) && !/svg\s*=\s*\(\s*since\s*&&\s*\(\s*now\s*-\s*since\s*>\s*SINCE_STALE_MS/.test(perTabPart),
+    'per-tab running branch should be a plain favOf(running.svg); the stale-ternary dead code must stay removed',
   );
 }
 
-// v0.2.6 round-1: pin SINCE_STALE_MS value (15min = 900000ms). Accept either
-// the expression form (`15*60*1000`) or the computed numeric form (`900000`)
-// — the IIFE bytes carry whichever the template substitution produced.
-// Mirrors the sibling IIFE.37b2 / IIFE.37c value locks. NOT asserted by
-// test-contract-sync.mjs (reader-only; no writer-side equivalent), so this
-// is the single pinning site for the value.
+// v0.5.2 (#4): SINCE_STALE_MS is retired — no value to pin. Instead assert the
+// UNIFICATION invariant: per-tab and §F share SBI_RUNNING_STALE_MS, whose value
+// is still pinned at IIFE.37b2 (30min). A future split that re-introduced a
+// distinct per-tab constant would have to add a NEW var declaration, which the
+// IIFE.46 absence-assertion above already catches.
 check(
-  'IIFE.46d SINCE_STALE_MS value (15*60*1000)',
-  /var\s+SINCE_STALE_MS\s*=\s*(?:15\s*\*\s*60\s*\*\s*1000|900000)/.test(iife),
+  'IIFE.46d v0.5.2: no per-tab SINCE_STALE_MS declaration (retired; per-tab shares SBI_RUNNING_STALE_MS)',
+  !/var\s+SINCE_STALE_MS\s*=/.test(iife),
+  'SINCE_STALE_MS declaration survived retirement',
 );
 
 // --- 19. Writer-hook content-hash gate (R3 architecture fix; mirrors IIFE.21b) ---

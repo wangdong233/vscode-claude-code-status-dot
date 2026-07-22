@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.1";
+const INJECT_VERSION = "v0.5.2";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -363,30 +363,20 @@ const DONE_TO_IDLE_MS = 5 * 60 * 1000;
  *  workflows, so mtime stays fresh forever and the 30min clock never elapsed).
  *  30min chosen because PreToolUse fires every ~30s during active tool use,
  *  so a 30min `since` gap is unambiguous evidence of a dead/drifted session.
- *  Pinned via hooks/test-contract-sync.mjs. */
+ *  Pinned via hooks/test-contract-sync.mjs.
+ *
+ *  v0.5.2 (#4): this is now the SOLE running-decay threshold — used by BOTH
+ *  the §F aggregate tick AND the §H per-tab tick (the prior SINCE_STALE_MS
+ *  15min per-tab constant is retired). Both surfaces also gate the
+ *  running→idle downgrade on __ccsdTranscriptFresh (the transcript .jsonl
+ *  mtime): a session whose transcript grew within this window is actively
+ *  streaming, so a stale `since` alone no longer false-decays a genuinely
+ *  active long workflow / subagent-waiting parent. The tab and the bottom 🟡
+ *  therefore share ONE threshold + ONE activity predicate and can no longer
+ *  disagree in a 15-30min window. The since-based stuck-drift catch is
+ *  preserved (drifted Stop heartbeats refresh the state-file mtime but NOT
+ *  the transcript → stale transcript → decay still fires). */
 const SBI_RUNNING_STALE_MS = 30 * 60 * 1000;
-
-/** Per-tab stale-running decay threshold (v0.2.6 reader-side §4 rule).
- *  Reader-side: per-tab tick decay — a `running` tab whose `since` is older
- *  than this renders idle (gray) instead of running (yellow), surfacing
- *  "this session hasn't actually been running for N min" to the user.
- *  v0.2.6 fix for stuck-yellow bug (CC Stop payload inflight=1 drift +
- *  preserveSince + per-tab running branch had zero decay → tab永黄). Distinct
- *  from SBI_RUNNING_STALE_MS (30min, SBI-only) for two reasons:
- *    (1) per-tab is USER-VISIBLE — a more aggressive threshold (15min vs 30)
- *        surfaces drift sooner at the per-tab UI where the user actually
- *        looks; the SBI aggregate count tolerates a wider window since the
- *        user reads it at-a-glance.
- *    (2) Keeping the names distinct preserves test-iife.mjs IIFE.46b's
- *        invariant "per-tab tick body does NOT reference SBI_RUNNING_STALE_MS"
- *        (the SBI vs per-tab decay-profile divergence lock). Introducing a
- *        NEW constant name for per-tab use keeps the cross-decay boundary
- *        explicit and grep-able.
- *  Same since-based defensive form as the done>5min rule (since && now-since
- *  > THRESH && since < now — guards against since=0 corrupt files AND future
- *  timestamps). NOT pinned by test-contract-sync.mjs (reader-only; no
- *  writer-side equivalent to sync against). */
-const SINCE_STALE_MS = 15 * 60 * 1000;
 
 /** Persistent runtime install dir. A copy of resources/*.svg + hooks/cc-status.js
  *  lives here so the patched extension and the CC hook keep working even if the
@@ -1900,8 +1890,17 @@ function buildIIFE(resDir: string): string {
         // steady state (99.6% reduction). See CHANGELOG v0.2.9 + docs/STATES.md
         // §9 perf section.
         `var __ccsdUriCache=Object.create(null);function ccuri(p){return __ccsdUriCache[p]||(__ccsdUriCache[p]=vs.Uri.file(p));}`,
-        // v0.2.9-debug (Q7 tab-orange): anomaly logger. Append-only, fires ONLY on the 3 no-iconPath early-return paths below (rare). Remove after root cause confirmed + fix landed.
-        `var __ccsdDbgLog=pth.join(DIR,"_panel-debug.log");function __ccsdDbg(s){try{try{if(fs.statSync(__ccsdDbgLog).size>2097152)fs.writeFileSync(__ccsdDbgLog,"")}catch(e){}fs.appendFileSync(__ccsdDbgLog,Date.now()+" "+s+"\\n")}catch(e){}}`,
+        // v0.5.2 (#3/F3): removed the v0.2.9-debug __ccsdDbg anomaly logger
+        // (_panel-debug.log) + its __ccsdRenderMap feeder. The Q7 tab-orange
+        // root cause was confirmed + fixed in v0.2.9.1 (the __ccsdPending
+        // yield was removed), but the logger — which its own comment said to
+        // "remove after root cause confirmed + fix landed" — was left in
+        // production through v0.5.1, firing unthrottled fs.statSync +
+        // fs.appendFileSync ~6×/sec on the EH hot path (forensics on an
+        // 857KB _panel-debug.log showed 14716 ELSE + 11873 NOSID events,
+        // disproving its "rare early-return" comment). Pure removal — the log
+        // is write-only (grep confirmed no runtime reader of the file). Users
+        // may delete the leftover ~/.claude/cc-tab-status/_panel-debug.log.
         // v0.5.0: favorites.json path (same DIR as <sid>.json + <sid>.offset +
         // <sid>.tokens.json — companion FAV_STATE_DIR is the same path). Single
         // literal here so the contract is one-way (companion writes, IIFE reads)
@@ -1926,16 +1925,16 @@ function buildIIFE(resDir: string): string {
         `var DONE_TO_IDLE_MS=${DONE_TO_IDLE_MS};`,
         `/*§7.2 stale-running heuristic: v0.2.6 keys off 'since' (the *→running transition time), not mtime. Stop preserveSince path (cc-status.js:390-401) keeps cur.since on inflight>0 Stop heartbeats while writeJsonAtomic refreshes mtime — mtime stays fresh forever under CC's repeated Stop fire on drifted inflight payloads, so mtime-decay never fires. since-decay fires correctly because since is preserved (not refreshed) across the same path. Mirrors done>5min / interrupted>24h decay which already key off since.*/`,
         `var SBI_RUNNING_STALE_MS=${SBI_RUNNING_STALE_MS};`,
-        /*v0.2.6 round-1 stuck-yellow fix: per-tab running decay threshold.
-         Distinct name from SBI_RUNNING_STALE_MS (30min SBI-only) — per-tab is
-         user-visible so a more aggressive 15min surfaces drift sooner; using
-         a distinct name ALSO preserves test-iife.mjs IIFE.46b's invariant
-         "per-tab tick body does NOT reference SBI_RUNNING_STALE_MS". Used by
-         the per-tab tick body's running branch: running && since &&
-         now-since>SINCE_STALE_MS && since<now → render idle.svg (gray)
-         instead of running.svg (yellow), surfacing stuck sessions to the
-         user. Reader-only (no writer-side equivalent).*/
-        `var SINCE_STALE_MS=${SINCE_STALE_MS};`,
+        /*v0.5.2 (#4): the per-tab decay threshold is UNIFIED with §F — both
+         surfaces now reference the single SBI_RUNNING_STALE_MS above + the
+         __ccsdTranscriptFresh activity gate. The v0.2.6 round-1
+         SINCE_STALE_MS=15min per-tab constant (and its distinct-name
+         divergence lock IIFE.46b) are retired: a 15-30min window where the
+         tab showed ⚪ idle while the bottom 🟡 stayed yellow was the user's
+         #4 report, and the deeper false-decay of active long workflows is now
+         cured by the transcript-mtime gate (a streaming session's .jsonl
+         keeps growing even while `since` is frozen). See the JSDoc on the
+         SBI_RUNNING_STALE_MS const above + STATES.md §7.4.*/
         /*§7.5 interrupted retention: crashed/killed CC sessions whose writer wrote
          state=interrupted never send SessionEnd, so without a retention heuristic
          the 🔴 light would grow monotonically. Decay interrupted files older
@@ -2180,6 +2179,28 @@ function buildIIFE(resDir: string): string {
         // owns rate); tmp+rename atomic mirrors cc-status.js writeJsonAtomic.
         `var RATE_BUF_CAP=16;var RATE_SPARK_BARS=8;var RATE_WINDOW_MS=5000;var RATE_FLUSH_MS=2000;var RATE_SPARK_CHARS="▁▂▃▄▅▆▇█";if(!globalThis.__ccsdRateBuf)globalThis.__ccsdRateBuf=Object.create(null);if(!globalThis.__ccsdRatePrev)globalThis.__ccsdRatePrev=Object.create(null);if(!globalThis.__ccsdRateMax)globalThis.__ccsdRateMax=Object.create(null);if(!globalThis.__ccsdRateFlush)globalThis.__ccsdRateFlush=Object.create(null);if(!globalThis.__ccsdRateLoaded)globalThis.__ccsdRateLoaded=Object.create(null);function __ccsdRateFromBuf(arr,nowMs){try{if(!arr||arr.length===0)return 0;var cutoff=nowMs-RATE_WINDOW_MS;var sumD=0,oldestTs=nowMs;for(var i=arr.length-1;i>=0;i--){if(arr[i].ts<cutoff)break;sumD+=arr[i].d;if(arr[i].ts<oldestTs)oldestTs=arr[i].ts;}var windowS=(nowMs-oldestTs)/1000;return windowS>0.1?sumD/windowS:0;}catch(_){return 0;}}function __ccsdRateSample(sid,realNow,totalNow,isRunning,nowMs){try{if(!sid)return null;var buf=globalThis.__ccsdRateBuf,prev=globalThis.__ccsdRatePrev,mx=globalThis.__ccsdRateMax;if(!buf[sid]){buf[sid]=[];}if(typeof prev[sid]!=="number")prev[sid]=-1;if(typeof mx[sid]!=="number")mx[sid]=0;var delta=0;if(isRunning&&prev[sid]>=0&&realNow>=prev[sid]){delta=realNow-prev[sid];}prev[sid]=isRunning?realNow:-1;var arr=buf[sid];arr.push({ts:nowMs,d:delta,total:totalNow});while(arr.length>RATE_BUF_CAP)arr.shift();if(delta>mx[sid]){mx[sid]=delta;}else{mx[sid]=mx[sid]*0.85+delta*0.15;}if(mx[sid]<1)mx[sid]=1;var rate=__ccsdRateFromBuf(arr,nowMs);return{rate:rate,max:mx[sid],buf:arr,delta:delta};}catch(_){return null;}}function __ccsdRateSpark(arr,peak){try{if(!arr||arr.length===0||peak<1)return"";var n=arr.length,start=Math.max(0,n-RATE_SPARK_BARS);var out="";for(var i=start;i<n;i++){var v=arr[i].d/peak;var idx=Math.max(0,Math.min(7,Math.floor(v*8)));out+=RATE_SPARK_CHARS.charAt(idx);}while(out.length<RATE_SPARK_BARS&&out.length>0){out=RATE_SPARK_CHARS.charAt(0)+out;}return out;}catch(_){return "";}}function __ccsdRateFlush(sid,arr,mx,nowMs){try{if(!sid||!arr||arr.length===0)return;var fm=globalThis.__ccsdRateFlush;if(!fm[sid])fm[sid]=0;if(nowMs-fm[sid]<RATE_FLUSH_MS)return;fm[sid]=nowMs;var payload={v:1,sid:sid,last_ts:nowMs,recent_max:mx,samples:arr.slice(-600).map(function(s){return{t:s.ts,d:s.d,total:s.total};})};var tmpPath=pth.join(DIR,sid+".rate.tmp");var finalPath=pth.join(DIR,sid+".rate");try{fs.writeFileSync(tmpPath,JSON.stringify(payload));try{fs.renameSync(tmpPath,finalPath);}catch(_){try{fs.unlinkSync(tmpPath);}catch(__){}}}catch(_){}}catch(_){}}function __ccsdRateLoad(sid){try{if(!sid)return null;var ld=globalThis.__ccsdRateLoaded;if(ld[sid])return null;ld[sid]=true;var p=pth.join(DIR,sid+".rate");var raw=fs.readFileSync(p,"utf8");var obj=JSON.parse(raw);if(!obj||obj.sid!==sid||!Array.isArray(obj.samples))return null;var buf=globalThis.__ccsdRateBuf,mx=globalThis.__ccsdRateMax,prev=globalThis.__ccsdRatePrev;buf[sid]=obj.samples.slice(-RATE_BUF_CAP).map(function(s){return{ts:s.t,d:s.d,total:s.total};});mx[sid]=Number(obj.recent_max)||1;if(mx[sid]<1)mx[sid]=1;prev[sid]=-1;return obj;}catch(_){return null;}}`,
         // === §F Per-tick 4-light aggregation (the __ccsdSbiTimer body) ===
+        // v0.5.2 (#4): shared transcript-activity gate used by BOTH the §F
+        // aggregate decay and the §H per-tab decay. Keys the running→idle
+        // downgrade off REAL transcript (.jsonl) freshness instead of the
+        // `since` transition timestamp alone. `since` is frozen by Stop
+        // inflight>0 preserveSince + by long single-tool execs (no hook fires
+        // mid-tool), so it goes stale while a session is ACTIVELY streaming
+        // → false-decay to gray. The .jsonl keeps growing during streaming, so
+        // its mtime is the true activity signal. Resolution mirrors
+        // computeLiveDelta's rule EXACTLY: prefer j.transcript_path
+        // (authoritative, persisted by the hook); else the cwd→projects-dir
+        // escape fallback ( /[^a-zA-Z0-9._-]/g → '-' ) for old pre-v0.2.5
+        // <sid>.json without transcript_path. Stuck-drift case (CC Stop
+        // inflight=1 payload drift + spurious Stop heartbeats refresh the
+        // STATE-FILE mtime but NOT the transcript) → .jsonl stays stale →
+        // returns false → decay still fires (the v0.2.6 since-decay fix is
+        // PRESERVED; only the false-positive stale-since+FRESH-transcript =
+        // active case is suppressed). statSync only reaches here on
+        // decay-CANDIDATES (since>THRESH already true at the call site), so
+        // the per-tick cost is bounded by N running sessions past the
+        // threshold. Any miss (no transcript_path, no cwd, jsonl absent,
+        // statSync throw) → returns false → safe decay direction.
+        `function __ccsdTranscriptFresh(j,sid,staleMs){try{if(!j||!sid)return false;var jsonlPath=null;if(typeof j.transcript_path==="string"&&j.transcript_path){jsonlPath=j.transcript_path;}else if(typeof j.cwd==="string"&&j.cwd){var escaped=j.cwd.replace(/[^a-zA-Z0-9._-]/g,"-");jsonlPath=pth.join(os.homedir(),".claude","projects",escaped,sid+".jsonl");}if(!jsonlPath)return false;var stt=fs.statSync(jsonlPath);if(!stt||!stt.isFile())return false;return(Date.now()-stt.mtimeMs)<staleMs;}catch(_){return false;}}`,
         `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
         `try{`,
         `var ag={running:0,done:0,interrupted:0,idle:0,pending:0};`,
@@ -2216,8 +2237,8 @@ function buildIIFE(resDir: string): string {
         `var st=j.state;var since=j.since;`,
         `/*§4 reader rule: done>5min→idle — IDLE sessions don't count toward the green light.*/`,
         `if(st==="done"&&since&&(Date.now()-since)>DONE_TO_IDLE_MS){st="idle";}`,
-        `/*§7.2 stale-running (v0.2.6: since-based, not mtime). since is the *→running transition time (set fresh by UserPromptSubmit / SubagentStart; PRESERVED by Stop inflight>0 path cc-status.js:390-401 — NOT refreshed — so a drifted inflight>0 stuck-running session has an old since even though mtime is fresh from the Stop heartbeat write). Mirrors the done>5min rule one branch up: decay on since, not mtime. __mt is still computed above for the cache-key short-circuit (mtime+size == content-change signal) but is no longer the decay signal.*/`,
-        `else if(st==="running"){if(since&&(Date.now()-since)>SBI_RUNNING_STALE_MS){st="idle";}}`,
+        `/*§7.2 stale-running (v0.2.6: since-based, not mtime). since is the *→running transition time (set fresh by UserPromptSubmit / SubagentStart; PRESERVED by Stop inflight>0 path cc-status.js:390-401 — NOT refreshed — so a drifted inflight>0 stuck-running session has an old since even though mtime is fresh from the Stop heartbeat write). Mirrors the done>5min rule one branch up: decay on since, not mtime. __mt is still computed above for the cache-key short-circuit (mtime+size == content-change signal) but is no longer the decay signal. v0.5.2 (#4): before downgrading, gate on __ccsdTranscriptFresh — a session whose transcript (.jsonl) was modified within SBI_RUNNING_STALE_MS is ACTIVELY streaming (long turn / subagent wait freezes 'since' but the jsonl keeps growing) → do NOT decay. statSync only fires on decay-candidates (since already past THRESH), bounding cost.*/`,
+        `else if(st==="running"){if(since&&(Date.now()-since)>SBI_RUNNING_STALE_MS){if(!__ccsdTranscriptFresh(j,files[i].slice(0,-5),SBI_RUNNING_STALE_MS)){st="idle";}}}`,
         `/*§7.5 interrupted retention: since>INTERRUPTED_RETENTION_MS(24h)→idle — keys off the TERMINAL timestamp (since), not mtime, so orphan SubagentStop/Notification writes that refresh mtime while preserving since (cc-status.js lines ~232/250/291) cannot postpone the 24h decay indefinitely. Mirrors the done>5min rule one branch up. Bounds 🔴 growth from abandoned crashes; file is NOT deleted (diagnostic value preserved).*/`,
         `else if(st==="interrupted"&&since&&(Date.now()-since)>INTERRUPTED_RETENTION_MS){st="idle";}`,
         `if(st==="running")ag.running++;`,
@@ -2332,7 +2353,7 @@ function buildIIFE(resDir: string): string {
         // === §H Per-panel tick (state-machine + notify dedup + svg switch) ===
         `var timer=setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
-        `var sid=t.__ccsdSid;if(!sid){__ccsdDbg("NOSID pend="+!!t.__ccsdPending);try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return;}`,
+        `var sid=t.__ccsdSid;if(!sid){try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return;}`,
         // v0.2.4: keep globalThis.__ccsdActiveSid fresh for the token SBI tick.
         // Each CC panel runs its own per-panel tick (this setInterval) — the
         // ACTIVE panel's tick fires here every 500ms and updates the global so
@@ -2373,7 +2394,7 @@ function buildIIFE(resDir: string): string {
         `if(globalThis.__ccsdLastNotifyKey===__nkey){lastTermSince=since;}`,
         `else{globalThis.__ccsdLastNotifyKey=__nkey;lastTermSince=since;try{notify(st,err)}catch(e){}}`,
         `}`,
-        `/*v0.2.9.1 Q7 fix: REMOVED the if(t.__ccsdPending)return yield. It left the tab on CC's NATIVE ORANGE logo whenever rename_tab carried hasPendingPermissions=true, and CC 2.1.216 fires that during workflow tool-use (not just real permission prompts) — so background workflow tabs went orange while the sid-independent aggregation correctly showed yellow. Permission prompts still surface as our blue via the FILE pending field (Notification hook -> j.pending -> the pend render branch at IIFE.12a). The tab now ALWAYS renders our icon (file state, or idle fallback at the no-sid/else paths), never native orange. t.__ccsdPending is still SET (rename_tab) + read by the RENDER debug log below + feeds the bottom 🔵 via __ccsdPendingSet (aggregation, separate dimension).*/`,
+        `/*v0.2.9.1 Q7 fix: REMOVED the if(t.__ccsdPending)return yield. It left the tab on CC's NATIVE ORANGE logo whenever rename_tab carried hasPendingPermissions=true, and CC 2.1.216 fires that during workflow tool-use (not just real permission prompts) — so background workflow tabs went orange while the sid-independent aggregation correctly showed yellow. Permission prompts still surface as our blue via the FILE pending field (Notification hook -> j.pending -> the pend render branch at IIFE.12a). The tab now ALWAYS renders our icon (file state, or idle fallback at the no-sid/else paths), never native orange. t.__ccsdPending is still SET (rename_tab) + feeds the bottom 🔵 via __ccsdPendingSet (aggregation, separate dimension).*/`,
         // v0.2.6 blue-via-content: reader-side pending branch. The writer's
         // Stop case now sets pending:true when Claude's last_assistant_message
         // clearly awaits user input/decision/feedback (AWAIT_USER_RE match in
@@ -2400,28 +2421,30 @@ function buildIIFE(resDir: string): string {
         // the SBI aggregation tick (which DOES decay before its pending
         // count) had already stopped counting it → tab-vs-SBI divergence
         // exactly like the comment below claimed to prevent. Fix mirrors
-        // the SBI tick's decay chain at §F (lines ~1917-1923) but uses
-        // per-tab constants: DONE_TO_IDLE_MS for done, SINCE_STALE_MS for
-        // running. Does NOT decay interrupted here (round-2 LOW finding
-        // left as-is; interrupted+pending still renders blue — rare in
-        // practice because StopFailure clears pending at cc-status.js:558).
-        // Does NOT reference SBI_RUNNING_STALE_MS / INTERRUPTED_RETENTION_MS
-        // — preserves IIFE.46b's per-tab-vs-SBI decay-name divergence lock.
+        // the SBI tick's decay chain at §F. v0.5.2 (#4): per-tab and §F now
+        // share ONE threshold (SBI_RUNNING_STALE_MS) + the same
+        // __ccsdTranscriptFresh activity gate — the prior intentional 15min
+        // (per-tab) vs 30min (SBI) divergence (and the SINCE_STALE_MS constant)
+        // are retired so the two surfaces never disagree. Does NOT decay
+        // interrupted here (round-2 LOW finding left as-is; interrupted+pending
+        // still renders blue — rare in practice because StopFailure clears
+        // pending at cc-status.js:558; the §F aggregate decays interrupted at
+        // 7d, the only remaining per-tab-vs-SBI divergence — see STATES.md §7.4).
         `var now=Date.now();`,
-        `/*v0.2.6 round-2 (HIGH): decay st to idle BEFORE the pending check so a done>5min or running-stale>15min session with j.pending=true does not false-stick 🔵 forever. Mirrors SBI tick decay (§F) but uses per-tab constants (DONE_TO_IDLE_MS / SINCE_STALE_MS — preserves IIFE.46b per-tab/SBI name divergence). Same since-based defensive form as the SVG-selection decay below: since && now-since>THRESH (done) or && since<now (running, guards against future-timestamp corrupt files).*/`,
+        `/*v0.5.2 (#4): decay st to idle BEFORE the pending check so a done>5min or running-stale session with j.pending=true does not false-stick 🔵 forever. UNIFIED with §F: both surfaces now share ONE threshold (SBI_RUNNING_STALE_MS, 30min — the prior 15min per-tab value is retired) so the tab and the bottom 🟡 can NEVER disagree in a 15-30min window again. Before the running→idle downgrade, gate on __ccsdTranscriptFresh(j,sid,…) — a session whose transcript (.jsonl) grew within the threshold is ACTIVELY streaming (long turn / subagent wait freezes 'since' but the jsonl keeps growing) → do NOT decay. This is the root-cause fix for the false-decay of genuinely-active long workflows keyed off the *→running transition timestamp. Same since-based defensive form (since && now-since>THRESH && since<now, guards since=0 corrupt files + future timestamps).*/`,
         `if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS){st="idle";}`,
-        `else if(st==="running"&&since&&(now-since)>SINCE_STALE_MS&&since<now){st="idle";}`,
+        `else if(st==="running"&&since&&(now-since)>SBI_RUNNING_STALE_MS&&since<now){if(!__ccsdTranscriptFresh(j,sid,SBI_RUNNING_STALE_MS)){st="idle";}}`,
         `/*reader pending (Notification OR Stop last-message semantic match): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
         `if(pend && st!=="idle"){try{p.iconPath=ccuri(favOf(pth.join(RES,"claude-logo-pending.svg"),sid))}catch(e){}return}`,
         `var svg;`,
         `if(st==="interrupted"){svg=(flashSeq%2===0)?favOf(pth.join(RES,"claude-logo-error.svg"),sid):CC_DEFAULT}`,
-        `/*v0.2.6 round-1 stuck-yellow fix: per-tab running decay. A running tab whose 'since' is older than SINCE_STALE_MS (15min) renders idle (gray) instead of running (yellow), surfacing "this session hasn't actually been running for 15min" to the user. Mirrors the done>5min→idle decay one branch below (same since-based defensive form: since && now-since>THRESH && since<now). Catches CC upstream payload drift (Stop inflight=1 stuck + preserveSince keeps state=running + activeSubagents=1 in the file indefinitely; without this decay the tab would stick yellow forever — see docs/STATES.md §7.4 "stale running treatment" row updated in v0.2.6). Real active running sessions (since<15min ago) render yellow unchanged.*/`,
-        `else if(st==="running"){svg=(since&&(now-since>SINCE_STALE_MS)&&since<now)?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-running.svg")}`,
-        `else if(st==="done"){svg=(since&&(now-since>DONE_TO_IDLE_MS))?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-done.svg")}`,
+        `/*v0.5.2 (F4): the running/done decay ternaries that lived HERE in v0.2.6 round-1 are removed as dead code. The round-2 fix moved decay BEFORE the pending check (the st="idle" assignments above), so by the time this SVG switch runs, a stale running/done session has ALREADY been downgraded to st="idle" and renders claude-logo-idle.svg via the idle branch below. The old ternaries' idle branches were therefore unreachable, and they referenced the now-retired 15min per-tab constant. Single decay site (above) eliminates the copy-paste-with-divergence that let per-tab and §F drift.*/`,
+        `else if(st==="running"){svg=favOf(pth.join(RES,"claude-logo-running.svg"),sid)}`,
+        `else if(st==="done"){svg=favOf(pth.join(RES,"claude-logo-done.svg"),sid)}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
-        `else{__ccsdDbg("ELSE sid="+(sid||"").slice(0,8)+" st="+st);try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return}`,
+        `else{try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return}`,
         `flashSeq++;`,
-        `try{p.iconPath=ccuri(favOf(svg,sid))}catch(e){}try{var __lm=globalThis.__ccsdRenderMap||(globalThis.__ccsdRenderMap={});var __rs=sid+":"+svg+":"+st+":"+pend;if(__lm[sid]!==__rs){__lm[sid]=__rs;__ccsdDbg("RENDER sid="+sid.slice(0,8)+" svg="+svg.split("/").pop()+" st="+st+" pend="+pend+" cpend="+!!t.__ccsdPending)}}catch(e){}`,
+        `try{p.iconPath=ccuri(favOf(svg,sid))}catch(e){}`,
         `},${TICK_MS});`,
         // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,

@@ -102,8 +102,36 @@ function check(name, cond, detail) {
 // Same body as test-sbi-aggregation.mjs's aggregate() — kept inline here so the
 // journey file is self-contained. Reads every <sid>.json under
 // <home>/.claude/cc-tab-status and applies the SAME decay/bucket rules the IIFE
-// does. `now` is injectable so the "coffee break" phase can time-travel without
-// real waiting. Returns the raw uncapped counts.
+// does — INCLUDING the v0.5.2 (#4) __ccsdTranscriptFresh activity gate on the
+// running→idle decay (mirrored by transcriptFresh() below; a fresh .jsonl blocks
+// false-decay of a long-streaming / subagent-waiting session). `now` is
+// injectable so the "coffee break" phase can time-travel without real waiting.
+// transcriptFresh() itself uses real Date.now() for the jsonl mtime comparison
+// (the IIFE does not parameterize time there). Returns the raw uncapped counts.
+
+// Mirror of the IIFE's __ccsdTranscriptFresh(j,sid,staleMs) — see
+// test-sbi-aggregation.mjs's transcriptFresh() for the full rationale. Uses
+// `home` in place of os.homedir() (the replica's home IS the IIFE's
+// os.homedir() in tests). Any miss → false (safe decay direction).
+function transcriptFresh(j, sid, staleMs, home) {
+  try {
+    if (!j || !sid) return false;
+    let jsonlPath = null;
+    if (typeof j.transcript_path === 'string' && j.transcript_path) {
+      jsonlPath = j.transcript_path;
+    } else if (typeof j.cwd === 'string' && j.cwd) {
+      const escaped = j.cwd.replace(/[^a-zA-Z0-9._-]/g, '-');
+      jsonlPath = path.join(home, '.claude', 'projects', escaped, sid + '.jsonl');
+    }
+    if (!jsonlPath) return false;
+    const stt = fs.statSync(jsonlPath);
+    if (!stt || !stt.isFile()) return false;
+    return Date.now() - stt.mtimeMs < staleMs;
+  } catch (_) {
+    return false;
+  }
+}
+
 function aggregate(home, now = Date.now()) {
   const DIR = path.join(home, '.claude', 'cc-tab-status');
   const ag = { running: 0, done: 0, interrupted: 0, idle: 0, pending: 0 };
@@ -132,7 +160,12 @@ function aggregate(home, now = Date.now()) {
       // elapsed. since-decay fires correctly because since is preserved.
       // Mirrors done>5min one branch up.
       else if (st === 'running') {
-        if (since && now - since > SBI_RUNNING_STALE_MS) st = 'idle';
+        // v0.5.2 (#4): gate on transcriptFresh — a session whose transcript
+        // (.jsonl) grew within SBI_RUNNING_STALE_MS is actively streaming → do
+        // NOT false-decay. Mirrors patch.ts §F __ccsdTranscriptFresh exactly.
+        if (since && now - since > SBI_RUNNING_STALE_MS) {
+          if (!transcriptFresh(j, f.slice(0, -5), SBI_RUNNING_STALE_MS, home)) st = 'idle';
+        }
       }
       // §7.5 interrupted>24h → idle. Keys off `since` (the TERMINAL timestamp),
       // NOT mtime — orphan SubagentStop/Notification writes refresh mtime while

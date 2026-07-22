@@ -499,3 +499,70 @@ IIFE 跑在 VSCode 的 **extension host（EH，独立 Node 进程）**，**不�
 | **renderer IPC churn（稳态）**      | **~10 IPC/sec**（8 iconPath + 2 token-SBI） | **~0 IPC/sec**（全部 dedup）            |
 
 EH ≠ renderer：typing/copy/tab-switch 是 renderer-local，不等 EH。即便是 worst-case 17ms p99 EH 阻塞，也只延迟其他扩展的 EH→renderer IPC 17ms，对用户不可见。
+
+---
+
+## 10. Favorites 持久化契约（v0.4.0+，`favorites.json`）
+
+> 本节是 **v0.4.0+ Favorites 功能**的持久化契约。`favorites.json` 是 §3a STATE_DIR (`~/.claude/cc-tab-status/`) 下新增的 **非会话状态文件**——它不是 `<sid>.json` 系列，不参与 §7.5 异常保留 / GC prune，但因为落在同一目录，必须显式登记为 GC-skip 项。设计细节见 `docs/FAVORITES-DESIGN.md`；本节只列**契约**。
+
+### 10.1 路径与命名
+
+| 维度        | 值                                                                                                                                                         |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 路径        | `~/.claude/cc-tab-status/favorites.json`（= §3a STATE_DIR）                                                                                                |
+| Sole writer | companion 扩展（`companion/extension.ts:writeFavAtomic`）                                                                                                  |
+| Reader      | companion（`readFavDoc`）；IIFE **不读**（v0.4 Q3 方案 c，复合星标推迟 v0.5）                                                                              |
+| GC skip     | `hooks/cc-status.js` GC 循环 `if (name === 'favorites.json') continue;`（§7.5 GC 必须 skip，否则 7d 后被误删——见 `hooks/test-cc-status.js §GC.favorites`） |
+
+跨文件路径契约：STATE_DIR 同时在 `patch.ts:219`、`hooks/cc-status.js:1166`、`companion/extension.ts:FAV_STATE_DIR`、`patch.ts buildIIFE` 烘焙的 IIFE `var DIR=...;` 4 处独立存在；`hooks/test-contract-sync.mjs §STATE_DIR` (v0.4.0 round-2 HIGH) 提取四份表达式的路径尾巴做字节相等断言，锁定重命名场景。
+
+### 10.2 Schema（v1）
+
+```jsonc
+{
+  "version": 1, // FAV_SCHEMA_VERSION — bump on incompatible change
+  "updatedAt": 1719000000000, // epoch ms of last write (for mtime diagnostics)
+  "sessions": [
+    {
+      "sid": "uuid-string", // CC session id (primary key, dedup)
+      "label": "basename or sid8", // cwd basename (v0.4); transcript first-prompt is v0.5
+      "cwd": "/abs/path", // optional, snapshotted from <sid>.json at add-time
+      "transcript_path": "...", // optional
+      "model": "glm-5.2", // optional
+      "state": "done", // optional, snapshotted at add-time (frozen)
+      "addedAt": 1719000000000,
+      "lastSeenAt": 1719000000000, // updated by favOpen primary path on successful reveal
+    },
+  ],
+  "files": [
+    {
+      "fsPath": "/abs/path/to/file", // primary key, dedup
+      "label": "basename.ts",
+      "line": 50, // optional, add-time cursor snapshot
+      "workspace": "/abs/path", // optional
+      "addedAt": 1719000000000,
+    },
+  ],
+}
+```
+
+字段语义 + 验证详见 `companion/extension.ts:isValidFavSession` / `isValidFavFile`（round-1 LOW：可选字段需类型检查，防止 hand-edit 的 `"state": 42` 崩渲染器）。
+
+### 10.3 原子写
+
+`writeFavAtomic(doc)`：`fs.writeFileSync(tmp, body)` → `fs.renameSync(tmp, FAV_FILE)`，POSIX rename 原子。镜像 `patch.ts:1662 writeAtomicSync` / `hooks/cc-status.js:writeJsonAtomic`。失败回滚：unlink tmp 后 throw（v0.4.0 round-2 MED：包 try/catch 后返 boolean，调用者根据 false 回滚 in-memory + refresh）。
+
+### 10.4 Schema-version 前向守卫（v0.4.0 round-2 MED hardening）
+
+`readFavDoc` 检测到 `obj.version > FAV_SCHEMA_VERSION` → latch `futureVersionLocked = true`（模块级，EH 生命期内不再复位）+ 返回 `emptyFavDoc()` + warning。
+
+`writeFavAtomic` 开头检查 latch：true 则拒写 + 显示 "upgrade or delete the file at <path>" 错误提示。这兑现 round-0 警告文案 "Showing an empty list to avoid clobbering newer data" 的承诺——v0.4.0 round-1 前的 toggle/remove/open 调用会以 v1 schema 覆盖磁盘上的 v2 文件，造成版本降级场景下的真实数据丢失。
+
+`hooks/test-favorites.mjs FAV.17` 验证 READ 返回 empty；round-2 未补 "subsequent WRITE 是否保留 future data" 的行为测试（latch 是 module-level singleton，replica 测试框架难以注入），由 source-shape 检查 + 该文档 §10.4 共同覆盖。
+
+### 10.5 IIFE 桥（不改 STATE_DIR 文件）
+
+IIFE 仅 publish `globalThis.__ccsdSidToPanel[sid] = panel`（§A preamble）+ register `ccStatusDot.fav.focusSession` 命令（§D.5，handler fail-safe：sid miss 返 false 不抛）。companion 经共享 globalThis（同 EH）调 `.reveal()` 焦点已开会话；EH 隔离时走 `executeCommand` 兜底。**IIFE 不读不写 `favorites.json`**。
+
+跨文件命令 id 契约：`patch.ts FAV_FOCUS_CMD const` === `companion/extension.ts executeCommand("ccStatusDot.fav.focusSession")` === IIFE `JSON.stringify(FAV_FOCUS_CMD)` 烘焙字节三处一致——`hooks/test-contract-sync.mjs` 末尾 3 项断言锁定。

@@ -2,6 +2,59 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.4.0] - 2026-07-22
+
+**新增"收藏/导航"机制：Explorer 侧边栏的 CC Favorites 视图 + 文件/会话收藏 + 跨面板导航。** 基于 4 路并行调研（类似插件/VSCode API/cc-status-dot 架构契合/CC 会话生态）综合产出（设计全文 `docs/FAVORITES-DESIGN.md`，裁决 PARTIAL-GO：MVP + 文档化边界）。架构层面明确无问题——companion-based 路径四路独立收敛，companion/package.json 已是合法扩展宿主，加 views/commands/menus 是正常版本 bump 不是架构变更。
+
+### Added — Favorites MVP（v0.4.0 实施范围，按设计 §5 Slice 1 + Slice 2 安全部分）
+
+- **companion Explorer 视图**（`companion/package.json` `contributes.views.explorer`）：左侧资源管理器新增 "CC Favorites" 勾选项，viewsWelcome 空态引导。图标 `$(star-full)`。
+- **companion 命令**（`companion/extension.ts` `registerFavorites`）：`ccStatusDot.fav.toggleFile` / `toggleTab` / `open` / `remove` / `copyResume` / `refresh` / `browse`，全前缀 `ccStatusDot.fav.*` 命名一致性。
+- **companion 菜单**：`explorer/context`（文件右键加入收藏，gated by `config.ccStatusDot.fav.includeInExplorerContextMenu`）+ `view/item/context`（树节点 inline open/remove + 9_cuts copyResume for sessions）+ `view/title`（refresh/browse）+ `commandPalette`（toggleFile/toggleTab 公开，open/remove/copyResume 仅树内 `when:false` 隐藏）。
+- **FavoritesProvider**（`companion/extension.ts`）：实现 `vscode.TreeDataProvider<FavNode>`，discriminated union `sessionOpen` / `sessionClosed` / `file`，按 `lastSeenAt`/`addedAt` 倒序。空态 setContext `ccStatusDot.favoritesEmpty=true` 驱动 viewsWelcome。
+- **favorites.json 持久化**（`companion/extension.ts` `writeFavAtomic`/`readFavDoc`）：位置 `~/.claude/cc-tab-status/favorites.json`（= IIFE 现有 STATE_DIR `patch.ts:219`，语义正确 + IIFE 零新路径 plumbing）。companion 单写者，atomic tmp+rename 镜像 `patch.ts:1662 writeAtomicSync` 纪律。Schema v1：`{version,updatedAt,sessions:[{sid,label,cwd,transcript_path,model,state,addedAt,lastSeenAt}],files:[{fsPath,label,line,workspace,addedAt}]}`。前向 schema-version guard 防止未来版本被静默降级。fs.watchFile 2s 轮询刷新树。
+- **IIFE `__ccsdSidToPanel` 桥**（`patch.ts` §A preamble + §Z onDidDispose）：发布 `globalThis.__ccsdSidToPanel[sid] = t.panelTab`，companion 经共享 globalThis（同 EH，沿用 `companion/extension.ts:621 __ccsdSbi` 已验证桥模式）调 `.reveal()` 焦点已开会话。零新 IPC。
+- **IIFE `ccStatusDot.fav.focusSession` 命令兜底**（`patch.ts` §D.5）：`vs.commands.registerCommand`（不需 package.json contribution，沿用 `SBI_CLICK_CMD`/`TOK_CLICK_CMD` 已验证模式），companion 在 globalThis 桥不可用时（如未来 VSCode 把 EH 按扩展隔离）通过 `executeCommand` 兜底。Handler fail-safe：sid 不在 map 中返回 false 不抛错（race 与 panel 关闭是常态）。
+- **配置项**：`ccStatusDot.fav.includeInExplorerContextMenu`（默认 true）让用户在拥挤右键菜单里 opt-out。
+- **新测试套件**（`hooks/test-favorites.mjs`，31 项）：schema shape pin、FAV_FILE 位置、atomic write、round-trip、corrupt/future-schema 降级、FavoritesProvider/handlers/commands 覆盖、package.json 贡献点完整、负面 guard（v0.4 **不**贡献 `editor/title/context`，设计 §5 Slice 2 需 L1 PoC 才 ship）。
+
+### Deferred — 风险部分（v0.5+，按设计 §3.2 / §5 Slice 排期）
+
+- **F1/F2 tab 复合星标 SVG**（Q3 方案 a）：每 panel 只一个 iconPath 槽，复合需 5 state × 2 favorited = 10 SVG 笛卡尔积。v0.4 走方案 (c)：星只在 Favorites 视图（ThemeIcon `$(star-full)`/`$(star-empty)`），tab 不动。方案 (a) 推迟 v0.5，触发条件 = 用户反馈"tab 上也要星"。
+- **`editor/title/context` tab 右键菜单**（设计 §5 Slice 2，风险 R1/L1）：menu item 在 webview tab 上的可见性需实机 PoC（设计稿阶段未验证）。v0.4 不 ship，先做最小 PoC（1 颗 menu item + console.log 命令）确认可见性 + `resourceScheme == 'webview'` 宽度后再做完整 handler。
+- **D1 已闭会话重开为 CC webview panel**（架构性不可达）：CC 23 个公开命令无一接 sid 参数；CC 内部 `resumeSessionAt` 是私有 JSON-RPC；CLI `claude -r <sid>` 开终端非 panel；CC viewType 私有不可冒充。**降级实现**：灰显 + `fav.copyResume` 一键复制 `claude -r <sid>` 到剪贴板（companion `vscode.env.clipboard.writeText`）。
+- **F3-F4 会话 alias / tag 分组**：v0.4 单层平铺，分组推迟用户反馈驱动。
+- **`fav.openTerminal`**（设计 Slice 3 可选）：v0.4 仅复制命令到剪贴板，不开集成终端（用户偏好差异大，剪贴板最中性）。
+
+### Changed
+
+- **companion README** 从"没有状态栏、没有命令、没有设置"重写为"自愈看护 + Favorites 视图"——这是定位演进不是文档漂移（02_简单检查清单.md §E #11：演进迁移不是熵退化）。v0.3.0 已把 companion 从"纯自愈"扩到"自愈 + 图表面板 webview"，v0.4.0 再扩到"自愈 + 收藏视图"是同一节奏。
+- **companion/package.json** `activationEvents` 加 `onView:ccStatusDot.favorites`（views 启动 hook）；`engines.vscode` 从 `^1.80.0` 升到 `^1.84.0`（`favBrowse` 用 `vscode.QuickPickItemKind.Separator` 是 1.84 新增 API；`@types/vscode` 同步升 `^1.84.0`）。**破坏性变更**：VSCode 1.80–1.83 用户升级到本版后 companion 将报告 "incompatible VSCode version"——这些用户须继续使用 v0.3.1（5 态点 / SBI / 图表面板不受影响）或升级 VSCode 到 1.84+。
+- **companion/extension.ts** `MIN_PATCHER_VERSION` 0.3.1 → 0.4.0；`injectVersion()` fallback v0.3.1 → v0.4.0；`activate()` 在 `detectAndPatch()` fire-and-forget 之后调 `registerFavorites()`（Favorites I/O 永不阻塞 CC 更新自愈）；`deactivate()` 清 `favoritesWatcher` interval。
+
+### Architecture
+
+- **companion-based**（设计 §2.1）：所有 Favorites UI 在 companion；IIFE 仅最小桥（`__ccsdSidToPanel` 发布 + `focusSession` 命令）。不动 ANCHOR_A/ANCHOR_B 字符串（`patch.ts:1503/1526`）。companion 自愈主线 `detectAndPatch` 完全保留。
+- **跨扩展通信双通道**（设计 §4.1）：热路径（焦点已开会话）走 globalThis `__ccsdSidToPanel[sid].reveal()`；冷路径（命令兜底）走 `vscode.commands.executeCommand("ccStatusDot.fav.focusSession", sid)`，VSCode 命令桥处理 EH 边界编排（未来 VSCode 把 EH 按扩展隔离时仍可用）。
+- **持久化分工**：companion 单写者（atomic tmp+rename）；IIFE 在 v0.4 不读 favorites.json（Q3 方案 c 让 IIFE 改动面归零，概念完整性最高）。v0.5 复合星标落地后 IIFE 将按 mtime-cache 读 `sessions[].sid` 集合。
+
+### Tests
+
+- **`hooks/test-iife.mjs` 新增 IIFE.154-157**（4 项 FAV BRIDGE 断言）：`__ccsdSidToPanel` §A 初始化+发布、§Z onDidDispose 删除、`ccStatusDot.fav.focusSession` registerCommand、handler fail-safe（miss 返回 false 不抛错）。`IIFE.21c` banner stamp v0.3.1 → v0.4.0。
+- **`hooks/test-contract-sync.mjs` 新增 3 项 FAV_FOCUS_CMD 跨文件平价锁**（`patch.ts FAV_FOCUS_CMD const` === `companion/extension.ts executeCommand("ccStatusDot.fav.focusSession")` === IIFE `JSON.stringify(FAV_FOCUS_CMD)` 烘焙字节三处一致）。
+- **`hooks/test-favorites.mjs` 新文件 31 项**（schema round-trip + atomic write + corrupt/future 降级 + provider/handlers 覆盖 + package.json 贡献点 + 负面 guard）。
+- 总测试断言数：845（v0.3.1 的 ~778 + FAV BRIDGE 4 + contract 3 + favorites 31 + 现有测试增量）。
+
+### Version
+
+- `package.json` 0.3.1 → 0.4.0；`patch.ts INJECT_VERSION` v0.3.1 → v0.4.0；`companion/package.json` 0.3.1 → 0.4.0；`companion/extension.ts MIN_PATCHER_VERSION` 0.3.1 → 0.4.0 + `injectVersion()` fallback v0.3.1 → v0.4.0。`HOOK_VERSION`（v0.2.1）+ `cc-status.js` hash 不变（writer 无改动）。
+
+### Documentation
+
+- **`docs/FAVORITES-DESIGN.md`**：补 "v0.4.0 实施摘要" 小节，标记已实施 vs 推迟。
+- **companion/README.md**：定位演进（自愈 + Favorites 视图），列出命令 + 配置项 + favorites.json 位置。
+- **主 `README.md`**：新增 §"Favorites View"小节。
+
 ## [0.3.1] - 2026-07-21
 
 **图表 webview CSP hardening：script-src 从 `unsafe-inline` 改为 VSCode nonce 最佳实践。** v0.3.0 引入的 token 速率图表 webview panel 原先用 `script-src 'unsafe-inline'`（功能正常，webview 数据是 postMessage 传数字无 XSS 向量，但 unsafe-inline 非最佳安全姿态）。本版按 VSCode 官方 webview CSP 指南改 nonce：每 panel 创建生成新 nonce，inline script 标签带 `nonce` 属性，CSP meta 用 `script-src 'nonce-NONCE'`。调研裁决 `style-src 'unsafe-inline'` 保留（VSCode 自身注入主题 CSS 变量为 inline style，非cing style-src 需同时 pin VSCode 注入样式，不现实；CSS XSS 风险远低于 JS，且无不可信输入流入 webview）。

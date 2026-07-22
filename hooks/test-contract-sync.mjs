@@ -444,6 +444,147 @@ if (patchTokens !== null && hookTokens !== null) {
   }
 }
 
+// v0.4.0 round-2 (ARCH-6 HIGH): STATE_DIR is the runtime path contract shared
+// by writer (hooks/cc-status.js), IIFE reader (baked into patch.ts's buildIIFE),
+// patcher top-level const, and — NEW in v0.4.0 — the companion Favorites
+// writer (companion/extension.ts FAV_STATE_DIR). Pre-fix it existed as 4
+// independent unsynced literal copies; test-favorites.mjs FAV.4 only form-
+// checked the literal SHAPE of FAV_STATE_DIR (regex match), never extracting
+// patch.ts:219 STATE_DIR's actual value. A future rename (e.g.
+// ~/.claude/state/cc-tabs) would pass FAV.4 while the companion writes
+// favorites.json to a directory the IIFE/hook no longer read. This block
+// extracts the path-join expressions from all 4 sites AND from the built IIFE
+// bytes, then asserts byte-equal. Mirrors the INTERRUPTED_RETENTION_MS cross-
+// file §7.5 contract pin above (the original ARCH-6 fix this test was created
+// to enforce).
+{
+  // Extract `path.join(os.homedir(), ".claude", "cc-tab-status")` form,
+  // tolerating single/double quotes and the optional whitespace between args.
+  // We capture the 3 string-literal segments (".claude", "cc-tab-status") and
+  // the leading `os.homedir()`. Tolerate `path.join(` or `pth.join(` (IIFE
+  // uses `pth` alias). Returns the reconstructed absolute path tail
+  // (/`.claude`/`cc-tab-status`) when both literals are present, else null.
+  function extractStateDirTail(src, name) {
+    // Match `const NAME = <pathlib>.join(os.homedir(), ".claude", "cc-tab-status");`
+    // The pathlib identifier is captured (path | pth); single OR double quotes
+    // tolerated for the two string segments.
+    const re = new RegExp(
+      'const\\s+' +
+        name +
+        '\\s*=\\s*([a-zA-Z_$][\\w$]*)\\.join\\(\\s*os\\.homedir\\(\\)\\s*,\\s*([\'"])(\\.claude)\\2\\s*,\\s*([\'"])(cc-tab-status)\\4\\s*\\)',
+    );
+    const m = src.match(re);
+    if (!m) return null;
+    // Return the path tail (the parts after os.homedir() that ALL surfaces
+    // must agree on).
+    return m[3] + '/' + m[5];
+  }
+  const patchTail = extractStateDirTail(patchSrc, 'STATE_DIR');
+  const hookTail = extractStateDirTail(hookSrc, 'STATE_DIR');
+  // companion uses FAV_STATE_DIR (distinct name because STATE_DIR is not the
+  // companion's primary concern — Favorites has its own state sub-contract).
+  const companionSrc = read('companion/extension.ts');
+  const companionTail = extractStateDirTail(companionSrc, 'FAV_STATE_DIR');
+  check('patch.ts defines STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status")', patchTail !== null);
+  check('hooks/cc-status.js defines STATE_DIR same-shape', hookTail !== null);
+  check(
+    'companion/extension.ts defines FAV_STATE_DIR same-shape (v0.4.0 round-2 HIGH)',
+    companionTail !== null,
+    'see FAV_STATE_DIR const — companion is a STATE_DIR consumer (Favorites sole writer)',
+  );
+  if (patchTail && hookTail) {
+    check(
+      'STATE_DIR cross-file path tail equality — patch.ts===hooks/cc-status.js (ARCH-6 §7.5 contract surface)',
+      patchTail === hookTail,
+      'patch.ts tail="' + patchTail + '" hook tail="' + hookTail + '"',
+    );
+  }
+  if (patchTail && companionTail) {
+    check(
+      'STATE_DIR cross-file path tail equality — patch.ts===companion/extension.ts FAV_STATE_DIR (v0.4.0 round-2 HIGH)',
+      patchTail === companionTail,
+      'patch.ts tail="' + patchTail + '" companion tail="' + companionTail + '"',
+    );
+  }
+
+  // Now extract the IIFE-baked DIR literal from dist/patch.js --check-iife.
+  // The IIFE bakes `var DIR=${JSON.stringify(STATE_DIR)};` (absolute path at
+  // patch time) since v0.4.0 round-2; pre-v0.4 it baked
+  // `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");` (runtime eval).
+  // Both shapes carry the `.claude/cc-tab-status` tail; we pin BOTH forms so
+  // the test passes whether dist was built from a pre-v0.4 or v0.4+ patch.ts.
+  // The runtime-resolved path is the same either way; the tail must match.
+  const { spawnSync } = await import('child_process');
+  const distPatch = path.join(ROOT, 'dist', 'patch.js');
+  let iifeBytes = null;
+  if (fs.existsSync(distPatch)) {
+    const r = spawnSync(process.execPath, [distPatch, '--check-iife'], { encoding: 'utf8' });
+    if (r.status === 0) {
+      const idx = r.stdout.indexOf('/*cc-status-dot-injected');
+      if (idx >= 0) iifeBytes = r.stdout.slice(idx);
+    }
+  }
+  if (iifeBytes && patchTail) {
+    // v0.4+ shape: `var DIR="<absolute-path>";` — the absolute path always
+    // ends with the `.claude/cc-tab-status` tail (because STATE_DIR does).
+    const v04Match = iifeBytes.match(/var\s+DIR\s*=\s*"([^"]+\.claude[^"]*cc-tab-status)"/);
+    // pre-v0.4 shape: `var DIR=pth.join(os.homedir(),".claude","cc-tab-status")`
+    const legacyMatch = iifeBytes.match(
+      /var\s+DIR\s*=\s*[a-zA-Z_$][\w$]*\.join\(\s*os\.homedir\(\)\s*,\s*(['"]).claude\1\s*,\s*(['"])cc-tab-status\2\s*\)/,
+    );
+    check(
+      'IIFE bakes STATE_DIR (v0.4+ absolute-literal form OR pre-v0.4 path.join form) — ARCH-6 HIGH fix',
+      !!v04Match || !!legacyMatch,
+      'expected IIFE bytes to bake DIR via `var DIR=".../.claude/cc-tab-status"` (v0.4+) or `pth.join(os.homedir(),".claude","cc-tab-status")` (legacy)',
+    );
+    if (v04Match) {
+      // The baked absolute path must END with the same tail as patch.ts STATE_DIR.
+      const bakedTail = patchTail; // `.claude/cc-tab-status`
+      check(
+        'IIFE baked DIR literal ends with the patch.ts STATE_DIR tail (v0.4+ absolute-literal form)',
+        v04Match[1].endsWith(bakedTail.replace(/^\//, '')) || v04Match[1].endsWith('/' + bakedTail.replace(/^\//, '')),
+        'IIFE baked DIR="' + v04Match[1] + '" — must end with "' + bakedTail + '"',
+      );
+    }
+  } else {
+    // Bootstrap-tolerant skip when dist/patch.js is not built (mirrors the
+    // round-3 MEDIUM skip above for the TOK_OFFSET_EXT baked literal).
+    check('IIFE bakes STATE_DIR — skipped (run `npm run build` to enable)', true);
+  }
+}
+
+// v0.4.0 Favorites bridge: the IIFE publishes globalThis.__ccsdSidToPanel and
+// registers the ccStatusDot.fav.focusSession command. The companion reads the
+// map directly (same EH) AND calls the command as a fallback. Pin the
+// command-id string equality across patch.ts (IIFE registerCommand site) +
+// companion/extension.ts (executeCommand site) so a future rename touching
+// only one side fails loudly. Mirrors the SBI_CLICK_CMD / TOK_CLICK_CMD
+// discipline (single source of truth = patch.ts const).
+{
+  const patchFavCmd = patchSrc.match(/const\s+FAV_FOCUS_CMD\s*=\s*"([^"]+)"/);
+  check('patch.ts defines FAV_FOCUS_CMD const (v0.4.0)', !!patchFavCmd, 'see patch.ts TOK_CLICK_CMD pattern');
+  if (patchFavCmd) {
+    check(
+      `patch.ts FAV_FOCUS_CMD = "${patchFavCmd[1]}" (canonical ccStatusDot.fav.focusSession)`,
+      patchFavCmd[1] === 'ccStatusDot.fav.focusSession',
+    );
+    // The IIFE bakes the const via JSON.stringify(FAV_FOCUS_CMD) at the
+    // registerCommand site; the companion calls executeCommand with the
+    // literal string. Pin the literal exists in companion source.
+    const companionSrcForFav = read('companion/extension.ts');
+    check(
+      'companion/extension.ts calls executeCommand with the canonical ccStatusDot.fav.focusSession id',
+      companionSrcForFav.includes('"ccStatusDot.fav.focusSession"'),
+      'must match patch.ts FAV_FOCUS_CMD or the bridge breaks silently',
+    );
+    // And the IIFE actually emits the literal in the baked bytes.
+    check(
+      'patch.ts IIFE bakes the ccStatusDot.fav.focusSession literal via JSON.stringify(FAV_FOCUS_CMD)',
+      /vs\.commands\.registerCommand\(\$\{JSON\.stringify\(FAV_FOCUS_CMD\)\}/.test(patchSrc),
+    );
+  }
+}
+
 console.log('');
 if (fail === 0) {
   console.log(`All ${pass} contract-sync checks passed.`);

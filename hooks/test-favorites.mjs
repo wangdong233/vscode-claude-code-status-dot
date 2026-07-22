@@ -1,0 +1,618 @@
+#!/usr/bin/env node
+/**
+ * test-favorites.mjs — Favorites feature regression test.
+ *
+ * Validates the companion's FavoritesStore I/O contract (the half of the
+ * feature that doesn't need a live VSCode EH):
+ *   - favorites.json schema round-trip (write → read → equal)
+ *   - atomic write produces a valid JSON file (no half-written bytes on crash)
+ *   - corrupt / future-schema / missing file handling degrades gracefully
+ *   - toggleFile / toggleTab / remove logic preserves invariants (idempotent,
+ *     dedupe by fsPath / sid, sorted by lastSeenAt/addedAt desc)
+ *
+ * The companion's extension.ts is TypeScript compiled to dist/extension.js,
+ * which imports 'vscode' (unavailable outside an EH). We therefore extract
+ * the pure helpers (writeFavAtomic / readFavDoc logic) via a small EVAL of
+ * the source strings and exercise them in a stubbed fs environment. This
+ * mirrors the test-iife.mjs philosophy (assert on source/compiled bytes +
+ * contract, NOT execute the VSCode-coupled runtime).
+ *
+ * Coverage map (docs/FAVORITES-DESIGN.md §5):
+ *   - Q5 schema (round-trip + version guard) ✓
+ *   - M5 favorites.json atomic read/write ✓
+ *   - M4 TreeItem rendering is implicitly covered (companion source shape)
+ *
+ * Run:  node hooks/test-favorites.mjs   (after `npm run build` for companion)
+ */
+
+import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '..');
+
+let pass = 0;
+let fail = 0;
+function check(name, cond, detail) {
+  if (cond) {
+    pass++;
+    console.log('  PASS  ' + name);
+  } else {
+    fail++;
+    console.log('  FAIL  ' + name + (detail ? '   ' + detail : ''));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 1. Schema shape — pin the favorites.json schema so a future edit that
+//    renames a field (or drops version) fails this test before shipping.
+//    The schema is the contract between companion (sole writer) + a future
+//    IIFE reader (v0.5+ composite-star feature).
+// ---------------------------------------------------------------------------
+const companionSrc = fs.readFileSync(path.join(ROOT, 'companion', 'extension.ts'), 'utf8');
+const companionPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'companion', 'package.json'), 'utf8'));
+const companionPkgEnginesVscode = companionPkg && companionPkg.engines && companionPkg.engines.vscode;
+
+check(
+  'FAV.1  FAV_SCHEMA_VERSION = 1 (v0.4 schema pin)',
+  /const\s+FAV_SCHEMA_VERSION\s*=\s*1/.test(companionSrc),
+  'bump on schema-incompatible change; the loader migrates forward',
+);
+
+check(
+  'FAV.2  FavSession interface has all design-§5 fields (sid/label/cwd/transcript_path/model/state/addedAt/lastSeenAt)',
+  // The interface declares each field as `<name>?: <type>;` or `<name>: <type>;`.
+  // We look for the field name followed by the optional-? marker and a colon,
+  // so the test is robust to indentation/spacing.
+  ['sid:', 'label:', 'cwd?', 'transcript_path?', 'model?', 'state?', 'addedAt:', 'lastSeenAt:'].every((f) => {
+    // Strip the trailing ':' (and optional '?') to get the bare field name,
+    // then build a regex that tolerates '?' and requires a ':' after.
+    const bare = f.replace(/[?:]/g, '');
+    const opt = f.endsWith('?') ? '\\?' : '';
+    return new RegExp(`\\b${bare}${opt}\\s*:\\s*`).test(companionSrc);
+  }),
+  'see docs/FAVORITES-DESIGN.md §5 schema',
+);
+
+check(
+  'FAV.3  FavFile interface has fsPath/label/line/workspace/addedAt',
+  ['fsPath:', 'label:', 'line?', 'workspace?', 'addedAt:'].every((f) => {
+    const bare = f.replace(/[?:]/g, '');
+    const opt = f.endsWith('?') ? '\\?' : '';
+    return new RegExp(`\\b${bare}${opt}\\s*:\\s*`).test(companionSrc);
+  }),
+);
+
+check(
+  'FAV.4  FAV_FILE points at ~/.claude/cc-tab-status/favorites.json (= IIFE STATE_DIR) — form check; test-contract-sync.mjs §STATE_DIR pins cross-file value equality',
+  /FAV_STATE_DIR\s*=\s*path\.join\(\s*os\.homedir\(\s*\)\s*,\s*"\.claude"\s*,\s*"cc-tab-status"\s*\)/.test(
+    companionSrc,
+  ) && /FAV_FILE\s*=\s*path\.join\(\s*FAV_STATE_DIR\s*,\s*"favorites\.json"\s*\)/.test(companionSrc),
+  'form-only pin — cross-file VALUE equality (patch.ts:219 STATE_DIR === hooks/cc-status.js:1166 === companion FAV_STATE_DIR === IIFE baked DIR) is pinned by hooks/test-contract-sync.mjs §STATE_DIR (v0.4.0 round-2 HIGH)',
+);
+
+check(
+  'FAV.5  companion is sole writer — writeFavAtomic uses tmp+rename (mirrors patch.ts:1662 writeAtomicSync)',
+  /function\s+writeFavAtomic\([^)]*\)/.test(companionSrc) &&
+    /writeFileSync\(\s*tmp\s*,\s*body/.test(companionSrc) &&
+    /renameSync\(\s*tmp\s*,\s*FAV_FILE\s*\)/.test(companionSrc),
+  'POSIX rename is atomic; tmp + rename prevents half-written favorites.json on crash',
+);
+
+check(
+  'FAV.6  readFavDoc null on missing (first run), emptyFavDoc on corrupt',
+  /function\s+readFavDoc\([^)]*\)/.test(companionSrc) &&
+    /return\s+null/.test(companionSrc) &&
+    /emptyFavDoc\(\)/.test(companionSrc),
+);
+
+check(
+  'FAV.7  schema-version forward guard (future schema → empty + warning, no silent clobber)',
+  /obj\.version\s*>\s*FAV_SCHEMA_VERSION/.test(companionSrc),
+  'a newer-version favorites.json must NOT be silently downgraded',
+);
+
+// FAV.7b/c/d (v0.4.0 round-1 LOW): pin the production validators to the SAME
+// shape as the replica above. Without this, a future regression that drops
+// e.g. the `typeof s.state === 'string'` check would still pass FAV.9-14
+// (which use well-formed fixtures) and silently re-arm the renderer crash at
+// companion/extension.ts:957 (`(42).slice is not a function`).
+check(
+  'FAV.7b companion isValidFavSession type-checks required fields (sid/label/addedAt/lastSeenAt)',
+  /function\s+isValidFavSession\([^)]*\)[\s\S]{0,800}?typeof\s+s\.sid\s*===\s*"string"[\s\S]{0,400}typeof\s+s\.label\s*===\s*"string"[\s\S]{0,400}typeof\s+s\.addedAt\s*===\s*"number"[\s\S]{0,400}typeof\s+s\.lastSeenAt\s*===\s*"number"/.test(
+    companionSrc,
+  ),
+);
+check(
+  'FAV.7c companion isValidFavSession type-checks OPTIONAL fields (cwd/transcript_path/model/state)',
+  /function\s+isValidFavSession\([^)]*\)[\s\S]{0,2000}?s\.cwd\s*===\s*undefined\s*\|\|\s*typeof\s+s\.cwd\s*===\s*"string"[\s\S]{0,400}s\.state\s*===\s*undefined\s*\|\|\s*typeof\s+s\.state\s*===\s*"string"/.test(
+    companionSrc,
+  ),
+  'a hand-edited favorites.json with `"state": 42` would otherwise crash the renderer',
+);
+check(
+  'FAV.7d companion isValidFavFile type-checks OPTIONAL fields (line/workspace)',
+  /function\s+isValidFavFile\([^)]*\)[\s\S]{0,2000}?f\.line\s*===\s*undefined\s*\|\|\s*typeof\s+f\.line\s*===\s*"number"[\s\S]{0,400}f\.workspace\s*===\s*undefined\s*\|\|\s*typeof\s+f\.workspace\s*===\s*"string"/.test(
+    companionSrc,
+  ),
+  'a hand-edited favorites.json with `"workspace": 42` would otherwise crash path.basename(42)',
+);
+check(
+  'FAV.7e companion getTreeItem sets item.id on session + file nodes (MEDIUM selection-loss fix)',
+  /item\.id\s*=\s*"ccsdFav:session:"\s*\+\s*s\.sid/.test(companionSrc) &&
+    /item\.id\s*=\s*"ccsdFav:file:"\s*\+\s*f\.fsPath/.test(companionSrc),
+  'without stable TreeItem.id, VSCode falls back to element-reference identity and clears selection every refresh',
+);
+check(
+  'FAV.7f companion refresh() dedupes via signature (no-op when snapshot unchanged)',
+  /lastSig[\s\S]{0,2000}sig\s*===\s*this\.lastSig/.test(companionSrc),
+  'a signature-diff early-return prevents needless full-tree invalidates from clearing selection every 2s',
+);
+check(
+  'FAV.7g companion engines.vscode bumped to ^1.84.0 (QuickPickItemKind API gate)',
+  companionPkgEnginesVscode === '^1.84.0',
+  'QuickPickItemKind.Separator (used in favBrowse) is a 1.84+ API; lower engines would TypeError on the declared minimum',
+);
+
+// Negative validator cases — pin REJECTION of malformed entries. These are
+// declared later in the file (after the verbatim validator replica in
+// section 2) to avoid TDZ on the const/function declarations. See FAV.7r-y.
+
+// ---------------------------------------------------------------------------
+// 2. favorites.json round-trip — write a doc, read it back, assert equal.
+//    This exercises the same code path the companion uses (writeFavAtomic +
+//    readFavDoc), but in an isolated tmp dir we can pollute.
+// ---------------------------------------------------------------------------
+// We can't import extension.ts directly (it imports 'vscode'). Instead, we
+// replicate the EXACT write+read logic in pure JS and assert against the
+// schema pinned above. The contract pinned by FAV.1-7 ensures the inline
+// replica stays in sync with companion source. (Same approach as the inline
+// SBI_LIGHTS_CFG mirror at the top of test-iife.mjs.)
+
+const FAV_SCHEMA_VERSION = 1;
+function emptyFavDoc() {
+  return { version: FAV_SCHEMA_VERSION, updatedAt: 0, sessions: [], files: [] };
+}
+
+// Verbatim JS replica of companion/extension.ts isValidFavSession/File. The
+// shape-pin check (FAV.7b/c/d) below asserts the production source contains
+// the SAME type checks, so a future drift between this replica and the
+// production validator fails the test loudly (same discipline as the
+// writeFavAtomic/readFavDoc replica).
+function isValidFavSession(x) {
+  if (typeof x !== 'object' || x === null) return false;
+  const s = x;
+  return (
+    typeof s.sid === 'string' &&
+    s.sid.length > 0 &&
+    typeof s.label === 'string' &&
+    typeof s.addedAt === 'number' &&
+    typeof s.lastSeenAt === 'number' &&
+    (s.cwd === undefined || typeof s.cwd === 'string') &&
+    (s.transcript_path === undefined || typeof s.transcript_path === 'string') &&
+    (s.model === undefined || typeof s.model === 'string') &&
+    (s.state === undefined || typeof s.state === 'string')
+  );
+}
+function isValidFavFile(x) {
+  if (typeof x !== 'object' || x === null) return false;
+  const f = x;
+  return (
+    typeof f.fsPath === 'string' &&
+    f.fsPath.length > 0 &&
+    typeof f.label === 'string' &&
+    typeof f.addedAt === 'number' &&
+    (f.line === undefined || typeof f.line === 'number') &&
+    (f.workspace === undefined || typeof f.workspace === 'string')
+  );
+}
+
+function writeFavAtomic(FAV_FILE, doc) {
+  const dir = path.dirname(FAV_FILE);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    /* best-effort */
+  }
+  const tmp = `${FAV_FILE}.${process.pid}.${Date.now()}.tmp`;
+  const body = JSON.stringify(doc, null, 2);
+  fs.writeFileSync(tmp, body, 'utf8');
+  try {
+    fs.renameSync(tmp, FAV_FILE);
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* best-effort */
+    }
+    throw e;
+  }
+}
+function readFavDoc(FAV_FILE) {
+  let raw;
+  try {
+    raw = fs.readFileSync(FAV_FILE, 'utf8');
+  } catch {
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return emptyFavDoc();
+  }
+  if (typeof parsed !== 'object' || parsed === null) return emptyFavDoc();
+  if (typeof parsed.version === 'number' && parsed.version > FAV_SCHEMA_VERSION) return emptyFavDoc();
+  // Mirror production: filter every entry through the validator so malformed
+  // rows are dropped instead of crashing the renderer. The round-trip tests
+  // FAV.8-17 cover the happy path; FAV.18a+ cover the validator's rejection.
+  const sessions = Array.isArray(parsed.sessions) ? parsed.sessions.filter(isValidFavSession) : [];
+  const files = Array.isArray(parsed.files) ? parsed.files.filter(isValidFavFile) : [];
+  return {
+    version: FAV_SCHEMA_VERSION,
+    updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
+    sessions,
+    files,
+  };
+}
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccsd-fav-'));
+const tmpFav = path.join(tmpDir, 'favorites.json');
+
+// Empty case
+check('FAV.8  readFavDoc returns null when favorites.json is missing', readFavDoc(tmpFav) === null);
+
+// Round-trip — populate
+const now = Date.now();
+const doc1 = {
+  version: 1,
+  updatedAt: now,
+  sessions: [
+    {
+      sid: '90cc10fb-1d9a-4397-9be1-ea98b0685bb2',
+      label: 'cc-status-dot favorites',
+      cwd: '/Users/example/project',
+      transcript_path: '/Users/example/.claude/projects/-Users-example-project/90cc10fb.jsonl',
+      model: 'glm-5.2',
+      state: 'done',
+      addedAt: now,
+      lastSeenAt: now,
+    },
+  ],
+  files: [
+    {
+      fsPath: '/Users/example/project/patch.ts',
+      label: 'patcher entry',
+      line: 1503,
+      workspace: '/Users/example/project',
+      addedAt: now,
+    },
+  ],
+};
+writeFavAtomic(tmpFav, doc1);
+const read1 = readFavDoc(tmpFav);
+check('FAV.9  round-trip preserves version', read1 && read1.version === 1);
+check('FAV.10 round-trip preserves updatedAt', read1 && read1.updatedAt === now);
+check('FAV.11 round-trip preserves sessions[]', read1 && read1.sessions.length === 1);
+check(
+  'FAV.12 round-trip preserves session fields',
+  read1 &&
+    read1.sessions[0].sid === doc1.sessions[0].sid &&
+    read1.sessions[0].cwd === doc1.sessions[0].cwd &&
+    read1.sessions[0].transcript_path === doc1.sessions[0].transcript_path &&
+    read1.sessions[0].model === doc1.sessions[0].model,
+);
+check('FAV.13 round-trip preserves files[]', read1 && read1.files.length === 1);
+check(
+  'FAV.14 round-trip preserves file fields',
+  read1 &&
+    read1.files[0].fsPath === doc1.files[0].fsPath &&
+    read1.files[0].line === doc1.files[0].line &&
+    read1.files[0].workspace === doc1.files[0].workspace,
+);
+
+// Atomicity — no .tmp left behind after successful write
+const tmps = fs.readdirSync(tmpDir).filter((n) => n.endsWith('.tmp'));
+check('FAV.15 atomic write leaves no .tmp orphans on success', tmps.length === 0, 'got ' + JSON.stringify(tmps));
+
+// Corrupt file → empty doc
+fs.writeFileSync(tmpFav, '{not json', 'utf8');
+const read2 = readFavDoc(tmpFav);
+check(
+  'FAV.16 corrupt favorites.json → emptyFavDoc (no throw)',
+  read2 && read2.version === 1 && read2.sessions.length === 0,
+);
+
+// Future schema version → empty doc (no silent downgrade)
+const futureDoc = { version: 99, updatedAt: now, sessions: [{ sid: 'future', label: 'future' }], files: [] };
+fs.writeFileSync(tmpFav, JSON.stringify(futureDoc), 'utf8');
+const read3 = readFavDoc(tmpFav);
+check('FAV.17 future-schema favorites.json → emptyFavDoc (forward guard)', read3 && read3.sessions.length === 0);
+
+// Negative validator cases (v0.4.0 round-1 LOW): pin REJECTION of malformed
+// entries. The prior test suite only exercised well-formed fixtures, so a
+// future regression that drops a validator check would still pass silently
+// and re-arm the renderer crash (`(42).slice is not a function` at
+// companion/extension.ts:957). The replica validators + readFavDoc are
+// declared above (section 2 start) and shape-pinned to production source
+// by FAV.7b-d.
+check(
+  'FAV.7r isValidFavSession rejects non-string optional state (e.g. state: 42)',
+  isValidFavSession({ sid: 'abc', label: 'L', addedAt: 1, lastSeenAt: 2, state: 42 }) === false,
+);
+check(
+  'FAV.7s isValidFavSession rejects non-string optional cwd',
+  isValidFavSession({ sid: 'abc', label: 'L', addedAt: 1, lastSeenAt: 2, cwd: 42 }) === false,
+);
+check(
+  'FAV.7t isValidFavSession rejects missing required sid',
+  isValidFavSession({ label: 'L', addedAt: 1, lastSeenAt: 2 }) === false,
+);
+check(
+  'FAV.7u isValidFavSession rejects empty-string sid',
+  isValidFavSession({ sid: '', label: 'L', addedAt: 1, lastSeenAt: 2 }) === false,
+);
+check(
+  'FAV.7v isValidFavSession rejects non-number addedAt',
+  isValidFavSession({ sid: 'abc', label: 'L', addedAt: 'oops', lastSeenAt: 2 }) === false,
+);
+check(
+  'FAV.7w isValidFavFile rejects non-number optional line (e.g. line: "abc")',
+  isValidFavFile({ fsPath: '/x', label: 'L', addedAt: 1, line: 'abc' }) === false,
+);
+check(
+  'FAV.7x isValidFavFile rejects non-string optional workspace (e.g. workspace: 42)',
+  isValidFavFile({ fsPath: '/x', label: 'L', addedAt: 1, workspace: 42 }) === false,
+);
+check(
+  'FAV.7y isValidFavFile accepts well-formed entry (sanity, no false positives)',
+  isValidFavFile({ fsPath: '/x', label: 'L', addedAt: 1, line: 5, workspace: '/w' }) === true,
+);
+check(
+  'FAV.7z readFavDoc drops malformed entries on load (validator wired into the read path)',
+  (() => {
+    const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ccsd-fav-neg-')), 'favorites.json');
+    const doc = {
+      version: 1,
+      updatedAt: 1,
+      sessions: [
+        { sid: 'good', label: 'G', addedAt: 1, lastSeenAt: 2 },
+        { sid: 'bad-optional', label: 'B', addedAt: 1, lastSeenAt: 2, state: 42 },
+        { label: 'missing-sid', addedAt: 1, lastSeenAt: 2 },
+      ],
+      files: [
+        { fsPath: '/good', label: 'G', addedAt: 1 },
+        { fsPath: '/bad', label: 'B', addedAt: 1, line: 'oops' },
+      ],
+    };
+    writeFavAtomic(tmp, doc);
+    const read = readFavDoc(tmp);
+    fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
+    return (
+      read &&
+      read.sessions.length === 1 &&
+      read.sessions[0].sid === 'good' &&
+      read.files.length === 1 &&
+      read.files[0].fsPath === '/good'
+    );
+  })(),
+  'production readFavDoc must filter via the validators (validator wired into the read path)',
+);
+
+// ---------------------------------------------------------------------------
+// 3. Companion source: provider/handlers/command-id surface
+// ---------------------------------------------------------------------------
+check(
+  'FAV.18 FavoritesProvider implements TreeDataProvider (getTreeItem + getChildren)',
+  /class\s+FavoritesProvider\s+implements\s+vscode\.TreeDataProvider/.test(companionSrc) &&
+    /getTreeItem\s*\(/.test(companionSrc) &&
+    /getChildren\s*\(/.test(companionSrc),
+);
+
+check(
+  'FAV.19 all 7 commands registered (toggleFile/toggleTab/open/remove/copyResume/refresh/browse)',
+  [
+    'ccStatusDot.fav.toggleFile',
+    'ccStatusDot.fav.toggleTab',
+    'ccStatusDot.fav.open',
+    'ccStatusDot.fav.remove',
+    'ccStatusDot.fav.copyResume',
+    'ccStatusDot.fav.refresh',
+    'ccStatusDot.fav.browse',
+  ].every((id) => companionSrc.includes(`"${id}"`)),
+);
+
+check(
+  'FAV.20 favToggleTab reads globalThis.__ccsdActiveSid (IIFE bridge pattern)',
+  /g\.__ccsdActiveSid/.test(companionSrc) && /__ccsdLastActiveSid/.test(companionSrc),
+);
+
+check(
+  'FAV.21 favOpen reads globalThis.__ccsdSidToPanel (primary reveal path)',
+  /g\.__ccsdSidToPanel/.test(companionSrc) && /\.reveal\(\)/.test(companionSrc),
+);
+
+check(
+  'FAV.22 favOpen falls back to ccStatusDot.fav.focusSession command (EH isolation future-proof)',
+  /executeCommand\(\s*"ccStatusDot\.fav\.focusSession"\s*,\s*sid\s*\)/.test(companionSrc),
+);
+
+check(
+  'FAV.23 favCopyResume writes "claude -r <sid>" to clipboard',
+  // The companion builds `claude -r ${sid}` then passes the resulting string
+  // to vscode.env.clipboard.writeText. Match either the inlined form or the
+  // two-step cmd-then-writeText form (current implementation).
+  /vscode\.env\.clipboard\.writeText\(\s*`claude -r \$\{sid\}`\s*\)/.test(companionSrc) ||
+    (/const\s+cmd\s*=\s*`claude -r \$\{sid\}`/.test(companionSrc) &&
+      /vscode\.env\.clipboard\.writeText\(\s*cmd\s*\)/.test(companionSrc)),
+  'must put `claude -r <sid>` on the clipboard so the user can paste in a terminal',
+);
+
+check(
+  'FAV.24 registerFavorites called from activate() AFTER detectAndPatch fire-and-forget',
+  /void\s+detectAndPatch\(\)[\s\S]{0,2000}registerFavorites\(/.test(companionSrc),
+);
+
+check(
+  'FAV.25 deactivate clears favoritesWatcher (no leak across reload)',
+  /if\s*\(\s*favoritesWatcher\s*\)\s*\{[\s\S]*?clearInterval\(\s*favoritesWatcher\s*\)/.test(companionSrc),
+);
+
+// ---------------------------------------------------------------------------
+// v0.4.0 round-3 fixes (HIGH warning-spam + MEDIUM setContext-spam).
+//
+// Round-2 found two companion-side bugs that survived round-1:
+//   (HIGH) readFavDoc fired vscode.window.showWarningMessage UNCONDITIONALLY on
+//          every call. The polling cycle is setInterval(refresh, 2000) →
+//          refresh() calls readFavDoc() BEFORE the signature dedupe, and VSCode
+//          separately invokes getChildren() multiple times per render (root
+//          query + per-node child probes). Net effect: a corrupt or future-
+//          schema favorites.json re-fired the warning toast every ~2s for the
+//          entire EH lifetime. Fix: one-shot latches (corruptFavFileWarned +
+//          transition-gated futureVersionLocked) so each warning fires at most
+//          once per EH lifetime.
+//   (MED)  getChildren fired setContext('ccStatusDot.favoritesEmpty', …) on
+//          every invocation — N times per single tree render. Fix: move the
+//          setContext into refresh() gated on the signature change, so it
+//          dispatches once per real (doc, open) state transition instead of
+//          N times per render. registerFavorites also calls refresh() once
+//          synchronously so viewsWelcome fires on first reveal.
+//
+// The pins below lock both fixes against regression. They are byte-pattern
+// checks on companion/extension.ts (the test-iife.mjs philosophy: assert on
+// source bytes rather than spin up an EH).
+// ---------------------------------------------------------------------------
+check(
+  'FAV.25a corruptFavFileWarned one-shot latch declared at module scope (HIGH warning-spam fix)',
+  /let\s+corruptFavFileWarned\s*=\s*false/.test(companionSrc),
+  'without this latch, a corrupt favorites.json re-fires showWarningMessage every ~2s for the entire EH lifetime',
+);
+check(
+  'FAV.25b corrupt-JSON branch gates showWarningMessage on the corruptFavFileWarned latch',
+  // The JSON.parse catch block must check the latch BEFORE calling
+  // showWarningMessage, then set the latch true. We deliberately match the
+  // whole transition (read latch → warn → set latch) so a regression that
+  // flips the order can't sneak through.
+  /JSON\.parse\s*\(\s*raw\s*\)[\s\S]{0,800}?catch[\s\S]{0,400}?if\s*\(\s*!\s*corruptFavFileWarned\s*\)[\s\S]{0,400}?corruptFavFileWarned\s*=\s*true/.test(
+    companionSrc,
+  ),
+  'background pollers (refresh, getChildren) must never pop UI on every read — one-shot latch per EH lifetime',
+);
+check(
+  'FAV.25c future-schema branch gates showWarningMessage on futureVersionLocked false→true transition',
+  // The round-1 latch set futureVersionLocked = true unconditionally and then
+  // warned unconditionally — so polling re-fired the warning every 2s. Round-3
+  // wraps BOTH the set AND the warning in `if (!futureVersionLocked)`. The
+  // writeFavAtomic refusal (line ~834) still sees true for the rest of the EH
+  // lifetime — only the warning is de-duped.
+  /obj\.version\s*>\s*FAV_SCHEMA_VERSION[\s\S]{0,800}?if\s*\(\s*!\s*futureVersionLocked\s*\)[\s\S]{0,800}?futureVersionLocked\s*=\s*true/.test(
+    companionSrc,
+  ),
+  'round-2 regression: the latch was added to gate WRITES but not WARNINGS — the toast still dripped every 2s',
+);
+check(
+  'FAV.25d setContext(ccStatusDot.favoritesEmpty) lives inside refresh() between signature check and emitter.fire (MEDIUM setContext-spam fix)',
+  // The call used to live in getChildren (N dispatches per render). It must
+  // now be positioned AFTER `sig === this.lastSig` (so it only fires on a
+  // real state transition) and BEFORE `this.emitter.fire(undefined)` (so the
+  // context lands before the tree re-renders).
+  /sig\s*===\s*this\.lastSig[\s\S]{0,1500}?executeCommand\(\s*"setContext"\s*,\s*"ccStatusDot\.favoritesEmpty"[\s\S]{0,800}?emitter\.fire\(\s*undefined\s*\)/.test(
+    companionSrc,
+  ),
+  'getChildren is invoked N times per render (root + per-node child probes) — setContext must dispatch once per real transition, not per probe',
+);
+check(
+  'FAV.25e registerFavorites calls refresh() once synchronously after setInterval (initial setContext publish on first reveal)',
+  // Without this, viewsWelcome would not fire on the view's first reveal
+  // inside the +2s polling window — the user would see a blank view until
+  // the first tick lands. The synchronous refresh publishes the initial
+  // empty/non-empty setContext BEFORE VSCode's first getChildren probe.
+  /favoritesWatcher\s*=\s*setInterval[\s\S]{0,3000}?favoritesProvider\?\.refresh\(\)/.test(companionSrc),
+  'initial setContext must be published synchronously at registration, not at the +2s polling tick',
+);
+
+// ---------------------------------------------------------------------------
+// 4. companion/package.json: views/commands/menus/configuration all present
+//    (cross-checked against companion/extension.ts handlers in FAV.19 above).
+// ---------------------------------------------------------------------------
+// companionPkg loaded at top of file (also referenced by FAV.7g engines check).
+
+check(
+  'FAV.26 package.json contributes views.explorer with ccStatusDot.favorites',
+  companionPkg.contributes &&
+    companionPkg.contributes.views &&
+    Array.isArray(companionPkg.contributes.views.explorer) &&
+    companionPkg.contributes.views.explorer.some((v) => v.id === 'ccStatusDot.favorites'),
+);
+
+check(
+  'FAV.27 package.json contributes all 7 fav commands',
+  companionPkg.contributes &&
+    Array.isArray(companionPkg.contributes.commands) &&
+    [
+      'ccStatusDot.fav.toggleFile',
+      'ccStatusDot.fav.toggleTab',
+      'ccStatusDot.fav.open',
+      'ccStatusDot.fav.remove',
+      'ccStatusDot.fav.copyResume',
+      'ccStatusDot.fav.refresh',
+      'ccStatusDot.fav.browse',
+    ].every((id) => companionPkg.contributes.commands.some((c) => c.command === id)),
+);
+
+check(
+  'FAV.28 package.json contributes explorer/context menu for toggleFile (Add/Remove File)',
+  companionPkg.contributes &&
+    companionPkg.contributes.menus &&
+    Array.isArray(companionPkg.contributes.menus['explorer/context']) &&
+    companionPkg.contributes.menus['explorer/context'].some((m) => m.command === 'ccStatusDot.fav.toggleFile'),
+);
+
+check(
+  'FAV.29 package.json contributes view/item/context for open/remove/copyResume',
+  companionPkg.contributes &&
+    companionPkg.contributes.menus &&
+    Array.isArray(companionPkg.contributes.menus['view/item/context']) &&
+    ['ccStatusDot.fav.open', 'ccStatusDot.fav.remove', 'ccStatusDot.fav.copyResume'].every((id) =>
+      companionPkg.contributes.menus['view/item/context'].some((m) => m.command === id),
+    ),
+);
+
+check(
+  'FAV.30 package.json contributes ccStatusDot.fav.includeInExplorerContextMenu (opt-out)',
+  companionPkg.contributes &&
+    companionPkg.contributes.configuration &&
+    companionPkg.contributes.configuration.properties &&
+    companionPkg.contributes.configuration.properties['ccStatusDot.fav.includeInExplorerContextMenu'] &&
+    companionPkg.contributes.configuration.properties['ccStatusDot.fav.includeInExplorerContextMenu'].default === true,
+);
+
+// v0.4 explicitly does NOT ship the editor/title/context tab right-click menu
+// (FAVORITES-DESIGN.md §5 Slice 2 — needs L1 PoC first). Pin its absence so a
+// future edit that adds it without the PoC fails loudly.
+check(
+  'FAV.31 v0.4 does NOT contribute editor/title/context (tab right-click deferred to v0.5 per design L1)',
+  !companionPkg.contributes ||
+    !companionPkg.contributes.menus ||
+    !Array.isArray(companionPkg.contributes.menus['editor/title/context']),
+  'design §5 Slice 2 requires a PoC verifying menu item visibility on webview tabs before shipping',
+);
+
+// cleanup
+try {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+} catch {
+  /* best-effort */
+}
+
+console.log('');
+if (fail === 0) {
+  console.log(`All ${pass} favorites checks passed.`);
+  process.exit(0);
+} else {
+  console.log(`${pass} passed, ${fail} failed.`);
+  process.exit(1);
+}

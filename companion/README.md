@@ -14,7 +14,17 @@ Claude Code 的 VS Code 扩展自动更新时，`extension.js` 被替换为全�
 2. 若标记缺失（CC 更新覆盖了），自动重跑 patcher（`node ~/.claude/cc-status-dot/patch.js`）。
 3. 提示一次 **Reload Window** 激活新 patch。
 
-就这些——没有状态栏、没有命令、没有设置，纯粹的自愈看护。
+## v0.4.0 新增：CC Favorites 视图
+
+自 v0.4.0 起，本配套扩展额外承载 **收藏/导航** 功能（设计全文见 [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md)）：
+
+- **资源管理器（Explorer）侧边栏新增 "CC Favorites" 视图**——在 Explorer 头部右键勾选即可显示。
+- **收藏文件**：在 Explorer 中右键任意文件 → **CC Favorites: Add/Remove File**。配置项 `ccStatusDot.fav.includeInExplorerContextMenu`（默认开）可 opt-out。
+- **收藏 CC 会话**：当前活动的 Claude Code 会话，从命令面板运行 **CC Favorites: Star/Unstar Current CC Tab**。
+- **导航**：点击文件节点跳到该文件（带行号定位）；点击已开会话节点焦点切到该 webview panel；右键已闭会话节点 → **CC Favorites: Copy 'claude -r <sid>'** 把 resume 命令复制到剪贴板（重开已闭会话为 webview panel 是 CC 上游架构性限制，详见设计文档 D1）。
+- **命令面板**浏览：**CC Favorites: Browse** 用 QuickPick 键盘导航。
+
+收藏存储在 `~/.claude/cc-tab-status/favorites.json`（atomic 写）。本扩展是唯一写者；IIFE 在 v0.4 不读此文件（Q3 方案 c：星标只在 Favorites 视图用 ThemeIcon，tab icon 不变；v0.5 复合星标落地后 IIFE 才会读）。
 
 ## 安装
 
@@ -48,6 +58,7 @@ npm run package:vsix   # → cc-status-dot-companion-0.2.0.vsix
 ---
 
 <a name="english"></a>
+
 # cc-status-dot Companion (English)
 
 [简体中文](#) | **English**
@@ -64,7 +75,17 @@ When Claude Code's VS Code extension auto-updates, its `extension.js` is replace
 2. If the marker is missing (CC update wiped it), it re-runs the patcher (`node ~/.claude/cc-status-dot/patch.js`).
 3. Offers a one-click **Reload Window** to activate the fresh patch.
 
-That's the whole feature surface. No status bar, no commands, no settings.
+## v0.4.0: CC Favorites view
+
+Starting at v0.4.0 this companion also hosts the **Favorites/navigation** feature (full design: [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md)):
+
+- **A "CC Favorites" view in the Explorer sidebar** — toggle it on via the Explorer header right-click menu.
+- **Favorite files**: right-click any file in Explorer → **CC Favorites: Add/Remove File**. The setting `ccStatusDot.fav.includeInExplorerContextMenu` (default on) lets you opt out of a crowded menu.
+- **Favorite CC sessions**: with a Claude Code tab active, run **CC Favorites: Star/Unstar Current CC Tab** from the Command Palette.
+- **Navigation**: clicking a file node jumps to it (with line cursor); clicking an open session node focuses its webview panel; right-clicking a closed session offers **CC Favorites: Copy 'claude -r <sid>'** to put the resume command on the clipboard (reopening a closed session as a webview panel is an upstream-CC architectural limit — see the design doc D1).
+- **Browse via QuickPick**: run **CC Favorites: Browse** for keyboard navigation.
+
+Favorites are stored at `~/.claude/cc-tab-status/favorites.json` (atomic writes). This extension is the sole writer; the IIFE does not read it in v0.4 (Q3 option c: stars are a ThemeIcon in the Favorites view only, the tab icon is unchanged; v0.5's tab composite-star feature will read it via mtime-cache).
 
 ## Install
 

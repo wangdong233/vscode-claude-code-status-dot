@@ -1,22 +1,151 @@
 {
   "name": "cc-status-dot-companion",
   "displayName": "cc-status-dot Companion",
-  "description": "Detects Claude Code extension auto-updates and silently re-applies the cc-status-dot patch. Ships inside the vscode-claude-code-status-dot npm package — install via: npx vscode-claude-code-status-dot",
-  "version": "0.3.1",
+  "description": "Detects Claude Code extension auto-updates and silently re-applies the cc-status-dot patch, plus a CC Favorites view for pinning files and CC sessions (v0.4.0+). Ships inside the vscode-claude-code-status-dot npm package — install via: npx vscode-claude-code-status-dot",
+  "version": "0.4.0",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.84.0"
   },
   "categories": [
     "Other"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onView:ccStatusDot.favorites"
   ],
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "ccStatusDot.favorites",
+          "name": "CC Favorites",
+          "icon": "$(star-full)",
+          "contextualTitle": "CC Favorites"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "ccStatusDot.favorites",
+        "contents": "No favorites yet.\nRight-click a file in Explorer to add it.\n[Refresh](command:ccStatusDot.fav.refresh)\nTo favorite the active Claude Code session, run **CC Favorites: Star/Unstar Current CC Tab** from the Command Palette.",
+        "when": "ccStatusDot.favoritesEmpty == true"
+      }
+    ],
+    "commands": [
+      {
+        "command": "ccStatusDot.fav.toggleFile",
+        "title": "CC Favorites: Add/Remove File",
+        "icon": "$(star-full)",
+        "category": "CC Favorites"
+      },
+      {
+        "command": "ccStatusDot.fav.toggleTab",
+        "title": "CC Favorites: Star/Unstar Current CC Tab",
+        "icon": "$(star-full)",
+        "category": "CC Favorites"
+      },
+      {
+        "command": "ccStatusDot.fav.open",
+        "title": "CC Favorites: Open",
+        "icon": "$(go-to-file)",
+        "category": "CC Favorites"
+      },
+      {
+        "command": "ccStatusDot.fav.remove",
+        "title": "CC Favorites: Remove",
+        "icon": "$(close)",
+        "category": "CC Favorites"
+      },
+      {
+        "command": "ccStatusDot.fav.copyResume",
+        "title": "CC Favorites: Copy 'claude -r <sid>'",
+        "icon": "$(copy)",
+        "category": "CC Favorites"
+      },
+      {
+        "command": "ccStatusDot.fav.refresh",
+        "title": "CC Favorites: Refresh",
+        "icon": "$(refresh)",
+        "category": "CC Favorites"
+      },
+      {
+        "command": "ccStatusDot.fav.browse",
+        "title": "CC Favorites: Browse",
+        "icon": "$(list-filter)",
+        "category": "CC Favorites"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "ccStatusDot.fav.toggleFile",
+          "when": "!explorerResourceIsFolder && config.ccStatusDot.fav.includeInExplorerContextMenu",
+          "group": "ccsd_favorites@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "ccStatusDot.fav.refresh",
+          "when": "view == ccStatusDot.favorites",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ccStatusDot.fav.browse",
+          "when": "view == ccStatusDot.favorites",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ccStatusDot.fav.open",
+          "when": "view == ccStatusDot.favorites && viewItem =~ /^ccsdFav(SessionOpen|File)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ccStatusDot.fav.remove",
+          "when": "view == ccStatusDot.favorites && viewItem =~ /^ccsdFav/",
+          "group": "inline@2"
+        },
+        {
+          "command": "ccStatusDot.fav.copyResume",
+          "when": "view == ccStatusDot.favorites && viewItem =~ /^ccsdFavSession/",
+          "group": "9_cuts@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ccStatusDot.fav.toggleFile",
+          "when": "resourceLangId != undefined"
+        },
+        {
+          "command": "ccStatusDot.fav.toggleTab"
+        },
+        {
+          "command": "ccStatusDot.fav.refresh",
+          "when": "view == ccStatusDot.favorites"
+        },
+        {
+          "command": "ccStatusDot.fav.browse",
+          "when": "view == ccStatusDot.favorites"
+        },
+        {
+          "command": "ccStatusDot.fav.open",
+          "when": "false"
+        },
+        {
+          "command": "ccStatusDot.fav.remove",
+          "when": "false"
+        },
+        {
+          "command": "ccStatusDot.fav.copyResume",
+          "when": "false"
+        }
+      ]
+    },
     "configuration": {
       "title": "cc-status-dot",
       "properties": {
@@ -107,6 +236,11 @@
           ],
           "default": "both",
           "description": "How to render the live tok/s suffix on the token status bar item: 'off' hides it (for crowded bars / perf-sensitive machines), 'numeric' shows only '1.2k/s', 'sparkline' shows only '▂▄▆█', 'both' (default) shows both."
+        },
+        "ccStatusDot.fav.includeInExplorerContextMenu": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show 'CC Favorites: Add/Remove File' in the Explorer file right-click menu."
         }
       }
     }
@@ -116,7 +250,7 @@
     "package:vsix": "vsce package --no-dependencies -o cc-status-dot-companion-$npm_package_version.vsix"
   },
   "devDependencies": {
-    "@types/vscode": "^1.80.0",
+    "@types/vscode": "^1.84.0",
     "@types/node": "^20.11.0",
     "typescript": "^5.4.0",
     "@vscode/vsce": "^3.2.0"

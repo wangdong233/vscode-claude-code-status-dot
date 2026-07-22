@@ -202,6 +202,19 @@ CC 自动更新会把 patch 整体覆盖掉。**v0.2.0 起**，`npx` 装的时�
 
 VSCode 每次启动时，companion 扩展检测 CC 扩展里的 `cc-status-dot-injected` marker——如果 CC 自动更新把 patch 冲掉了（marker 不见了），companion 自动跑 `node ~/.claude/cc-status-dot/patch.js` 重 patch，并提示一次 `Reload Window`。用户**无感恢复**，不用手动跑 `npx`。
 
+### ⭐ CC Favorites 视图（v0.4.0+）
+
+VSCode 资源管理器侧边栏新增 **CC Favorites** 视图——把常用文件和 CC 会话 pin 在一起，跨面板/跨重启快速跳回。
+
+- **加文件**：在 Explorer 中右键任意文件 → **CC Favorites: Add/Remove File**（设置项 `ccStatusDot.fav.includeInExplorerContextMenu` 默认开，菜单拥挤可关）。
+- **加 CC 会话**：CC tab 处于活动状态时，命令面板搜 **CC Favorites: Star/Unstar Current CC Tab**——当前会话进 Favorites。
+- **跳转**：点文件节点 → 跳到该文件（带行号定位）；点已开会话节点 → 焦点切到那个 CC webview panel；右键已闭会话 → **Copy 'claude -r <sid>'** 复制 resume 命令到剪贴板。
+- **浏览**：命令面板 **CC Favorites: Browse** 用 QuickPick 键盘导航。
+
+收藏存在 `~/.claude/cc-tab-status/favorites.json`（atomic 写，跨重启保留）。完整设计（4 路调研 + 5 个不明确点的确定答案 + 推迟到 v0.5 的风险部分）见 [`docs/FAVORITES-DESIGN.md`](docs/FAVORITES-DESIGN.md)。
+
+> v0.4 已闭会话重开为 webview panel 是 CC 上游架构性限制（CC 无公开 sid-arg 命令、viewType 私有不可冒充、CLI `claude -r <sid>` 开终端非 panel）——所以已闭会话只提供"复制 resume 命令到剪贴板"降级路径。等 Anthropic 上线公开 `claude-vscode.session.open` 命令后本扩展可在 24h 内接入。
+
 ### ⚙️ workflow 跑期间保持 running
 
 后台跑 workflow / subagent 时，主会话保持黄色（不误显绿），不会假报完成——`Stop` 只信 payload 里的 `background_tasks` 计数，不退化漂移。

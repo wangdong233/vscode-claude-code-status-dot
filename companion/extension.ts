@@ -13,14 +13,26 @@
 //   so the user never has to do it by hand.
 //
 // SCOPE — INTENTIONALLY MINIMAL
-//   This extension does NOT duplicate any IIFE logic. It does exactly three
-//   things:
+//   This extension does NOT duplicate any IIFE logic. The detect→patch→reload
+//   safety net (its original purpose) does exactly three things:
 //     1. Detect (grep the CC extension.js for `cc-status-dot-injected`).
 //     2. If absent/stale, exec the patcher in --patch-only mode
 //        (`node <INSTALL_DIR>/patch.js --patch-only`).
 //     3. Reload the window once and show an informational message.
-//   That's it. No status bar, no commands, no settings — the patcher's IIFE is
-//   the only thing that should paint UI.
+//   The patcher's IIFE remains the only thing that paints status-dot UI.
+//
+//   v0.4.0 adds the Favorites feature (docs/FAVORITES-DESIGN.md): a CC
+//   Favorites view in the Explorer sidebar + commands for adding/removing
+//   files and CC sessions, plus navigation back to open sessions. The
+//   Favorites surface lives in THIS extension because VSCode requires a
+//   package.json `contributes.views.explorer` declaration for a tree view to
+//   appear — the IIFE has no package.json to contribute into. The IIFE only
+//   publishes the minimal `globalThis.__ccsdSidToPanel` bridge (§A preamble +
+//   §Z onDidDispose clear) + registers a `ccStatusDot.fav.focusSession`
+//   fallback command; all UI, command handlers, persistence, and tree
+//   rendering live here. detectAndPatch() is unchanged and runs first —
+//   Favorites initialization is fire-and-forget AFTER detect, so a CC update
+//   that needs re-patching is never delayed by Favorites I/O.
 //
 // ACTIVATION
 //   activationEvents: ["onStartupFinished"] (VS Code 1.74+; fires once after
@@ -84,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.3.1";
+const MIN_PATCHER_VERSION = "0.4.0";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -143,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.3.1";
+    return effectiveConfig?.injectVersion ?? "v0.4.0";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -719,11 +731,813 @@ function startRepatchWatcher(extDir: string): void {
     }
 }
 
+// =============================================================================
+// v0.4.0 — Favorites (Explorer tree view + commands + favorites.json)
+// =============================================================================
+// Design contract: docs/FAVORITES-DESIGN.md. The companion owns ALL Favorites
+// UI (this file). The IIFE only publishes `globalThis.__ccsdSidToPanel[sid] =
+// panel` (so we can reveal an open session) + registers the
+// `ccStatusDot.fav.focusSession` fallback command. We never touch the IIFE's
+// status-dot / SBI / token surfaces.
+//
+// Persistence: ~/.claude/cc-tab-status/favorites.json (= IIFE's STATE_DIR,
+// patch.ts:219). Companion is the SOLE writer (atomic tmp+rename, mirrors
+// patch.ts:1662 writeAtomicSync). IIFE does NOT read favorites.json in v0.4.0
+// (Q3 design: tab composite star is deferred to v0.5; v0.4 stars are a
+// ThemeIcon in the Favorites view only).
+//
+// CC coupling: the session-toggle handler reads `globalThis.__ccsdActiveSid`
+// (already maintained by the IIFE — see scheduleLaterRetry:621 for the
+// established globalThis-bridge pattern). The reveal path reads
+// `globalThis.__ccsdSidToPanel[sid]` first (primary, same-EH) and falls back
+// to `vscode.commands.executeCommand("ccStatusDot.fav.focusSession", sid)`
+// (defensive — future-proof if VSCode ever splits EH per extension).
+
+/** Per-session user state directory (mirrors patch.ts:219 STATE_DIR). The
+ *  IIFE writes <sid>.json / <sid>.offset / <sid>.tokens.json here; favorites.json
+ *  joins them as a sibling. Single source of truth is patch.ts:219 — if the
+ *  patcher ever moves STATE_DIR, update this constant in lockstep (and
+ *  companion-config.json's schema). */
+const FAV_STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status");
+const FAV_FILE = path.join(FAV_STATE_DIR, "favorites.json");
+
+/** favorites.json schema version. Bump on schema-incompatible changes; the
+ *  loader migrates forward (or rejects with a clear error) per version. */
+const FAV_SCHEMA_VERSION = 1;
+
+/** setInterval polling interval. fs.watch is unreliable on network drives
+ *  and some macOS configs; poll a tiny file every 2s (mirrors the
+ *  startRepatchWatcher cadence philosophy). */
+const FAV_POLL_MS = 2000;
+
+interface FavSession {
+    sid: string;
+    label: string;
+    cwd?: string;
+    transcript_path?: string;
+    model?: string;
+    state?: string;
+    addedAt: number;
+    lastSeenAt: number;
+}
+
+interface FavFile {
+    fsPath: string;
+    label: string;
+    line?: number;
+    workspace?: string;
+    addedAt: number;
+}
+
+interface FavDoc {
+    version: number;
+    updatedAt: number;
+    sessions: FavSession[];
+    files: FavFile[];
+}
+
+function emptyFavDoc(): FavDoc {
+    return { version: FAV_SCHEMA_VERSION, updatedAt: 0, sessions: [], files: [] };
+}
+
+/** v0.4.0 round-2 (MEDIUM future-version guard hardening): latched true the
+ *  first time readFavDoc sees an on-disk favorites.json whose schema version
+ *  is NEWER than this companion supports. Once latched, writeFavAtomic refuses
+ *  all subsequent writes — the round-0 readFavDoc warning 'Showing an empty
+ *  list to avoid clobbering newer data' was previously contradicted by every
+ *  toggle/remove/open handler unconditionally calling writeFavAtomic, which
+ *  would overwrite the newer file with the in-memory v1 downgrade on the very
+ *  next user action. The latch survives for the EH lifetime (a window reload
+ *  re-reads the file; an upgrade to a companion that supports the newer
+ *  schema writes a fresh file the latch never trips on). */
+let futureVersionLocked = false;
+
+/** v0.4.0 round-3 (HIGH warning-spam fix): one-shot latch twin of
+ *  futureVersionLocked for the CORRUPT-JSON branch of readFavDoc. The polling
+ *  cycle is setInterval(refresh, FAV_POLL_MS=2000) → refresh() calls
+ *  readFavDoc() BEFORE the signature dedupe, and VSCode separately calls
+ *  getChildren() (which also calls readFavDoc) multiple times per tree render
+ *  (root query + per-node child probes). Without a latch, a single corrupt
+ *  favorites.json would re-fire vscode.window.showWarningMessage every ~2s
+ *  for the entire EH lifetime — a steady drip of toasts with no recovery until
+ *  window reload. The latch fires the warning at most once per EH lifetime on
+ *  the first detection; subsequent reads stay silent and the user can act on
+ *  the single toast (fix or delete favorites.json, then reload). Same pattern
+ *  as futureVersionLocked below. */
+let corruptFavFileWarned = false;
+
+/** Atomic write — tmp + rename. Mirrors patch.ts:1662 writeAtomicSync
+ *  discipline (the IIFE's own writer uses the same pattern via writeJsonAtomic
+ *  in hooks/cc-status.js). POSIX rename is atomic by spec, so a crash mid-
+ *  write at worst leaves an orphan .tmp next to FAV_FILE; favorites.json
+ *  itself is never observed half-written.
+ *
+ *  v0.4.0 round-2 (MEDIUM fs-error UX): wraps all fs operations so a
+ *  transient I/O failure (EACCES, ENOSPC, EROFS, cross-device rename) surfaces
+ *  as a single user-facing error notification with a recovery hint, instead of
+ *  the raw VSCode "command 'ccStatusDot.fav.toggleFile' resulted in an error"
+ *  + full stack trace. Returns true on success, false on failure (callers use
+ *  the boolean to roll back in-memory state and trigger a refresh() so the
+ *  tree matches the on-disk truth). The future-version lock (set by
+ *  readFavDoc when the on-disk schema is NEWER than this companion supports)
+ *  refuses the write outright — silently downgrading a v2 file by writing v1
+ *  bytes would destroy newer data the user's next companion upgrade expects
+ *  to find (the round-0 warning text 'Showing an empty list to avoid
+ *  clobbering newer data' is now an honest contract). */
+function writeFavAtomic(doc: FavDoc): boolean {
+    if (futureVersionLocked) {
+        void vscode.window.showErrorMessage(
+            `cc-status-dot: favorites.json was written by a newer companion. Adding, removing, or opening a favorite would overwrite it with an older schema — refusing. Upgrade the companion (or delete the file at ${FAV_FILE}) to make changes.`,
+        );
+        return false;
+    }
+    try {
+        try {
+            fs.mkdirSync(FAV_STATE_DIR, { recursive: true });
+        } catch {
+            /* dir already exists or mkdir best-effort; the write below will
+             * surface a real error if the path is genuinely unwritable. */
+        }
+        const tmp = `${FAV_FILE}.${process.pid}.${Date.now()}.tmp`;
+        const body = JSON.stringify(doc, null, 2);
+        fs.writeFileSync(tmp, body, "utf8");
+        try {
+            fs.renameSync(tmp, FAV_FILE);
+        } catch (e) {
+            try {
+                fs.unlinkSync(tmp);
+            } catch {
+                /* best-effort cleanup; orphan is no worse than today */
+            }
+            throw e;
+        }
+        return true;
+    } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        void vscode.window.showErrorMessage(
+            `cc-status-dot: could not save Favorites (${msg}). Check permissions / disk space on ${FAV_STATE_DIR}.`,
+        );
+        return false;
+    }
+}
+
+/** Read + validate favorites.json. Returns a normalized FavDoc on success
+ *  (defaults applied for missing fields), or null when the file is absent
+ *  (first run). A corrupt/unparseable file is logged + treated as empty
+ *  (companion never bricks activation on a bad favorites.json — the user can
+ *  hand-edit or delete to recover). Schema-version guard: a future version
+ *  bump with no migration path rejects to empty + warning. */
+function readFavDoc(): FavDoc | null {
+    let raw: string;
+    try {
+        raw = fs.readFileSync(FAV_FILE, "utf8");
+    } catch {
+        return null;
+    }
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (e) {
+        // v0.4.0 round-3 (HIGH warning-spam fix): one-shot latch — refresh()
+        // and getChildren() are background pollers that must NEVER pop UI on
+        // every read. Without this gate the 2s polling cycle + VSCode's
+        // per-render getChildren probes re-fired this warning every ~2s for
+        // the entire EH lifetime whenever favorites.json was corrupt.
+        if (!corruptFavFileWarned) {
+            corruptFavFileWarned = true;
+            void vscode.window
+                .showWarningMessage(
+                    `cc-status-dot: favorites.json is corrupt and could not be parsed (${(e as Error).message}). Showing an empty list. Fix or delete the file at ${FAV_FILE}.`,
+                )
+                .then(() => undefined);
+        }
+        return emptyFavDoc();
+    }
+    if (typeof parsed !== "object" || parsed === null) return emptyFavDoc();
+    const obj = parsed as Partial<FavDoc>;
+    if (typeof obj.version === "number" && obj.version > FAV_SCHEMA_VERSION) {
+        // v0.4.0 round-3 (HIGH warning-spam fix): gate BOTH the latch set and
+        // the warning on the false→true transition, so the polling cycle
+        // (refresh → readFavDoc every 2s) and VSCode's per-render getChildren
+        // probes don't re-fire the toast on every read. writeFavAtomic still
+        // sees futureVersionLocked === true for the rest of the EH lifetime
+        // (refuses writes) — only the warning is de-duped.
+        if (!futureVersionLocked) {
+            futureVersionLocked = true;
+            void vscode.window
+                .showWarningMessage(
+                    `cc-status-dot: favorites.json was written by a newer companion (schema v${obj.version}, this companion supports v${FAV_SCHEMA_VERSION}). Showing an empty list to avoid clobbering newer data. Adding/removing/opening favorites is DISABLED until you upgrade the companion or delete the file at ${FAV_FILE}.`,
+                )
+                .then(() => undefined);
+        }
+        return emptyFavDoc();
+    }
+    const sessions = Array.isArray(obj.sessions) ? obj.sessions.filter(isValidFavSession) : [];
+    const files = Array.isArray(obj.files) ? obj.files.filter(isValidFavFile) : [];
+    return {
+        version: FAV_SCHEMA_VERSION,
+        updatedAt: typeof obj.updatedAt === "number" ? obj.updatedAt : Date.now(),
+        sessions,
+        files,
+    };
+}
+
+function isValidFavSession(x: unknown): x is FavSession {
+    if (typeof x !== "object" || x === null) return false;
+    const s = x as Partial<FavSession>;
+    return (
+        typeof s.sid === "string" &&
+        s.sid.length > 0 &&
+        typeof s.label === "string" &&
+        typeof s.addedAt === "number" &&
+        typeof s.lastSeenAt === "number" &&
+        // v0.4.0 round-1 (LOW): type-check optional fields when present, so a
+        // hand-edited or future-schema-downcast favorites.json with e.g.
+        // `"state": 42` is rejected here instead of crashing the renderer
+        // (`(42).slice is not a function` at line 957).
+        (s.cwd === undefined || typeof s.cwd === "string") &&
+        (s.transcript_path === undefined || typeof s.transcript_path === "string") &&
+        (s.model === undefined || typeof s.model === "string") &&
+        (s.state === undefined || typeof s.state === "string")
+    );
+}
+
+function isValidFavFile(x: unknown): x is FavFile {
+    if (typeof x !== "object" || x === null) return false;
+    const f = x as Partial<FavFile>;
+    return (
+        typeof f.fsPath === "string" &&
+        f.fsPath.length > 0 &&
+        typeof f.label === "string" &&
+        typeof f.addedAt === "number" &&
+        // v0.4.0 round-1 (LOW): type-check optional fields when present, so
+        // `"line": "abc"` / `"workspace": 42` is rejected here instead of
+        // crashing path.basename(42) in favBrowse.
+        (f.line === undefined || typeof f.line === "number") &&
+        (f.workspace === undefined || typeof f.workspace === "string")
+    );
+}
+
+/** Discriminated tree-node union. contextValue follows the design's
+ *  ccsdFav* naming so package.json menu `when` clauses
+ *  (`viewItem =~ /^ccsdFav(SessionOpen|File)$/` etc.) route the right
+ *  commands to each node kind. */
+type FavNode =
+    | { kind: "sessionOpen"; session: FavSession }
+    | { kind: "sessionClosed"; session: FavSession }
+    | { kind: "file"; file: FavFile };
+
+/** Snapshot used to detect open vs closed sessions. Built lazily on each
+ *  getChildren call by reading globalThis.__ccsdSidToPanel (published by the
+ *  IIFE's §A preamble — see docs/FAVORITES-DESIGN.md §4.2). */
+function openSidSet(): Set<string> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as Record<string, unknown>;
+    const map = g.__ccsdSidToPanel as Record<string, unknown> | undefined;
+    if (!map || typeof map !== "object") return new Set();
+    return new Set(Object.keys(map));
+}
+
+class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
+    private readonly emitter = new vscode.EventEmitter<FavNode | undefined | null>();
+    readonly onDidChangeTreeData = this.emitter.event;
+
+    /** Last-emitted tree signature. refresh() rebuilds a signature from the
+     *  current (doc, openSidSet) snapshot and bails out when it matches
+     *  lastSig — eliminating needless full-tree invalidates (which would
+     *  otherwise fire every 2s and, combined with VSCode's element-reference
+     *  identity fallback when TreeItem.id is absent, clear the user's
+     *  selection every tick). The signature captures everything the renderer
+     *  can react to: session identity + open/closed kind + label + state, and
+     *  file identity + label + line. */
+    private lastSig = "";
+
+    refresh(): void {
+        const doc = readFavDoc() ?? emptyFavDoc();
+        const open = openSidSet();
+        const sig = JSON.stringify({
+            s: doc.sessions.map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${s.label}|${s.state || ""}`).sort(),
+            f: doc.files.map((f) => `${f.fsPath}|${f.label}|${f.line || 0}`).sort(),
+        });
+        if (sig === this.lastSig) return;
+        this.lastSig = sig;
+        // v0.4.0 round-3 (MEDIUM setContext spam fix): publish the empty-state
+        // setContext HERE (once per real (doc, open) state transition), not in
+        // getChildren. VSCode calls getChildren multiple times per single tree
+        // render — once for the root when the tree invalidates, plus once per
+        // visible node when VSCode probes for children of collapsed-state-
+        // inferred elements — so the previous setContext in getChildren
+        // dispatched a global command N times per render even when the
+        // empty/non-empty boundary hadn't transitioned. Gating here on the
+        // signature change reduces setContext dispatches from N-per-render to
+        // once-per-real-transition, and keeps the 'what the renderer can react
+        // to' invariant (signature + setContext) co-located in one place.
+        // `all.length === 0` in the old getChildren site is equivalent to
+        // `sessions.length === 0 && files.length === 0` here (both arrays are
+        // already validator-filtered inside readFavDoc).
+        const isEmpty = doc.sessions.length === 0 && doc.files.length === 0;
+        void vscode.commands.executeCommand("setContext", "ccStatusDot.favoritesEmpty", isEmpty).then(
+            () => undefined,
+            () => undefined,
+        );
+        // Whole-tree refresh — node identity is unstable across doc edits
+        // (add/remove/reorder), so we always fire with undefined. Cheap (the
+        // tree is typically <50 nodes).
+        this.emitter.fire(undefined);
+    }
+
+    getTreeItem(element: FavNode): vscode.TreeItem {
+        if (element.kind === "file") {
+            const f = element.file;
+            const item = new vscode.TreeItem(vscode.Uri.file(f.fsPath), vscode.TreeItemCollapsibleState.None);
+            // v0.4.0 round-1 (MEDIUM): stable id lets VSCode preserve selection
+            // across refreshes even when the FavNode object reference changes
+            // (getChildren rebuilds the array on every invalidate). Without an
+            // explicit id, VSCode falls back to element-reference identity for
+            // non-Uri-keyed nodes — which a setInterval-driven refresh would
+            // clear every 2s. The ccsdFav: prefix namespaces us away from any
+            // future tree contributor. File nodes already get a stable id from
+            // Uri.file(fsPath), but setting it explicitly is belt-and-braces
+            // and keeps the renderer symmetric across node kinds.
+            item.id = "ccsdFav:file:" + f.fsPath;
+            item.label = f.label || path.basename(f.fsPath);
+            item.contextValue = "ccsdFavFile";
+            item.iconPath = vscode.ThemeIcon.File;
+            const linePart = f.line ? `:${f.line}` : "";
+            item.tooltip = `${f.fsPath}${linePart}\nAdded ${new Date(f.addedAt).toLocaleString()}`;
+            item.description = path.basename(f.fsPath) === f.label ? undefined : path.basename(f.fsPath);
+            item.command = {
+                command: "ccStatusDot.fav.open",
+                title: "Open Favorite",
+                arguments: [element],
+            };
+            return item;
+        }
+        // session (open or closed)
+        const s = element.session;
+        const isOpen = element.kind === "sessionOpen";
+        const item = new vscode.TreeItem(s.label, vscode.TreeItemCollapsibleState.None);
+        // v0.4.0 round-1 (MEDIUM): session nodes have NO resourceUri, so VSCode
+        // cannot fall back to Uri identity — without an explicit id it uses
+        // element-reference identity, which changes on every refresh, clearing
+        // the user's selection every 2s. Pin the id to the sid (stable across
+        // refreshes; the sid is the per-session primary key). The kind suffix
+        // (open/closed) is intentionally NOT in the id — when a session
+        // transitions between open/closed, keeping the id stable lets VSCode
+        // preserve selection across the icon/label refresh.
+        item.id = "ccsdFav:session:" + s.sid;
+        item.contextValue = isOpen ? "ccsdFavSessionOpen" : "ccsdFavSessionClosed";
+        item.iconPath = isOpen ? new vscode.ThemeIcon("comment-discussion") : new vscode.ThemeIcon("circle-slash");
+        item.description = isOpen
+            ? `${String(s.state || "open").slice(0, 12)}`
+            : `(closed)${s.state ? " " + String(s.state).slice(0, 8) : ""}`;
+        const tip = [
+            `sid: ${s.sid.slice(0, 8)}…`,
+            s.cwd ? `cwd: ${s.cwd}` : "",
+            s.model ? `model: ${s.model}` : "",
+            `state: ${s.state || "(unknown)"}`,
+            `added: ${new Date(s.addedAt).toLocaleString()}`,
+            isOpen ? "click to focus panel" : "closed — right-click for resume cmd",
+        ]
+            .filter(Boolean)
+            .join("\n");
+        item.tooltip = tip;
+        if (isOpen) {
+            item.command = {
+                command: "ccStatusDot.fav.open",
+                title: "Focus CC Session",
+                arguments: [element],
+            };
+        }
+        return item;
+    }
+
+    getChildren(element?: FavNode): FavNode[] {
+        // Root-level: surface sessions first (most useful) then files. Children
+        // of a node are not used (collapsibleState=None for every node), so
+        // the element param is only defined when VSCode probes for children
+        // of a node — return [] in that case (no nesting in v0.4).
+        if (element) return [];
+        const doc = readFavDoc() ?? emptyFavDoc();
+        const open = openSidSet();
+        const sessions: FavNode[] = doc.sessions
+            .slice()
+            .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+            .map((s) =>
+                open.has(s.sid) ? { kind: "sessionOpen", session: s } : { kind: "sessionClosed", session: s },
+            );
+        const files: FavNode[] = doc.files
+            .slice()
+            .sort((a, b) => b.addedAt - a.addedAt)
+            .map((f) => ({ kind: "file", file: f }));
+        const all = [...sessions, ...files];
+        // v0.4.0 round-3 (MEDIUM setContext spam fix): the empty-state
+        // setContext used to live here, but VSCode calls getChildren multiple
+        // times per tree render (root query + per-node child probes), so it
+        // dispatched a global command N times per render. The setContext now
+        // lives in refresh() where it fires once per real (doc, open) state
+        // transition (signature change). registerFavorites also calls refresh()
+        // once synchronously after createTreeView so the initial empty/non-
+        // empty state is published BEFORE VSCode's first getChildren probe —
+        // viewsWelcome fires correctly on first reveal without waiting for the
+        // first 2s polling tick.
+        return all;
+    }
+}
+
+/** Singleton provider — created once in activate(), referenced by handlers. */
+let favoritesProvider: FavoritesProvider | null = null;
+/** fs.watchFile-style polling handle (actually setInterval — see comment at
+ *  the registration site for why fs.watchFile alone is insufficient). Cleared
+ *  in deactivate(). */
+let favoritesWatcher: NodeJS.Timeout | null = null;
+
+/** Toggle a file in/out of favorites. Adds with label=basename + optional
+ *  line cursor; removes if already present (same fsPath). Idempotent. */
+function favToggleFile(uri?: vscode.Uri): void {
+    if (!uri) {
+        // Command palette invocation — use the active editor's URI.
+        const ed = vscode.window.activeTextEditor;
+        if (!ed) {
+            void vscode.window.showInformationMessage(
+                "cc-status-dot: open a file first, or right-click one in Explorer to favorite it.",
+            );
+            return;
+        }
+        uri = ed.document.uri;
+    }
+    if (uri.scheme !== "file") {
+        void vscode.window.showInformationMessage(
+            `cc-status-dot: only local files can be favorited (got scheme '${uri.scheme}').`,
+        );
+        return;
+    }
+    const doc = readFavDoc() ?? emptyFavDoc();
+    const fsPath = uri.fsPath;
+    const idx = doc.files.findIndex((f) => f.fsPath === fsPath);
+    const editor = vscode.window.activeTextEditor;
+    const line = editor && editor.document.uri.fsPath === fsPath ? editor.selection.active.line + 1 : undefined;
+    if (idx >= 0) {
+        doc.files.splice(idx, 1);
+        const wrote = writeFavAtomic({ ...doc, updatedAt: Date.now() });
+        if (wrote) {
+            void vscode.window.setStatusBarMessage(`Removed ${path.basename(fsPath)} from Favorites`, 3000);
+        }
+    } else {
+        doc.files.push({
+            fsPath,
+            label: path.basename(fsPath),
+            line,
+            workspace: vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath,
+            addedAt: Date.now(),
+        });
+        const wrote = writeFavAtomic({ ...doc, updatedAt: Date.now() });
+        if (wrote) {
+            void vscode.window.setStatusBarMessage(`Added ${path.basename(fsPath)} to Favorites`, 3000);
+        }
+    }
+    // Always refresh — on write success the tree picks up the new order; on
+    // failure (or future-version lock) the refresh re-reads the disk truth
+    // and rolls back the in-memory splice/push we just did.
+    favoritesProvider?.refresh();
+}
+
+/** Toggle the active CC session (per globalThis.__ccsdActiveSid) in/out of
+ *  favorites. Reads the sid's <sid>.json (when present) to snapshot cwd /
+ *  transcript_path / model / state — the entry is self-contained so the
+ *  favorite survives CC's own SessionEnd cleanup of <sid>.json. Idempotent
+ *  on sid. */
+function favToggleTab(): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as Record<string, unknown>;
+    const sid =
+        (typeof g.__ccsdActiveSid === "string" && g.__ccsdActiveSid) ||
+        (typeof g.__ccsdLastActiveSid === "string" && g.__ccsdLastActiveSid) ||
+        "";
+    if (!sid) {
+        void vscode.window.showInformationMessage(
+            "cc-status-dot: no active Claude Code session. Open a CC tab first, then re-run this command.",
+        );
+        return;
+    }
+    const doc = readFavDoc() ?? emptyFavDoc();
+    const idx = doc.sessions.findIndex((s) => s.sid === sid);
+    if (idx >= 0) {
+        const removed = doc.sessions.splice(idx, 1)[0];
+        const wrote = writeFavAtomic({ ...doc, updatedAt: Date.now() });
+        if (wrote) {
+            void vscode.window.setStatusBarMessage(`Removed session ${removed.sid.slice(0, 8)} from Favorites`, 3000);
+        }
+        favoritesProvider?.refresh();
+        return;
+    }
+    // Snapshot from <sid>.json if available — companion already reads
+    // STATE_DIR for the repatch watcher, and the schema is identical to what
+    // the IIFE consumes (cwd/transcript_path/model/state). Falls back to
+    // sid-derived defaults when the file is missing (rare — only when CC's
+    // SessionEnd ran between the sid going active and this toggle).
+    let label = sid.slice(0, 8);
+    let cwd: string | undefined;
+    let transcript_path: string | undefined;
+    let model: string | undefined;
+    let state: string | undefined;
+    try {
+        const raw = fs.readFileSync(path.join(FAV_STATE_DIR, `${sid}.json`), "utf8");
+        const j = JSON.parse(raw) as Record<string, unknown>;
+        if (typeof j.cwd === "string") cwd = j.cwd;
+        if (typeof j.transcript_path === "string") transcript_path = j.transcript_path;
+        if (typeof j.model === "string") model = j.model;
+        else if (
+            j.tokens &&
+            typeof j.tokens === "object" &&
+            typeof (j.tokens as Record<string, unknown>).last_model === "string"
+        )
+            model = ((j.tokens as Record<string, unknown>).last_model as string).trim();
+        if (typeof j.state === "string") state = j.state;
+        // Best-effort label: prefer transcript's first user prompt later (TODO
+        // for v0.5); for now use cwd basename + state — short, identifiable.
+        if (cwd) label = path.basename(cwd) || label;
+    } catch {
+        /* file missing/corrupt — proceed with sid-derived defaults */
+    }
+    const now = Date.now();
+    doc.sessions.push({
+        sid,
+        label,
+        cwd,
+        transcript_path,
+        model,
+        state,
+        addedAt: now,
+        lastSeenAt: now,
+    });
+    const wrote = writeFavAtomic({ ...doc, updatedAt: now });
+    if (wrote) {
+        void vscode.window.setStatusBarMessage(`Added session ${sid.slice(0, 8)} to Favorites`, 3000);
+    }
+    favoritesProvider?.refresh();
+}
+
+/** Open a favorite. Files: showTextDocument (with line cursor if set).
+ *  Open sessions: reveal the live CC webview panel via the IIFE's
+ *  globalThis.__ccsdSidToPanel bridge, falling back to the
+ *  ccStatusDot.fav.focusSession command the IIFE registers. Closed
+ *  sessions: degrade with a one-off status-bar message + offer the copy-
+ *  resume command via the tree's right-click menu. */
+async function favOpen(node: FavNode): Promise<void> {
+    if (node.kind === "file") {
+        const f = node.file;
+        try {
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(f.fsPath));
+            const range =
+                typeof f.line === "number" && f.line > 0
+                    ? new vscode.Range(Math.max(0, f.line - 1), 0, Math.max(0, f.line - 1), 0)
+                    : undefined;
+            await vscode.window.showTextDocument(doc, { selection: range });
+        } catch (e) {
+            void vscode.window.showErrorMessage(`cc-status-dot: could not open ${f.fsPath} (${(e as Error).message}).`);
+        }
+        return;
+    }
+    if (node.kind === "sessionClosed") {
+        void vscode.window.setStatusBarMessage(
+            `Session ${node.session.sid.slice(0, 8)} is not open in this window. Right-click → Copy 'claude -r <sid>' to resume in a terminal.`,
+            6000,
+        );
+        return;
+    }
+    // sessionOpen — reveal the panel.
+    const sid = node.session.sid;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as Record<string, unknown>;
+    const map = g.__ccsdSidToPanel as { reveal?: () => void; [k: string]: unknown } | undefined;
+    const panel = map && (map[sid] as { reveal?: () => void } | undefined);
+    if (panel && typeof panel.reveal === "function") {
+        try {
+            panel.reveal();
+            // Update lastSeenAt on successful focus (companion is the sole
+            // writer — no race with the IIFE). writeFavAtomic returning false
+            // (future-version lock or fs error) is silent here — the panel
+            // already focused; failing to persist lastSeenAt just means the
+            // session may not float to the top of the list until the next
+            // successful toggle. We do NOT show an error toast on this path
+            // (it would interrupt a successful reveal) — the next toggle's
+            // writeFavAtomic surfaces the same error if it persists.
+            const doc = readFavDoc();
+            if (doc) {
+                const s = doc.sessions.find((x) => x.sid === sid);
+                if (s) {
+                    s.lastSeenAt = Date.now();
+                    writeFavAtomic({ ...doc, updatedAt: Date.now() });
+                }
+            }
+            return;
+        } catch {
+            /* fall through to command path */
+        }
+    }
+    // Fallback: command bridge (works across EH boundary if VSCode ever
+    // splits; the IIFE's handler returns true/false).
+    try {
+        const ok = (await vscode.commands.executeCommand("ccStatusDot.fav.focusSession", sid)) as boolean | undefined;
+        if (ok === true) return;
+    } catch {
+        /* command not registered yet — IIFE hasn't run; fall through */
+    }
+    void vscode.window.setStatusBarMessage(
+        `cc-status-dot: session ${sid.slice(0, 8)} panel not available (CC patch may still be loading). Try again in a moment.`,
+        6000,
+    );
+}
+
+function favRemove(node: FavNode): void {
+    const doc = readFavDoc();
+    if (!doc) return;
+    if (node.kind === "file") {
+        const before = doc.files.length;
+        doc.files = doc.files.filter((f) => f.fsPath !== node.file.fsPath);
+        if (doc.files.length === before) return;
+    } else {
+        const before = doc.sessions.length;
+        doc.sessions = doc.sessions.filter((s) => s.sid !== node.session.sid);
+        if (doc.sessions.length === before) return;
+    }
+    // writeFavAtomic reports its own error toast on failure; on success or
+    // failure we still refresh() so the tree reflects the on-disk truth
+    // (failure rolls back the in-memory filter; success picks up the new
+    // ordering).
+    writeFavAtomic({ ...doc, updatedAt: Date.now() });
+    favoritesProvider?.refresh();
+}
+
+function favCopyResume(node: FavNode): void {
+    if (node.kind === "file") return;
+    const sid = node.session.sid;
+    const cmd = `claude -r ${sid}`;
+    // v0.4.0 round-2 (MEDIUM floating-promise fix): prefix `void` to match
+    // the file's prevailing discipline (8 prior `void` sites). The un-prefixed
+    // `.then` floated a promise whose then-rejection would surface as an
+    // unhandled rejection if VSCode's clipboard IPC threw inside the then
+    // callback (rare — VSCode mid-teardown). Best-effort try/catch around
+    // writeText is belt-and-braces against a synchronous throw on the same
+    // rare path.
+    try {
+        void vscode.env.clipboard.writeText(cmd).then(
+            () => {
+                void vscode.window.setStatusBarMessage(`Copied: ${cmd}`, 4000);
+            },
+            () => {
+                void vscode.window.showErrorMessage(`cc-status-dot: clipboard write failed. Command was: ${cmd}`);
+            },
+        );
+    } catch (e) {
+        void vscode.window.showErrorMessage(
+            `cc-status-dot: clipboard write failed (${(e as Error)?.message ?? String(e)}). Command was: ${cmd}`,
+        );
+    }
+}
+
+/** Refresh the tree. Used by the view/title toolbar button + the
+ *  ccStatusDot.fav.refresh command. */
+function favRefresh(): void {
+    favoritesProvider?.refresh();
+}
+
+/** Browse — open the QuickPick with all favorites for keyboard navigation.
+ *  Mirrors showTokQuickPick's UX (the IIFE's existing QuickPick pattern). */
+async function favBrowse(): Promise<void> {
+    const doc = readFavDoc() ?? emptyFavDoc();
+    const open = openSidSet();
+    type Item = vscode.QuickPickItem & { node?: FavNode };
+    const items: Item[] = [];
+    if (doc.sessions.length > 0) {
+        items.push({ label: "sessions", kind: vscode.QuickPickItemKind.Separator });
+        for (const s of doc.sessions) {
+            const isOpen = open.has(s.sid);
+            items.push({
+                label: (isOpen ? "$(comment-discussion) " : "$(circle-slash) ") + s.label,
+                description: s.sid.slice(0, 8),
+                detail: isOpen ? `state: ${s.state || "?"} — click to focus` : `closed — click for resume hint`,
+                node: { kind: isOpen ? "sessionOpen" : "sessionClosed", session: s },
+            });
+        }
+    }
+    if (doc.files.length > 0) {
+        items.push({ label: "files", kind: vscode.QuickPickItemKind.Separator });
+        for (const f of doc.files) {
+            items.push({
+                label: "$(file) " + f.label,
+                description: f.workspace ? path.basename(String(f.workspace)) : "",
+                detail: f.fsPath + (f.line ? `:${f.line}` : ""),
+                node: { kind: "file", file: f },
+            });
+        }
+    }
+    if (items.length === 0) {
+        void vscode.window.showInformationMessage(
+            "cc-status-dot Favorites: nothing to browse. Right-click a file in Explorer or run 'CC Favorites: Star/Unstar Current CC Tab' to add.",
+        );
+        return;
+    }
+    const picked = (await vscode.window.showQuickPick(items, {
+        placeHolder: "Open a favorite",
+    })) as Item | undefined;
+    if (picked && picked.node) {
+        await favOpen(picked.node);
+    }
+}
+
+/** Register all Favorites contributions. Called from activate() AFTER
+ *  detectAndPatch's fire-and-forget is set up. detectAndPatch is never
+ *  blocked by Favorites I/O. The view auto-activates on first reveal — the
+ *  user does not need a CC tab open to favorite files. */
+function registerFavorites(ctx: vscode.ExtensionContext): void {
+    favoritesProvider = new FavoritesProvider();
+    const tree = vscode.window.createTreeView("ccStatusDot.favorites", {
+        treeDataProvider: favoritesProvider,
+        showCollapseAll: false,
+        canSelectMany: false,
+    });
+    ctx.subscriptions.push(tree);
+
+    ctx.subscriptions.push(
+        vscode.commands.registerCommand("ccStatusDot.fav.toggleFile", favToggleFile),
+        vscode.commands.registerCommand("ccStatusDot.fav.toggleTab", favToggleTab),
+        vscode.commands.registerCommand("ccStatusDot.fav.open", (node?: FavNode) => {
+            if (!node) return;
+            void favOpen(node);
+        }),
+        vscode.commands.registerCommand("ccStatusDot.fav.remove", (node?: FavNode) => {
+            if (!node) return;
+            favRemove(node);
+        }),
+        vscode.commands.registerCommand("ccStatusDot.fav.copyResume", (node?: FavNode) => {
+            if (!node) return;
+            favCopyResume(node);
+        }),
+        vscode.commands.registerCommand("ccStatusDot.fav.refresh", favRefresh),
+        vscode.commands.registerCommand("ccStatusDot.fav.browse", favBrowse),
+    );
+
+    // setInterval polling — refresh the tree every FAV_POLL_MS so it picks up
+    // BOTH (a) external favorites.json mutations (hand-edit, multi-window
+    // concurrent write, this window's own write — covered by re-reading the
+    // file inside refresh()) AND (b) in-memory open/closed transitions
+    // (globalThis.__ccsdSidToPanel publishes by the IIFE on panel show/dispose
+    // WITHOUT touching disk, so fs.watchFile alone would miss these).
+    // refresh() bails out early when the (doc, openSidSet) signature is
+    // unchanged, so this tick is a no-op when the user is idle — no full-tree
+    // invalidate, no selection clearing. 2s cadence mirrors the repatch
+    // watcher's philosophy; fs.watch is unreliable cross-platform so polling a
+    // tiny file is the robust choice.
+    //
+    // v0.4.0 round-2 (MEDIUM unguarded-setInterval fix): try/catch the refresh
+    // so a stray throw inside vscode.EventEmitter.fire (or a future code path
+    // we add to refresh()) does NOT spam an error notification every 2s for
+    // the rest of the window's lifetime. refresh() itself is defensive
+    // (readFavDoc swallows JSON errors), but the emitter's consumers are
+    // VSCode internals whose error contract we don't control — best-effort
+    // try/catch is zero-cost insurance against notification spam.
+    favoritesWatcher = setInterval(() => {
+        try {
+            favoritesProvider?.refresh();
+        } catch {
+            /* best-effort — next tick retries */
+        }
+    }, FAV_POLL_MS);
+    if (typeof (favoritesWatcher as NodeJS.Timeout).unref === "function") {
+        (favoritesWatcher as NodeJS.Timeout).unref();
+    }
+
+    // v0.4.0 round-3 (MEDIUM setContext spam fix): publish the initial empty/
+    // non-empty setContext synchronously upon registration so viewsWelcome
+    // fires correctly on the view's first reveal — without this, the first
+    // setContext would only land at the +2s polling tick, so a user opening
+    // the Favorites view in the first 2s after activation would see a blank
+    // view with no welcome content. Safe to call inline: refresh() is
+    // defensive (readFavDoc swallows all fs/JSON errors → emptyFavDoc) and the
+    // first-time signature check (sig === "" lastSig) always fires once.
+    // Subsequent ticks are deduped by the signature check inside refresh().
+    try {
+        favoritesProvider?.refresh();
+    } catch {
+        /* best-effort — first polling tick retries */
+    }
+}
+
 // Extension entry point. activationEvents: ["onStartupFinished"] fires once
 // after VS Code startup completes (the standard, documented replacement for
 // the never-standardized "onStartup" token, which VS Code silently ignored).
-// We deliberately do not declare contributions — this extension is invisible
-// unless it needs to act.
+//
+// v0.4.0 update: this extension now contributes the CC Favorites view in the
+// Explorer sidebar (views/commands/menus/configuration declared in
+// companion/package.json) ALONGSIDE the detect→patch→reload safety net.
+// detectAndPatch() remains the first thing activate() does and is unchanged —
+// Favorites initialization is fire-and-forget AFTER the detect, so a CC update
+// that needs re-patching is never delayed by Favorites I/O. The pre-v0.4
+// 'invisible unless it needs to act' comment was true for v0.2.3–v0.3.1 (no
+// contributions declared, sole job = re-run the patcher) but is stale as of
+// v0.4.0 — the Favorites view IS a declared contribution.
 export function activate(_ctx: vscode.ExtensionContext): void {
     // v0.2.3: load the patcher-written config FIRST so all subsequent
     // accessors (injectMarker / injectVersion / searchDirs / ccExtIdPrefix)
@@ -770,6 +1584,23 @@ export function activate(_ctx: vscode.ExtensionContext): void {
                 `cc-status-dot companion: detection error (${(e as Error)?.message ?? String(e)})`,
             );
         });
+
+    // v0.4.0: register Favorites (Explorer view + commands + persistence).
+    // Fire-and-forget AFTER detectAndPatch is queued (NOT after it resolves —
+    // Favorites must not wait for a CC update + re-patch that could take
+    // seconds). Favorites has zero IIFE-coupling at registration time — the
+    // sid→panel bridge is read lazily inside command handlers, so a not-yet-
+    // patched CC simply shows "(closed)" for every session favorite until the
+    // patch lands + the user reloads (R5 mitigation per FAVORITES-DESIGN.md).
+    try {
+        registerFavorites(_ctx);
+    } catch (e) {
+        // Surface but do not break activation — the safety net (detectAndPatch)
+        // is the load-bearing half of this extension.
+        vscode.window.showErrorMessage(
+            `cc-status-dot companion: Favorites initialization error (${(e as Error)?.message ?? String(e)})`,
+        );
+    }
 }
 
 export function deactivate(): void {
@@ -783,5 +1614,10 @@ export function deactivate(): void {
     if (laterRetryTimer) {
         clearTimeout(laterRetryTimer);
         laterRetryTimer = null;
+    }
+    // v0.4.0: clear the Favorites tree refresh poller (set in registerFavorites).
+    if (favoritesWatcher) {
+        clearInterval(favoritesWatcher);
+        favoritesWatcher = null;
     }
 }

@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.3.1";
+const INJECT_VERSION = "v0.4.0";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -668,6 +668,30 @@ const TOK_SBI_PRIORITY = -9995;
  *  AND assigned to the token SBI's `.command` field. Mirrors SBI_CLICK_CMD's
  *  pattern. */
 const TOK_CLICK_CMD = "ccStatusDot.tokClick";
+
+// ---------------------------------------------------------------------------
+// v0.4.0: Favorites session-focus command (companion ↔ IIFE EH bridge)
+// ---------------------------------------------------------------------------
+// The companion's Favorites tree wants to focus an already-open CC webview
+// panel when the user clicks a session node. The IIFE holds the only ref to
+// the panel (via t.panelTab inside the per-panel closure); the companion has
+// no panel refs of its own. Two complementary channels exist (see
+// docs/FAVORITES-DESIGN.md §4.1):
+//   1. Shared globalThis — IIFE publishes `globalThis.__ccsdSidToPanel[sid] =
+//      t.panelTab` in the §A preamble; the companion reads it directly (same
+//      EH process, the bridge pattern already established for __ccsdSbi at
+//      companion/extension.ts:621). PRIMARY path.
+//   2. registerCommand — IIFE registers a command handler that does the
+//      reveal; the companion calls it via
+//      `vscode.commands.executeCommand("ccStatusDot.fav.focusSession", sid)`.
+//      FALLBACK path — VSCode's command bridge handles the EH-boundary
+//      orchestration if a future VSCode release splits EH per extension.
+//      Mirrors the existing SBI_CLICK_CMD / TOK_CLICK_CMD pattern
+//      (vs.commands.registerCommand needs NO package.json contribution).
+// Like SBI_CLICK_CMD, this constant is the single source of truth baked into
+// the IIFE at the registerCommand site AND surfaced to the companion via the
+// shared command id string. Mirrors the SBI/Token click command discipline.
+const FAV_FOCUS_CMD = "ccStatusDot.fav.focusSession";
 
 // ---------------------------------------------------------------------------
 // v0.2.4 (intra-version): QuickPick + token SBI tooltip i18n
@@ -1890,6 +1914,18 @@ function buildIIFE(resDir: string): string {
     // source of truth on patch.ts; the writer side mirrors via TOK_TOKENS_EXT
     // and test-contract-sync.mjs pins cross-file equality.
     const tokTokensExtLiteral = JSON.stringify(TOK_TOKENS_EXT);
+    // v0.4.0 round-2 (ARCH-6 HIGH fix): bake STATE_DIR as an absolute path
+    // string literal so a future rename / relocation of the patch.ts:219
+    // STATE_DIR const flows into the IIFE bytes automatically. Pre-fix, the
+    // IIFE hardcoded `pth.join(os.homedir(),".claude","cc-tab-status")` — a
+    // 4th independent copy of the path contract (alongside patch.ts:219,
+    // hooks/cc-status.js:1166, and v0.4.0 companion/extension.ts:FAV_STATE_DIR).
+    // A rename touching only STATE_DIR would leave the IIFE writing to the OLD
+    // directory while the companion (FAV_STATE_DIR) writes favorites.json to
+    // the NEW one → silent cross-surface break. Mirrors the resLiteral
+    // discipline (bakes absolute paths at patch time from os.homedir()).
+    // test-contract-sync.mjs §STATE_DIR pins all four expressions byte-equal.
+    const stateDirLiteral = JSON.stringify(STATE_DIR);
     // v0.2.4 (intra-version i18n): bake the 8-language dictionary as a
     // JSON-stringified object literal. Mirrors the cfgLiteral / dimEmLiteral
     // baking discipline (single source of truth in patch.ts SOURCE; the IIFE
@@ -1923,8 +1959,31 @@ function buildIIFE(resDir: string): string {
         `t.__ccsdDotStarted=true;`,
         `/*SBI panel counter: bumped per IIFE entry; the onDidDispose teardown decrements and disposes the single v0.1.17 SBI on last-panel-out.*/`,
         `globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||0)+1;`,
+        // v0.4.0 FAV BRIDGE §A: window-scoped sid → panel ref map. The
+        // companion's Favorites tree reads this via shared globalThis (companion
+        // + CC IIFE share the same EH process; the same pattern already powers
+        // companion/extension.ts:621's __ccsdSbi read) to call .reveal() on an
+        // open CC session. Populated here in the preamble — the
+        // t.__ccsdDotStarted guard above guarantees this body runs exactly once
+        // per panel, so publishing is idempotent without an extra flag. The sid
+        // is set by replA/replB (this.__ccsdSid=e.request.sessionId) BEFORE the
+        // IIFE is invoked in the comma-expression, so t.__ccsdSid is in scope
+        // and non-empty on the first event fire. Cleared in §Z onDidDispose.
+        // try/catch(_): defensive — globalThis writes can throw under
+        // frozen-prototype scenarios (rare; the outer event parameter is `e`
+        // so we use `catch(_)` to avoid shadowing it).
+        `try{if(!globalThis.__ccsdSidToPanel)globalThis.__ccsdSidToPanel=Object.create(null);if(t.__ccsdSid)globalThis.__ccsdSidToPanel[t.__ccsdSid]=t.panelTab;}catch(_){}`,
         `var fs=require("fs"),pth=require("path"),vs=require("vscode"),os=require("os");`,
-        `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");`,
+        // v0.4.0 round-2 (ARCH-6 HIGH): bake STATE_DIR as an absolute path
+        // literal (computed once at patch time from patch.ts:219 const + the
+        // user's os.homedir()). Pre-fix the IIFE recomputed the path at runtime
+        // from a hardcoded `pth.join(os.homedir(),".claude","cc-tab-status")`,
+        // which was a 4th unsynced copy of the path contract. Renaming
+        // patch.ts STATE_DIR now flows through automatically; the IIFE writes
+        // to the SAME directory the hook (hooks/cc-status.js:1166) and the
+        // companion (FAV_STATE_DIR) write to. See test-contract-sync.mjs
+        // §STATE_DIR for the four-way cross-file byte-equality pin.
+        `var DIR=${stateDirLiteral};`,
         `var RES=${resLiteral};`,
         `var CC_DEFAULT=pth.join(t.context.extensionPath,"resources","claude-logo.svg");`,
         // v0.2.9 (Q5 Fix 1): Uri cache for p.iconPath. VSCode's EH-side
@@ -2099,6 +2158,21 @@ function buildIIFE(resDir: string): string {
         // reset / open state dir), and a link to the full Settings UI.
         // showTokQuickPick is defined below in the same IIFE.
         `try{if(!globalThis.__ccsdTokCmdRegistered){globalThis.__ccsdTokCmdRegistered=true;try{vs.commands.registerCommand(${JSON.stringify(TOK_CLICK_CMD)},function(){try{showTokQuickPick()}catch(e){try{vs.window.showErrorMessage(tr("fbPanelFailPrefix")+(e&&e.message||String(e)))}catch(_){}}})}catch(e){}}}catch(e){}`,
+        // v0.4.0 FAV BRIDGE §D.5: register the ccStatusDot.fav.focusSession
+        // command (FALLBACK path for companion's Favorites tree). Mirrors the
+        // SBI_CLICK_CMD / TOK_CLICK_CMD registerCommand pattern (no package.json
+        // contribution needed — vs.commands.registerCommand is enough, see
+        // patch.ts:639-641). Idempotent via __ccsdFavCmdRegistered; nested
+        // try/catch swallows registerCommand's duplicate-id throw.
+        //
+        // The companion's primary path reads globalThis.__ccsdSidToPanel[sid]
+        // directly (same EH); this command exists so the bridge keeps working
+        // if a future VSCode release splits EH per extension (vscode.commands
+        // orchestrates the cross-EH dispatch). The handler does NOT show error
+        // messages — fail-silent + return false is the right posture for a
+        // reveal() that may race with panel close (the companion's tree
+        // refreshes on the next fs.watch tick and downgrades the node).
+        `try{if(!globalThis.__ccsdFavCmdRegistered){globalThis.__ccsdFavCmdRegistered=true;try{vs.commands.registerCommand(${JSON.stringify(FAV_FOCUS_CMD)},function(sid){try{if(sid&&globalThis.__ccsdSidToPanel&&globalThis.__ccsdSidToPanel[sid]){try{globalThis.__ccsdSidToPanel[sid].reveal()}catch(_){}return true}return false}catch(_){return false}})}catch(e){}}}catch(e){}`,
         // === §E Token panel helpers (fmtTok/fmtUsd/sumTok/readTok) + showTokQuickPick ===
         // v0.2.4 token-panel helpers + showTokQuickPick. Defined BEFORE the
         // tick body so the registerCommand handler above can reference
@@ -2429,7 +2503,7 @@ function buildIIFE(resDir: string): string {
         `},${TICK_MS});`,
         // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid=""}})}catch(e){}`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}/*v0.4.0 FAV BRIDGE §Z: release this panel's entry in the sid→panel map so the companion's Favorites tree sees the session as closed (node grayed out, click degrades to Copy resume cmd). Symmetric to the §A preamble publish; uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdSidToPanel&&t.__ccsdSid)delete globalThis.__ccsdSidToPanel[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid=""}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -2681,10 +2755,28 @@ function injectFresh(extJs: string, src: string): void {
  *  PROJECT_ROOT/resources; phase1 bakes INSTALL_DIR/resources. Returns null if
  *  the literal cannot be found/parsed (treat as "not stale, leave alone").
  *
- *  The match is anchored on `cc-tab-status");var RES=` — the DIR literal always
- *  immediately precedes RES inside OUR IIFE — so a coincidental CC-native
- *  `var RES=` elsewhere in the minified bundle can never be misread. */
+ *  The match is anchored on `var DIR="...";var RES=` — the DIR literal always
+ *  immediately precedes RES inside OUR IIFE (since v0.4.0 round-2, DIR is baked
+ *  as `var DIR=${JSON.stringify(STATE_DIR)};` — an absolute path string literal)
+ *  — so a coincidental CC-native `var RES=` elsewhere in the minified bundle
+ *  can never be misread. The legacy `cc-tab-status"\);var RES=` anchor (pre-v0.4
+ *  IIFE recomputed DIR via `pth.join(os.homedir(),".claude","cc-tab-status")`)
+ *  is retained as a fallback so already-patched installs from older versions
+ *  still detect + migrate cleanly. */
 function bakedResPath(content: string): string | null {
+    // v0.4.0+ IIFE shape: `var DIR="<absolute-state-dir>";var RES="<res>";`.
+    const mNew = content.match(/var DIR="[^"]+";var RES=("[^"]*");/);
+    if (mNew) {
+        try {
+            return JSON.parse(mNew[1]);
+        } catch {
+            /* fall through to legacy anchor */
+        }
+    }
+    // Legacy (pre-v0.4) IIFE shape: `var DIR=pth.join(os.homedir(),".claude","cc-tab-status");var RES=...;`
+    // — kept so bakedResPath still works on extension.js patched by an older
+    // patcher (otherwise a v0.4.0 install running over a v0.3.x-patched CC
+    // would fail to detect + refresh the stale baked RES path).
     const m = content.match(/cc-tab-status"\);var RES=("[^"]*");/);
     if (!m) return null;
     try {

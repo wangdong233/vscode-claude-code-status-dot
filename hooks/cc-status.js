@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.1:8d1a0788*/
+/*cc-status-dot-hook:v0.2.1:9fa57b5c*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -2088,6 +2088,21 @@ async function main() {
         let unlinked = 0;
         for (const name of fs.readdirSync(STATE_DIR)) {
           if (unlinked >= GC_MAX_UNLINKS) break;
+          // v0.4.0 round-2 (CRITICAL data-loss fix): favorites.json lives in
+          // STATE_DIR (companion is the sole writer — see
+          // companion/extension.ts:FAV_STATE_DIR / docs/FAVORITES-DESIGN.md).
+          // It has shape {version,updatedAt,sessions[],files[]} with NO
+          // top-level `state` field and NO `since` field, so without an
+          // explicit skip the isJson branch below would parse it, find
+          // preserved=false + drifted=false, and reap it once mtime is older
+          // than INTERRUPTED_RETENTION_MS (7d) — silently deleting the user's
+          // entire Favorites collection after a week of no activity (e.g. a
+          // vacation). The §GC.favorites test pins this skip explicitly.
+          // Lockstep contract: the basename MUST match companion/FAV_FILE's
+          // basename; test-contract-sync.mjs §STATE_DIR pins the dir equality,
+          // and the literal "favorites.json" is pinned by test-favorites.mjs
+          // FAV.4 (form-only) + this new §GC.favorites test (behavioral).
+          if (name === 'favorites.json') continue;
           // v0.2.7 (Q1 fix): isTokens MUST be tested BEFORE isJson — the file
           // `<sid>.tokens.json` ends with `.json` so the bare isJson check would
           // otherwise match it, then JSON.parse would treat it as a state file

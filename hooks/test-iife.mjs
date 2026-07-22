@@ -358,7 +358,7 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-check('IIFE.21c banner carries v0.3.1 stamp', /\/\*cc-status-dot-injected:v0\.3\.1:/.test(iife));
+check('IIFE.21c banner carries v0.4.0 stamp', /\/\*cc-status-dot-injected:v0\.4\.0:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -1857,10 +1857,18 @@ check(
     // `JSON`, AND `DIR` (the STATE_DIR constant baked into the IIFE outer
     // scope). Re-compile with all of them injected so the standalone
     // extraction can run. This is the SAME shape the IIFE uses at runtime —
-    // DIR is captured from the IIFE's outer
-    // `var DIR=pth.join(os.homedir(),".claude","cc-tab-status")`.
-    // tmpdir used as a fake HOME so os.homedir() inside the function
-    // resolves to our fixture tree.
+    // DIR is captured from the IIFE's outer scope. Since v0.4.0 round-2
+    // (ARCH-6 HIGH) the IIFE bakes DIR as an absolute path string literal
+    // `var DIR=${JSON.stringify(STATE_DIR)};` (e.g.
+    // `var DIR="/Users/me/.claude/cc-tab-status";`) computed once at patch
+    // time from patch.ts:219 const + os.homedir(). Pre-v0.4 the IIFE
+    // recomputed the path at runtime via `pth.join(os.homedir(),".claude",
+    // "cc-tab-status")`; both forms resolve to the same absolute path under
+    // a real user HOME, but the literal form lets a STATE_DIR rename flow
+    // into the IIFE bytes automatically (see test-contract-sync.mjs
+    // §STATE_DIR). tmpdir used as a fake HOME so the state path inside the
+    // harness resolves to our fixture tree (we inject DIR directly via new
+    // Function so the baked literal is not consulted here).
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccsd-delta-'));
     const shimOs = { ...os, homedir: () => tmpHome };
     const stateDir = path.join(tmpHome, '.claude', 'cc-tab-status');
@@ -2681,6 +2689,40 @@ check(
   'IIFE.153c v0.3.1 NO script-src unsafe-inline remains (nonce-only posture)',
   !/script-src\s+\\?'\\?unsafe-inline\\?'/.test(iife),
   'script-src must not use unsafe-inline (nonce replaces it); check CSP meta line + comments for stray mentions',
+);
+
+// IIFE.154-157 v0.4.0 Favorites bridge. The companion's Favorites tree needs
+// to focus an already-open CC webview panel from outside the IIFE's per-panel
+// closure. The IIFE publishes globalThis.__ccsdSidToPanel[sid] = t.panelTab
+// in §A preamble (idempotent — the __ccsdDotStarted guard at IIFE entry
+// guarantees one-shot per panel); §Z onDidDispose deletes the entry; a
+// ccStatusDot.fav.focusSession command is registered as a fallback path
+// (companion's primary path reads the map directly via shared globalThis).
+// See docs/FAVORITES-DESIGN.md §4.1-4.2 for the dual-channel bridge design.
+check(
+  'IIFE.154 v0.4.0 FAV BRIDGE §A — __ccsdSidToPanel initialized + populated',
+  /if\(!globalThis\.__ccsdSidToPanel\)globalThis\.__ccsdSidToPanel=Object\.create\(null\)/.test(iife) &&
+    /globalThis\.__ccsdSidToPanel\[t\.__ccsdSid\]=t\.panelTab/.test(iife),
+  '§A preamble must publish t.panelTab into the window-scoped sid→panel map',
+);
+
+check(
+  'IIFE.155 v0.4.0 FAV BRIDGE §Z — onDidDispose deletes __ccsdSidToPanel[sid]',
+  /if\(globalThis\.__ccsdSidToPanel&&t\.__ccsdSid\)delete globalThis\.__ccsdSidToPanel\[t\.__ccsdSid\]/.test(iife),
+  '§Z onDidDispose must clear the panel entry so the Favorites tree can mark closed sessions',
+);
+
+check(
+  'IIFE.156 v0.4.0 FAV BRIDGE §D.5 — ccStatusDot.fav.focusSession command registered',
+  /__ccsdFavCmdRegistered/.test(iife) && /vs\.commands\.registerCommand\("ccStatusDot\.fav\.focusSession"/.test(iife),
+  'registerCommand fallback path for EH-isolation future-proofing (mirrors SBI_CLICK_CMD pattern)',
+);
+
+check(
+  'IIFE.157 v0.4.0 FAV BRIDGE focusSession handler is fail-safe (returns false on miss, no error popup)',
+  /function\(sid\)\{try\{if\(sid&&globalThis\.__ccsdSidToPanel&&globalThis\.__ccsdSidToPanel\[sid\]\)/.test(iife) &&
+    /return false/.test(iife),
+  'focusSession must NOT throw or show error UI on miss (race with panel close is normal)',
 );
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

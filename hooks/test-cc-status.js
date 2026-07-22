@@ -4272,5 +4272,87 @@ checkPending(
   }
 }
 
+// §GC.favorites v0.4.0 round-2 (CRITICAL): favorites.json lives in STATE_DIR
+// (companion is the sole writer — FAV_STATE_DIR per docs/FAVORITES-DESIGN.md).
+// Its shape {version,updatedAt,sessions[],files[]} has NO top-level `state`
+// field, NO `since` field. Pre-fix: the isJson branch parsed it, found
+// preserved=false + drifted=false, and reaped it once mtime ≥ INTERRUPTED_
+// RETENTION_MS (7d) — silently deleting the user's entire Favorites collection
+// after a week of no activity (e.g. user comes back from vacation, types one
+// prompt, GC wipes favorites.json). This test plants a STALE favorites.json
+// (8 days old, well past the 7d cutoff) and asserts it SURVIVES a
+// UserPromptSubmit GC sweep. Lockstep: the basename "favorites.json" is the
+// contract between this skip and companion/FAV_FILE — a rename on either side
+// breaks the feature silently, so this behavioral test is the load-bearing pin
+// (form-only source pins cannot catch the GC interaction).
+{
+  const home = newTempHome();
+  const dir = path.join(home, '.claude', 'cc-tab-status');
+  fs.mkdirSync(dir, { recursive: true });
+  const favPath = path.join(dir, 'favorites.json');
+  const staleDoc = {
+    version: 1,
+    updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+    sessions: [
+      {
+        sid: 'deadbeef-1234-5678-9abc-def012345678',
+        label: 'stale-but-favorited',
+        cwd: '/Users/example/proj',
+        addedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+        lastSeenAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      },
+    ],
+    files: [
+      {
+        fsPath: '/Users/example/proj/README.md',
+        label: 'README.md',
+        addedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      },
+    ],
+  };
+  fs.writeFileSync(favPath, JSON.stringify(staleDoc, null, 2), 'utf8');
+  // Force mtime to 8 days ago — past INTERRUPTED_RETENTION_MS (7d). Without
+  // the explicit skip this is the exact PRUNE condition.
+  const staleAt = Date.now() / 1000 - 8 * 24 * 60 * 60;
+  fs.utimesSync(favPath, staleAt, staleAt);
+  // Fire UserPromptSubmit for an unrelated sid with GC_INTERVAL_MS=0 so the
+  // sweep definitely runs (skips the 10-min throttle). favorites.json is NOT
+  // the firing sid's basename, so without the skip it would be a candidate.
+  const r = spawnSync(process.execPath, [SCRIPT], {
+    input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'gc-trigger-fav', prompt: 'hi' }),
+    env: Object.assign({}, process.env, { HOME: home, USERPROFILE: home, CC_STATUS_GC_INTERVAL_MS: '0' }),
+    encoding: 'utf8',
+  });
+  let survived = false;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(fs.readFileSync(favPath, 'utf8'));
+    survived = parsed && parsed.sessions && parsed.sessions.length === 1 && parsed.files && parsed.files.length === 1;
+  } catch {
+    survived = false;
+  }
+  if (r.status !== 0 || (r.stderr && r.stderr.trim())) {
+    fail++;
+    console.log(
+      '  FAIL  §GC.favorites child crash exit=' +
+        r.status +
+        ' stderr=' +
+        JSON.stringify((r.stderr || '').trim().slice(0, 200)),
+    );
+  } else if (survived) {
+    pass++;
+    console.log('  PASS  §GC.favorites STALE favorites.json survives GC sweep (data-loss regression guard)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §GC.favorites favorites.json was reaped by GC — data-loss regression (survived=' +
+        survived +
+        ' parsed=' +
+        JSON.stringify(parsed).slice(0, 200) +
+        ')',
+    );
+  }
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

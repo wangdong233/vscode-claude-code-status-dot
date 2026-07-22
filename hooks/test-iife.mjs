@@ -358,7 +358,7 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-check('IIFE.21c banner carries v0.4.0 stamp', /\/\*cc-status-dot-injected:v0\.4\.0:/.test(iife));
+check('IIFE.21c banner carries v0.5.0 stamp', /\/\*cc-status-dot-injected:v0\.5\.0:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -2242,6 +2242,15 @@ check(
 // sweep preserves it. A regression that omitted it from OUR_SVGS would
 // silently ship without the pending dot (the IIFE references the file by
 // name but installRuntimeFiles never copies it → file not found → no icon).
+//
+// v0.5.0: extended to 10 entries (5 base + 5 -fav variants). The -fav
+// variants carry a gold underline at the viewBox bottom (fill #F5A623);
+// installRuntimeFiles auto-copies them via the OUR_SVGS loop, and the
+// stale-sweep auto-preserves them via the OUR_SVGS.includes() guard. A
+// regression that drops any -fav from OUR_SVGS would silently make the
+// favorited tab fall back to the base variant (no gold underline) instead
+// of crashing — but the user-facing feature would be invisibly broken,
+// hence this lock.
 {
   const patchSrc = fs.readFileSync(path.join(ROOT, 'patch.ts'), 'utf8');
   const m = patchSrc.match(/const\s+OUR_SVGS\s*=\s*\[([^\]]+)\]/);
@@ -2252,9 +2261,106 @@ check(
       m[1].includes('"claude-logo-pending.svg"'),
       'OUR_SVGS body: ' + m[1],
     );
-    // Length parity: 5 svgs (idle / running / done / error / pending).
+    // v0.5.0: length is now 10 (5 base + 5 -fav variants for favorited sessions).
     const count = (m[1].match(/"claude-logo-/g) || []).length;
-    check('IIFE.117 OUR_SVGS contains 5 entries (added pending to the 4)', count === 5, 'count=' + count);
+    check('IIFE.117 OUR_SVGS contains 10 entries (5 base + 5 -fav, v0.5.0)', count === 10, 'count=' + count);
+    // v0.5.0: every base variant has a -fav twin.
+    const baseStates = ['idle', 'running', 'done', 'error', 'pending'];
+    for (const st of baseStates) {
+      check(
+        `IIFE.117a OUR_SVGS includes claude-logo-${st}-fav.svg (v0.5.0)`,
+        m[1].includes(`"claude-logo-${st}-fav.svg"`),
+        'OUR_SVGS body: ' + m[1],
+      );
+    }
+    // v0.5.0: IIFE defines FAVF + readFavSet + favOf (fav-detection helpers).
+    check('IIFE.117f IIFE body defines readFavSet helper (v0.5.0 fav detection)', /function readFavSet\(/.test(iife));
+    check(
+      'IIFE.117f2 IIFE body defines __ccsdFavCache (mtime+size cache on favorites.json)',
+      /globalThis\.__ccsdFavCache/.test(iife),
+    );
+    check(
+      'IIFE.117g IIFE body defines favOf helper with leaf-swap to -fav.svg',
+      /function favOf\([^)]*\)[\s\S]*?\.replace\([^)]*?\.svg[^)]*?,\s*["']-fav\.svg["']\)/.test(iife),
+    );
+    check(
+      'IIFE.117h IIFE body references favorites.json via FAVF=pth.join(DIR,...)',
+      /FAVF\s*=\s*pth\.join\(\s*DIR\s*,\s*["']favorites\.json["']\s*\)/.test(iife),
+    );
+    // v0.5.0: the 3 iconPath apply sites (pending early-return, interrupted
+    // on-frame, final apply) MUST be wrapped in favOf(svg,sid) so a favorited
+    // session renders the -fav variant. A regression that dropped any wrap
+    // would leave that one state un-gold-underlined while the others work.
+    check(
+      'IIFE.117i pending early-return iconPath wrapped in favOf (v0.5.0)',
+      /ccuri\(\s*favOf\(\s*pth\.join\(\s*RES\s*,\s*["']claude-logo-pending\.svg["']\s*\)\s*,\s*sid\s*\)\s*\)/.test(
+        iife,
+      ),
+    );
+    check(
+      'IIFE.117j interrupted on-frame iconPath wrapped in favOf (v0.5.0)',
+      /\(\s*flashSeq\s*%\s*2\s*===\s*0\s*\)\s*\?\s*favOf\(\s*pth\.join\(\s*RES\s*,\s*["']claude-logo-error\.svg["']\s*\)\s*,\s*sid\s*\)\s*:\s*CC_DEFAULT/.test(
+        iife,
+      ),
+    );
+    check(
+      'IIFE.117k final iconPath apply wrapped in favOf(svg,sid) (v0.5.0)',
+      /ccuri\(\s*favOf\(\s*svg\s*,\s*sid\s*\)\s*\)/.test(iife),
+    );
+  }
+}
+
+// v0.5.0: 5 -fav SVG files MUST exist on disk in resources/. Each is a
+// byte-copy of its base variant + a single <rect> gold underline (fill
+// #F5A623) at viewBox bottom (y≈22). Mask/path/circle geometry MUST match
+// the base exactly (a hand-drawn -fav that diverged would visually clash
+// with the base 5 across state transitions — same parity rule as
+// IIFE.113/114 between pending.svg and done.svg).
+{
+  const baseStates = ['idle', 'running', 'done', 'error', 'pending'];
+  const extractPath = (s) => {
+    const m = s.match(/d="([^"]+)"/);
+    return m ? m[1] : null;
+  };
+  const extractMask = (s) => {
+    const m = s.match(/<mask id="badge-mask">(\s*<rect[^/]*\/>\s*<circle[^/]*\/>\s*)<\/mask>/);
+    return m ? m[1].replace(/\s+/g, ' ') : null;
+  };
+  for (const st of baseStates) {
+    const favPath = path.join(ROOT, 'resources', `claude-logo-${st}-fav.svg`);
+    let favSvg = '';
+    try {
+      favSvg = fs.readFileSync(favPath, 'utf8');
+    } catch (e) {
+      check(`IIFE.117c resources/claude-logo-${st}-fav.svg exists on disk (v0.5.0)`, false, String(e));
+      continue;
+    }
+    check(`IIFE.117c resources/claude-logo-${st}-fav.svg exists on disk (v0.5.0)`, true);
+    // Gold underline rect: must be present, fill #F5A623, thin (height ≤ 1.0).
+    const rectMatch = favSvg.match(
+      /<rect\s+x="4"\s+y="22"\s+width="16"\s+height="([0-9.]+)"\s+rx="0\.3"\s+fill="#F5A623"\s*\/>/,
+    );
+    check(
+      `IIFE.117d ${st}-fav.svg contains gold underline rect (fill="#F5A623", height<=1.0)`,
+      !!rectMatch && parseFloat(rectMatch[1]) <= 1.0,
+      'rect: ' + (rectMatch ? rectMatch[0] : '<missing>'),
+    );
+    // Geometry parity with base: path d= + mask MUST match byte-for-byte.
+    const basePath = path.join(ROOT, 'resources', `claude-logo-${st}.svg`);
+    let baseSvg = '';
+    try {
+      baseSvg = fs.readFileSync(basePath, 'utf8');
+    } catch (e) {
+      check(`IIFE.117e ${st}-fav.svg base file readable for parity check`, false, String(e));
+      continue;
+    }
+    check(
+      `IIFE.117e ${st}-fav.svg path d= + mask byte-identical to base ${st}.svg (geometry parity)`,
+      extractPath(favSvg) !== null &&
+        extractPath(favSvg) === extractPath(baseSvg) &&
+        extractMask(favSvg) !== null &&
+        extractMask(favSvg) === extractMask(baseSvg),
+    );
   }
 }
 

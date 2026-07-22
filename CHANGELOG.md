@@ -2,6 +2,52 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.5.0] - 2026-07-22
+
+**Favorites tab 右键 + 金线下划线标记：tab 右键直接 star/unstar + 收藏会话的 tab icon 底部加细金线。** 推翻 v0.4 设计 §5 Slice 2 的"先做 PoC"推迟理由——`resourceScheme == 'webview'` 已是 VSCode 暴露的最精确 context key（无 CC 专属 key，handler 内 `__ccsdActiveSid` 校验是唯一过滤器，非 CC webview no-op）。Q3 方案 (a) 落地：每 panel 只一个 iconPath 槽，5 state × 1 favorited = 10 SVG（base 5 不动 + 5 -fav 变体加金线 `<rect>`）。
+
+### Added — Favorites tab 体验补全（v0.5.0 实施范围，设计 §5 Slice 2 + §Q3 方案 a）
+
+- **`editor/title/context` tab 右键菜单**（`companion/package.json` `contributes.menus["editor/title/context"]`）：webview tab 右键加 "CC Favorites: Star/Unstar Current CC Tab"。`when: resourceScheme == 'webview' && config.ccStatusDot.fav.includeInTabContextMenu'`。复用既有 `ccStatusDot.fav.toggleTab` 命令 + `favToggleTab()` handler——handler 内 `__ccsdActiveSid` 校验对非 CC webview（Copilot Chat / Redis Viewer 等）no-op + 信息提示，零副作用。新配置 `ccStatusDot.fav.includeInTabContextMenu`（默认 true）给用户 opt-out 通道。
+- **5 个 `-fav` SVG 变体**（`resources/claude-logo-{idle,running,done,error,pending}-fav.svg`）：base SVG byte-copy + 单个 `<rect x="4" y="22" width="16" height="0.9" rx="0.3" fill="#F5A623"/>` 金线（viewBox 高的 3.7%，不遮 logo asterisk 底部尖端，不遮顶右角状态圆）。`viewBox` 保持 `0 0 24 24` 不扩高，零 aspect ratio 变形。`<title>` 加 "Favorited" 后缀做 a11y 区分。
+- **IIFE fav-detection**（`patch.ts` §A preamble）：3 处新增——(1) `var FAVF=pth.join(DIR,"favorites.json")` 常量（沿用 DIR bake，避免第 4 处硬编码路径）；(2) `readFavSet()` helper（mtime+size 缓存镜像 `__ccsdAgCache`/`__ccsdOffCache` 范式，companion 的 atomic tmp+rename 写入是可靠的 content-change 信号；返回 null-prototype object，keys 为 favorited sids）；(3) `favOf(svgPath, sid)` helper（命中收藏且 leaf 匹配 5 base SVG 之一 → 替换为 `-fav.svg`，否则直返；`CC_DEFAULT` off 帧短路返回保持 interrupted flash 序列完整）。
+- **§H per-panel tick 3 处 iconPath 应用点用 `favOf` 包裹**：pending 早返（`favOf(...pending.svg, sid)`）+ interrupted on-帧（`favOf(...error.svg, sid)`，off 帧 CC_DEFAULT 直返）+ 最终应用（`favOf(svg, sid)`）。状态分支 line 2497-2499 不动——favOf 在最终应用点统一重映射，5 态色/形完全不变，只在 sid∈favorites 时把 leaf `.svg` → `-fav.svg`。
+- **新测试断言**（`hooks/test-iife.mjs` + `hooks/test-favorites.mjs`）：IIFE.117 翻转（5 → 10 entries）+ IIFE.117a-k 新增（OUR_SVGS 含 5 -fav + IIFE helpers 形态 + 3 处 favOf 包裹）+ IIFE.117c-e SVG 几何 parity（path d= byte-identical to base + 金线 `<rect>` 形态断言）+ FAV.31 翻转（v0.4 ABSENCE → v0.5 PRESENCE）+ FAV.31a/b（config key + default === true）。
+
+### Changed
+
+- **`patch.ts OUR_SVGS`** 5 → 10 entries（加 5 -fav 变体）。`installRuntimeFiles` 拷贝循环 + stale SVG sweep 零改动（已通用 OUR_SVGS 驱动）。`log(... ${OUR_SVGS.length} SVGs ...)` 计数自动跟随。
+- **版本 4-way pin** 同步 bump：`package.json` 0.4.0 → 0.5.0；`patch.ts INJECT_VERSION` v0.4.0 → v0.5.0；`companion/package.json` 0.4.0 → 0.5.0（lockstep）；`companion/extension.ts MIN_PATCHER_VERSION` 0.4.0 → 0.5.0 + `injectVersion()` fallback v0.4.0 → v0.5.0。`HOOK_VERSION`（v0.2.1）+ `cc-status.js` hash 不变（writer 无改动）。IIFE body bytes 变 → INJECT banner sha1 自动重算。
+
+### Architecture
+
+- **持久化分工延续**（设计 §4.1 演进）：companion 仍是 favorites.json 单写者（atomic tmp+rename）；IIFE 现在是 reader（v0.4 是不读，v0.5 mtime-cache 读 `sessions[].sid` 集合）。零新 IPC——读盘 + 单元素缓存（`globalThis.__ccsdFavCache.last`）。
+- **handler 无改动**（`favToggleTab()` 已完备）：v0.4 已实现 `__ccsdActiveSid || __ccsdLastActiveSid` 校验 + `favorites.json` 原子写 + 已在 favorites splice / 未在 push，v0.5 仅通过新 menu 暴露同一命令给 webview tab 右键。
+- **5 态色/形完全不变**：状态分支 5 base SVG 选择逻辑（line 2503-2508）零改动；`favOf` 仅在 sid∈favorites 时把 leaf `.svg` → `-fav.svg`，gold underline 是叠加而非替换。状态圆 fill 色（amber/绿/红/灰/蓝）byte-identical。
+
+### Risks
+
+- **menu 误显（scope 太宽）**：`resourceScheme == 'webview'` 让命令出现在所有 webview tab 右键菜单（不仅 CC）。handler `__ccsdActiveSid` 校验对非 CC webview 调用会信息提示 + no-op。用户可设 `ccStatusDot.fav.includeInTabContextMenu: false` opt-out。**LOW**。
+- **mtime-cache 时延**：用户右键 toggle 后，companion writeFavAtomic 改 favorites.json 的 mtime+size，IIFE 下一个 500ms tick 才检测到并 swap -fav.svg。最坏 500ms 内 icon 还是旧变体——用户感知不到。**LOW**。
+- **interrupted flash 视觉**：on 帧显 error-fav.svg（带金线），off 帧显 CC_DEFAULT（无金线），500ms 交替闪烁时金线随之闪。用户 spec 明确"可接受"。**LOW**。
+- **FAV.31 翻转**：`hooks/test-favorites.mjs` 的 v0.4 ABSENCE 断言在同 PR 翻转为 v0.5 PRESENCE 断言，否则新增 menu 会让旧断言失败。
+
+### Version
+
+- `package.json` 0.4.0 → 0.5.0；`patch.ts INJECT_VERSION` v0.4.0 → v0.5.0；`companion/package.json` 0.4.0 → 0.5.0；`companion/extension.ts MIN_PATCHER_VERSION` 0.4.0 → 0.5.0 + `injectVersion()` fallback v0.4.0 → v0.5.0。`HOOK_VERSION`（v0.2.1）+ `cc-status.js` hash 不变（writer 无改动）。
+
+### Tests
+
+- **`hooks/test-iife.mjs`**：IIFE.21c stamp v0.4.0 → v0.5.0；IIFE.117 翻转（5 → 10 entries）；新增 IIFE.117a-k 共 13 项断言（OUR_SVGS 含 5 `-fav` + IIFE helpers 形态 `readFavSet`/`favOf`/`FAVF` + 3 处 `favOf` 包裹校验 + 5 SVG 几何 parity path d= byte-identical to base + 5 金线 `<rect fill="#F5A623">` 形态断言）。
+- **`hooks/test-favorites.mjs`**：FAV.31 翻转（v0.4 ABSENCE → v0.5 PRESENCE）+ FAV.31a/b（`editor/title/context` 被 `config.ccStatusDot.fav.includeInTabContextMenu` 门控 + schema default === true）。
+- **`hooks/test-version-sync.mjs`**：自动验证 4-way version pin（package.json + INJECT_VERSION + companion MIN_PATCHER_VERSION + companion injectVersion fallback），无需新增断言。
+- 总测试断言数：**902**（v0.4 的 ~845 + IIFE 13 + favorites 3 + 现有测试增量）。
+
+### Documentation
+
+- **`docs/FAVORITES-DESIGN.md`** §12.2 Slice 2 行 + §Q3 方案 (a) 行标注"✅ v0.5.0 已实施（金线下划线变体 = 方案 d，base SVG 不动）"；新增 §13 实施摘要（已实施/边界/不破坏清单/版本与文件清单）。
+- **companion/README.md** 列出 tab 右键 menu + 金线变体。
+
 ## [0.4.0] - 2026-07-22
 
 **新增"收藏/导航"机制：Explorer 侧边栏的 CC Favorites 视图 + 文件/会话收藏 + 跨面板导航。** 基于 4 路并行调研（类似插件/VSCode API/cc-status-dot 架构契合/CC 会话生态）综合产出（设计全文 `docs/FAVORITES-DESIGN.md`，裁决 PARTIAL-GO：MVP + 文档化边界）。架构层面明确无问题——companion-based 路径四路独立收敛，companion/package.json 已是合法扩展宿主，加 views/commands/menus 是正常版本 bump 不是架构变更。

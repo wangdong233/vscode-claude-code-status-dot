@@ -94,6 +94,8 @@ CC 的 tab **就是** webview panel tab。CC extension.js 原文调用 `createWe
 
 **v0.5 触发条件**：用户在 v0.4 发布后明确反馈"tab 上也要星标"。
 
+> **v0.5.0 更新（已实施）**：v0.5.0 落地变体 **(d) 金线下划线**（方案 a 的视觉精简版——不引入星标形状，只在 viewBox 底部加细金线 `<rect>` fill #F5A623，base 5 SVG byte-identical 不动）。理由：(1) 比星标更不喧宾夺主（5 态点+状态色保持视觉主导）；(2) 5 base × 1 favorited = 5 -fav 变体（而非 a 的 10 SVG，因为状态圆 fill 不变，只需在尾部追加同一 rect）；(3) IIFE 选择逻辑同方案 a（mtime-cache 读 favorites.json，sid 命中 → leaf `.svg` → `-fav.svg`），3 处 iconPath 应用点用 `favOf(svg,sid)` 包裹。**方案 a 星标路径仍可选**（未来若用户反馈金线不够醒目可切方案 a 的 `…-star.svg`），目前金线变体是 v0.5 的默认实现。
+
 ---
 
 ### Q4 — CC 会话收藏 + 导航：已开会话可达、已闭会话不可达
@@ -645,13 +647,13 @@ companion 树节点点击 handler：`const p = globalThis.__ccsdSidToPanel?.[sid
 
 ### 12.2 推迟到 v0.5+（按设计 §3.2 / §5 Slice 排期）
 
-| #            | 推迟项                                                                  | 触发条件                                                                                                   |
-| ------------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| F1/F2        | Q3 方案 a tab 复合星标 SVG（笛卡尔积 10 SVG / IIFE tick 按 sid 选 SVG） | 用户反馈"tab 上也要星"                                                                                     |
-| Slice 2      | `editor/title/context` tab 右键菜单                                     | 设计 §5 Slice 2 要求先做最小 PoC 验证 webview tab 上 menu item 可见性 + `resourceScheme == 'webview'` 宽度 |
-| F3/F4        | 会话 alias / rename / 分组                                              | 用户反馈"收藏太多需要分组"                                                                                 |
-| F5/D1 完整版 | 已闭会话重开为 CC webview panel                                         | **依赖 CC 上游**：CC 暴露公开 `claude-vscode.session.open` 命令带 sid 参数                                 |
-| Slice 3 可选 | `fav.openTerminal`（在 VSCode 集成终端预填 `claude -r <sid>`）          | v0.4 仅复制命令到剪贴板；用户偏好差异大，剪贴板最中性                                                      |
+| #            | 推迟项                                                                                                                                                                                                                                                                                                                     | 触发条件                                                                   |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| F1/F2        | ✅ **已实施 v0.5.0**（采用变体 d 金线下划线，非方案 a 星标；base SVG 不动，5 -fav 变体 + `<rect>` 金线 fill #F5A623）。方案 a 笛卡尔积 10 SVG 的 IIFE 选择逻辑亦落地（mtime-cache 读 favorites.json）。                                                                                                                    | 已实施（v0.5.0）                                                           |
+| Slice 2      | ✅ **已实施 v0.5.0**（`editor/title/context` tab 右键 menu，`when: resourceScheme == 'webview' && config.ccStatusDot.fav.includeInTabContextMenu'`）。PoC 期间验证的最小路径——`resourceScheme == 'webview'` 是 VSCode 暴露的最精确 context key（无 CC 专属 key）；handler 内 `__ccsdActiveSid` 校验对非 CC webview no-op。 | 已实施（v0.5.0）                                                           |
+| F3/F4        | 会话 alias / rename / 分组                                                                                                                                                                                                                                                                                                 | 用户反馈"收藏太多需要分组"                                                 |
+| F5/D1 完整版 | 已闭会话重开为 CC webview panel                                                                                                                                                                                                                                                                                            | **依赖 CC 上游**：CC 暴露公开 `claude-vscode.session.open` 命令带 sid 参数 |
+| Slice 3 可选 | `fav.openTerminal`（在 VSCode 集成终端预填 `claude -r <sid>`）                                                                                                                                                                                                                                                             | v0.4 仅复制命令到剪贴板；用户偏好差异大，剪贴板最中性                      |
 
 ### 12.3 不破坏清单验证（设计 §9 回归项）
 
@@ -682,3 +684,56 @@ companion 树节点点击 handler：`const p = globalThis.__ccsdSidToPanel?.[sid
 7. `package.json`（main）— version 0.4.0 + test script 加 test-favorites + test:favorites 子脚本
 
 **文档同步**：`CHANGELOG.md`（v0.4.0 条目）、`companion/CHANGELOG.md`（v0.4.0 条目）、`companion/README.md`（定位演进：自愈 + Favorites 视图）、本文件（§12 实施摘要）、主 `README.md`（§Favorites View 小节）。
+
+---
+
+## 13. v0.5.0 实施摘要（tab 右键 + 金线下划线）
+
+### 13.1 已实施（v0.5.0 落地）
+
+| 编号       | 实施项                                                                                                            | 落点                                                                                                                                                       |
+| ---------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Slice 2    | ✅ `editor/title/context` tab 右键 menu（复用 `ccStatusDot.fav.toggleTab`）                                       | `companion/package.json contributes.menus["editor/title/context"]`，`when: resourceScheme == 'webview' && config.ccStatusDot.fav.includeInTabContextMenu'` |
+| Q3 (a→d)   | ✅ tab 复合变体（采用变体 d 金线下划线，非方案 a 星标；5 base SVG byte-identical + 5 -fav 变体只加尾部 `<rect>`） | `resources/claude-logo-{state}-fav.svg` + `patch.ts OUR_SVGS` + IIFE `favOf()` helper                                                                      |
+| 持久化分工 | ✅ IIFE 现在读 favorites.json（v0.4 不读；v0.5 mtime-cache 读 `sessions[].sid` 集合）                             | `patch.ts` IIFE §A preamble `readFavSet()` + `favOf()` + 3 处 `iconPath` 应用点包裹                                                                        |
+| 配置       | ✅ `ccStatusDot.fav.includeInTabContextMenu`（默认 true）                                                         | `companion/package.json contributes.configuration.properties`                                                                                              |
+
+### 13.2 边界（保留 v0.4 决策）
+
+- **F3/F4 会话 alias / rename / 分组**：未实施，待用户反馈。
+- **F5/D1 已闭会话重开为 CC webview panel**：架构性不可达，仍走 Copy 'claude -r <sid>' 降级路径。
+- **Slice 3 可选 `fav.openTerminal`**：未实施，剪贴板最中性。
+
+### 13.3 不破坏清单验证（v0.5.0 回归项）
+
+实施完成后所有以下既有功能保留不退化（`npm test` 全绿 884+ 断言 + `npm run test:standalone` 通过 + `node --check dist/patch.js + companion/dist/extension.js` 通过 + prettier 全绿 + IIFE 括号配平）：
+
+- ✅ 5 态点（idle/running/done/error/pending）色彩语义不变（v0.5 仅在 sid∈favorites 时把 leaf `.svg` → `-fav.svg`，状态色/状态圆 fill byte-identical）
+- ✅ 底部 4 灯 SBI、token SBI、图表面板（v0.3.0）完整保留
+- ✅ Q1-Q7 全部历史修复（v0.2.4 ~ v0.2.9.1 + v0.3.0/0.3.1）保留
+- ✅ v0.2.8 src 拷贝（`companion:package` 流程不变）
+- ✅ v0.3.1 nonce CSP 最佳实践保留（v0.5 未引入新 webview）
+- ✅ IIFE 括号配平（`assertCompiles` 通过 + test-iife.mjs IIFE.1/IIFE.2 通过）
+- ✅ companion 自愈主线 `detectAndPatch` 不被收藏逻辑阻塞
+- ✅ standalone patch.js 可独立跑
+- ✅ version-sync 平价锁维持（package.json 0.5.0 ↔ INJECT_VERSION v0.5.0 ↔ companion 0.5.0 ↔ MIN_PATCHER_VERSION 0.5.0 ↔ injectVersion fallback v0.5.0）
+- ✅ v0.4.0 收藏视图/命令/favorites.json schema/导航全保留（v0.5 仅扩 menu + 加 -fav SVG，handler 零改动）
+
+### 13.4 版本与文件清单
+
+**版本 bump**：`package.json` / `patch.ts INJECT_VERSION` / `companion/package.json` / `companion/extension.ts MIN_PATCHER_VERSION` + `injectVersion()` fallback 全部 `0.4.0 → 0.5.0`。`HOOK_VERSION`（v0.2.1）+ `cc-status.js` hash 不变（writer 无改动）。
+
+**改动文件**（按 02_简单检查清单.md R-CHG-01 "周期级按 feature 聚合"，单一 feature 9 文件是合理体量）：
+
+1. `patch.ts` — INJECT_VERSION v0.5.0 + OUR_SVGS 扩 10 项 + IIFE §A preamble `FAVF` / `readFavSet()` / `favOf()` helper + §H tick 3 处 `iconPath` 包裹
+2. `resources/claude-logo-{idle,running,done,error,pending}-fav.svg` — 5 新文件（base byte-copy + `<rect fill="#F5A623">` 金线）
+3. `companion/package.json` — `editor/title/context` menu + `ccStatusDot.fav.includeInTabContextMenu` 配置 + version 0.5.0
+4. `companion/extension.ts` — MIN_PATCHER_VERSION/injectVersion fallback bump（handler 零改动）
+5. `hooks/test-iife.mjs` — IIFE.117 翻转（5 → 10 entries）+ IIFE.117a-k 新增 + IIFE.117c-e SVG 几何 parity + IIFE.21c stamp v0.5.0
+6. `hooks/test-favorites.mjs` — FAV.31 翻转（v0.4 ABSENCE → v0.5 PRESENCE）+ FAV.31a/b（config + default）
+7. `package.json`（main）— version 0.5.0
+8. `CHANGELOG.md` — v0.5.0 条目
+9. `companion/CHANGELOG.md` — v0.5.0 条目
+10. `companion/README.md` + `docs/FAVORITES-DESIGN.md`（本文件 §13 + §12.2/§Q3 标注 + §13.4）— 文档同步
+
+**文档同步**：`CHANGELOG.md`（v0.5.0 条目）、`companion/CHANGELOG.md`（v0.5.0 条目）、`companion/README.md`（v0.5.0 小节）、本文件（§13 实施摘要 + §12.2/§Q3 标注已实施）。

@@ -14,7 +14,14 @@ Claude Code 的 VS Code 扩展自动更新时，`extension.js` 被替换为全�
 2. 若标记缺失（CC 更新覆盖了），自动重跑 patcher（`node ~/.claude/cc-status-dot/patch.js`）。
 3. 提示一次 **Reload Window** 激活新 patch。
 
-## v0.4.0 新增：CC Favorites 视图
+## v0.5.0 新增：tab 右键收藏 + 金线下划线
+
+v0.5.0 补全 Favorites 体验（设计 [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md) §5 Slice 2 + §Q3）：
+
+- **tab 右键菜单**：右键任意 webview tab → **CC Favorites: Star/Unstar Current CC Tab**。`when: resourceScheme == 'webview'`——VSCode 没暴露 CC 专属 context key，菜单会出现在所有 webview tab 上（Copilot Chat 等），handler 内 `__ccsdActiveSid` 校验对非 CC tab no-op + 信息提示。配置项 `ccStatusDot.fav.includeInTabContextMenu`（默认开）可 opt-out。
+- **金线下划线标记**：收藏的 CC 会话，tab icon 底部加一条细金线 `<rect fill="#F5A623">`（5 态点色/形完全不变）。IIFE 每 500ms tick 经 mtime-cache 读 `favorites.json`，sid 命中 → 把 leaf `claude-logo-<state>.svg` 替换为 `claude-logo-<state>-fav.svg`。
+
+## v0.4.0：CC Favorites 视图
 
 自 v0.4.0 起，本配套扩展额外承载 **收藏/导航** 功能（设计全文见 [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md)）：
 
@@ -74,6 +81,13 @@ When Claude Code's VS Code extension auto-updates, its `extension.js` is replace
 1. On VS Code startup it greps the CC `extension.js` for the `cc-status-dot-injected` marker.
 2. If the marker is missing (CC update wiped it), it re-runs the patcher (`node ~/.claude/cc-status-dot/patch.js`).
 3. Offers a one-click **Reload Window** to activate the fresh patch.
+
+## v0.5.0: Tab right-click favorite toggle + gold-underline favorited icon
+
+v0.5.0 completes the Favorites UX (design [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md) §5 Slice 2 + §Q3):
+
+- **Tab right-click menu**: right-click any webview tab → **CC Favorites: Star/Unstar Current CC Tab**. `when: resourceScheme == 'webview'` — VSCode exposes no CC-specific context key, so the menu surfaces on ALL webview tabs (Copilot Chat etc.); the handler's `__ccsdActiveSid` check no-ops with an info message on non-CC webviews. The setting `ccStatusDot.fav.includeInTabContextMenu` (default on) lets you opt out.
+- **Gold-underline indicator**: favorited CC sessions get a thin gold `<rect fill="#F5A623">` underline at the tab icon's viewBox bottom (5 state colors/shapes unchanged). The IIFE's 500ms tick reads `favorites.json` via an mtime-cache and swaps the base leaf `claude-logo-<state>.svg` for `claude-logo-<state>-fav.svg` when the panel's sid is favorited.
 
 ## v0.4.0: CC Favorites view
 

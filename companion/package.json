@@ -1,8 +1,8 @@
 {
   "name": "cc-status-dot-companion",
   "displayName": "cc-status-dot Companion",
-  "description": "Detects Claude Code extension auto-updates and silently re-applies the cc-status-dot patch, plus a CC Favorites view for pinning files and CC sessions (v0.4.0+). Ships inside the vscode-claude-code-status-dot npm package — install via: npx vscode-claude-code-status-dot",
-  "version": "0.4.0",
+  "description": "Detects Claude Code extension auto-updates and silently re-applies the cc-status-dot patch, plus a CC Favorites view for pinning files and CC sessions (v0.4.0+) and webview tab right-click favorite toggle (v0.5.0+). Ships inside the vscode-claude-code-status-dot npm package — install via: npx vscode-claude-code-status-dot",
+  "version": "0.5.0",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,
@@ -84,6 +84,13 @@
         {
           "command": "ccStatusDot.fav.toggleFile",
           "when": "!explorerResourceIsFolder && config.ccStatusDot.fav.includeInExplorerContextMenu",
+          "group": "ccsd_favorites@1"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "ccStatusDot.fav.toggleTab",
+          "when": "resourceScheme == 'webview' && config.ccStatusDot.fav.includeInTabContextMenu",
           "group": "ccsd_favorites@1"
         }
       ],
@@ -241,6 +248,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show 'CC Favorites: Add/Remove File' in the Explorer file right-click menu."
+        },
+        "ccStatusDot.fav.includeInTabContextMenu": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show 'CC Favorites: Star/Unstar Current CC Tab' on the webview tab right-click menu (v0.5.0+). VSCode exposes no CC-specific context key, so the item surfaces on ALL webview tabs; the handler no-ops with an info message when the active tab is not a Claude Code session (no __ccsdActiveSid)."
         }
       }
     }

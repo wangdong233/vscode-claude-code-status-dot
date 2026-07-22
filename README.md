@@ -202,14 +202,15 @@ CC 自动更新会把 patch 整体覆盖掉。**v0.2.0 起**，`npx` 装的时�
 
 VSCode 每次启动时，companion 扩展检测 CC 扩展里的 `cc-status-dot-injected` marker——如果 CC 自动更新把 patch 冲掉了（marker 不见了），companion 自动跑 `node ~/.claude/cc-status-dot/patch.js` 重 patch，并提示一次 `Reload Window`。用户**无感恢复**，不用手动跑 `npx`。
 
-### ⭐ CC Favorites 视图（v0.4.0+）
+### ⭐ CC Favorites 视图（v0.4.0+）+ tab 右键/金线标记（v0.5.0+）
 
 VSCode 资源管理器侧边栏新增 **CC Favorites** 视图——把常用文件和 CC 会话 pin 在一起，跨面板/跨重启快速跳回。
 
 - **加文件**：在 Explorer 中右键任意文件 → **CC Favorites: Add/Remove File**（设置项 `ccStatusDot.fav.includeInExplorerContextMenu` 默认开，菜单拥挤可关）。
-- **加 CC 会话**：CC tab 处于活动状态时，命令面板搜 **CC Favorites: Star/Unstar Current CC Tab**——当前会话进 Favorites。
+- **加 CC 会话**：CC tab 处于活动状态时，命令面板搜 **CC Favorites: Star/Unstar Current CC Tab**——当前会话进 Favorites。**v0.5.0+ 起也可以直接在 webview tab 上右键 → CC Favorites: Star/Unstar Current CC Tab**（设置项 `ccStatusDot.fav.includeInTabContextMenu` 默认开，菜单拥挤可关）。
 - **跳转**：点文件节点 → 跳到该文件（带行号定位）；点已开会话节点 → 焦点切到那个 CC webview panel；右键已闭会话 → **Copy 'claude -r <sid>'** 复制 resume 命令到剪贴板。
 - **浏览**：命令面板 **CC Favorites: Browse** 用 QuickPick 键盘导航。
+- **金线标记（v0.5.0+）**：收藏的 CC 会话，tab icon 底部加一条细金线（5 态点色/形完全不变），IIFE 500ms tick 自动从 `favorites.json` 同步。
 
 收藏存在 `~/.claude/cc-tab-status/favorites.json`（atomic 写，跨重启保留）。完整设计（4 路调研 + 5 个不明确点的确定答案 + 推迟到 v0.5 的风险部分）见 [`docs/FAVORITES-DESIGN.md`](docs/FAVORITES-DESIGN.md)。
 

@@ -5,6 +5,22 @@ All notable changes to the **cc-status-dot Companion** VS Code extension are doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-07-22
+
+### Added — Tab right-click favorite toggle + gold-underline favorited icon
+
+- **`editor/title/context` menu** (`contributes.menus["editor/title/context"]`): right-click any webview tab to get "CC Favorites: Star/Unstar Current CC Tab". `when: resourceScheme == 'webview' && config.ccStatusDot.fav.includeInTabContextMenu'`. Reuses the existing `ccStatusDot.fav.toggleTab` command + `favToggleTab()` handler — the handler's `__ccsdActiveSid` check no-ops with an info message when the active tab is not a Claude Code session (no CC-specific context key exists; this is the tightest VSCode exposes).
+- **Configuration**: `ccStatusDot.fav.includeInTabContextMenu` (default `true`) — opt-out for users who don't want the menu item on non-CC webview tabs.
+- **5 `-fav` SVG variants** ship in the patcher's `resources/` (`claude-logo-{idle,running,done,error,pending}-fav.svg`): byte-identical base + a thin gold `<rect>` underline at the viewBox bottom (fill `#F5A623`, height 0.9 / 24 ≈ 3.7%). The IIFE's per-panel tick reads `favorites.json` via an mtime+size cache and swaps the base leaf for `-fav` when the panel's sid is favorited.
+
+### Changed
+
+- `MIN_PATCHER_VERSION` 0.4.0 → 0.5.0; `injectVersion()` fallback v0.4.0 → v0.5.0 (config schema + IIFE body both moved; the bump re-runs the patcher/companion handshake).
+
+### Notes
+
+- VSCode exposes no Claude-Code-specific context key for webview tabs. The menu item surfaces on ALL webview tabs (Copilot Chat, Redis Viewer, etc.); the handler no-ops with an info message on non-CC webviews. Users can set `ccStatusDot.fav.includeInTabContextMenu: false` to hide the item entirely.
+
 ## [0.4.0] — 2026-07-22
 
 ### Added — Favorites view + commands + persistence

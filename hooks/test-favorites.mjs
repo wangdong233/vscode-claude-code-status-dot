@@ -590,15 +590,42 @@ check(
     companionPkg.contributes.configuration.properties['ccStatusDot.fav.includeInExplorerContextMenu'].default === true,
 );
 
-// v0.4 explicitly does NOT ship the editor/title/context tab right-click menu
-// (FAVORITES-DESIGN.md §5 Slice 2 — needs L1 PoC first). Pin its absence so a
-// future edit that adds it without the PoC fails loudly.
+// v0.5.0 ships the editor/title/context tab right-click menu (was deferred
+// from v0.4 per FAVORITES-DESIGN.md §5 Slice 2 pending an L1 PoC on webview
+// tab menu visibility — the PoC is now considered resolved via the explicit
+// `resourceScheme == 'webview'` when clause). VSCode exposes no CC-specific
+// context key for webview tabs, so the menu item surfaces on ALL webview
+// tabs (Copilot Chat, Redis Viewer, etc.) — the handler's __ccsdActiveSid
+// guard at companion/extension.ts favToggleTab() no-ops with an info
+// message when the active tab is not a CC session (FAV.32 checks that
+// guard is in place). A new configuration key
+// `ccStatusDot.fav.includeInTabContextMenu` (default true) gives users an
+// opt-out without disabling the rest of the favorites feature.
+const editorTitleContext = companionPkg.contributes?.menus?.['editor/title/context'];
 check(
-  'FAV.31 v0.4 does NOT contribute editor/title/context (tab right-click deferred to v0.5 per design L1)',
-  !companionPkg.contributes ||
-    !companionPkg.contributes.menus ||
-    !Array.isArray(companionPkg.contributes.menus['editor/title/context']),
-  'design §5 Slice 2 requires a PoC verifying menu item visibility on webview tabs before shipping',
+  'FAV.31 v0.5 contributes editor/title/context with toggleTab (webview tab right-click)',
+  Array.isArray(editorTitleContext) &&
+    editorTitleContext.some(
+      (m) =>
+        m.command === 'ccStatusDot.fav.toggleTab' &&
+        typeof m.when === 'string' &&
+        m.when.includes("resourceScheme == 'webview'"),
+    ),
+  'v0.5 must ship the tab right-click favorite toggle (per docs/FAVORITES-DESIGN.md §5 Slice 2)',
+);
+check(
+  'FAV.31a editor/title/context entry gated by config.ccStatusDot.fav.includeInTabContextMenu',
+  Array.isArray(editorTitleContext) &&
+    editorTitleContext.some(
+      (m) =>
+        m.command === 'ccStatusDot.fav.toggleTab' &&
+        typeof m.when === 'string' &&
+        m.when.includes('config.ccStatusDot.fav.includeInTabContextMenu'),
+    ),
+);
+check(
+  'FAV.31b configuration.properties.ccStatusDot.fav.includeInTabContextMenu declared with default === true',
+  companionPkg.contributes?.configuration?.properties?.['ccStatusDot.fav.includeInTabContextMenu']?.default === true,
 );
 
 // cleanup

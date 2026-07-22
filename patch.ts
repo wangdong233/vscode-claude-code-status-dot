@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.4.0";
+const INJECT_VERSION = "v0.5.0";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -429,6 +429,14 @@ const OUR_SVGS = [
     "claude-logo-done.svg",
     "claude-logo-error.svg",
     "claude-logo-pending.svg",
+    // v0.5.0 — favorited-session variants (gold underline at viewBox bottom).
+    //   installRuntimeFiles auto-copies these via the OUR_SVGS loop; stale-sweep
+    //   auto-preserves them via the OUR_SVGS.includes() guard. Base 5 unchanged.
+    "claude-logo-idle-fav.svg",
+    "claude-logo-running-fav.svg",
+    "claude-logo-done-fav.svg",
+    "claude-logo-error-fav.svg",
+    "claude-logo-pending-fav.svg",
 ];
 
 /** Extension directories to search, highest version wins. */
@@ -2005,6 +2013,27 @@ function buildIIFE(resDir: string): string {
         `var __ccsdUriCache=Object.create(null);function ccuri(p){return __ccsdUriCache[p]||(__ccsdUriCache[p]=vs.Uri.file(p));}`,
         // v0.2.9-debug (Q7 tab-orange): anomaly logger. Append-only, fires ONLY on the 3 no-iconPath early-return paths below (rare). Remove after root cause confirmed + fix landed.
         `var __ccsdDbgLog=pth.join(DIR,"_panel-debug.log");function __ccsdDbg(s){try{try{if(fs.statSync(__ccsdDbgLog).size>2097152)fs.writeFileSync(__ccsdDbgLog,"")}catch(e){}fs.appendFileSync(__ccsdDbgLog,Date.now()+" "+s+"\\n")}catch(e){}}`,
+        // v0.5.0: favorites.json path (same DIR as <sid>.json + <sid>.offset +
+        // <sid>.tokens.json — companion FAV_STATE_DIR is the same path). Single
+        // literal here so the contract is one-way (companion writes, IIFE reads)
+        // and avoids a 4th hardcoded path; rename STATE_DIR flows through.
+        `var FAVF=pth.join(DIR,"favorites.json");`,
+        // v0.5.0 fav detection: mtime+size cache on favorites.json, mirroring
+        // __ccsdAgCache (§F) and __ccsdOffCache (§G). Stat-first → cache hit
+        // reuses parsed sid set; miss → re-read+parse+cache. Companion writes
+        // favorites.json via atomic tmp+rename (writeFavAtomic extension.ts),
+        // so (mt,sz) is a reliable content-change signal. Worst-case tick lag
+        // = TICK_MS=500ms which is imperceptible. Returns a null-prototype
+        // object whose keys are favorited sids, or null when file
+        // absent/empty/unparseable. Keyed single-entry (not per-sid) because
+        // favorites.json is one global file, not a per-sid sidecar.
+        `function readFavSet(){try{var c=globalThis.__ccsdFavCache;if(!c)c=globalThis.__ccsdFavCache=Object.create(null);var mt=0,sz=0;try{var s=fs.statSync(FAVF);mt=s.mtimeMs;sz=s.size;}catch(_){return null;}var e=c.last;if(e&&e.mt===mt&&e.sz===sz&&mt>0)return e.set;if(sz<=0)return null;var j=null;try{j=JSON.parse(fs.readFileSync(FAVF,"utf8"));}catch(_){return null;}var set=Object.create(null);if(j&&Array.isArray(j.sessions)){for(var i=0;i<j.sessions.length;i++){var x=j.sessions[i];if(x&&typeof x.sid==="string")set[x.sid]=1;}}c.last={set:set,mt:mt,sz:sz};return set;}catch(_){return null;}}`,
+        // v0.5.0: remap a base-state svg path to its -fav variant if the
+        // panel's sid is favorited. CC_DEFAULT (interrupted off-frame, no
+        // state leaf) and unknown leaves pass through unchanged so the flash
+        // sequence still alternates correctly. Uses the same ccuri memoization
+        // downstream — new -fav path strings cache independently.
+        `function favOf(svgPath,sid){try{if(!svgPath||svgPath===CC_DEFAULT||!sid)return svgPath;var fset=readFavSet();if(!fset||!fset[sid])return svgPath;var leaf=svgPath.split(pth.sep).pop();if(/^claude-logo-(idle|running|done|error|pending)\\.svg$/.test(leaf)){return pth.join(RES,leaf.replace(/\\.svg$/,"-fav.svg"));}}catch(_){}return svgPath;}`,
         `var DONE_TO_IDLE_MS=${DONE_TO_IDLE_MS};`,
         `/*§7.2 stale-running heuristic: v0.2.6 keys off 'since' (the *→running transition time), not mtime. Stop preserveSince path (cc-status.js:390-401) keeps cur.since on inflight>0 Stop heartbeats while writeJsonAtomic refreshes mtime — mtime stays fresh forever under CC's repeated Stop fire on drifted inflight payloads, so mtime-decay never fires. since-decay fires correctly because since is preserved (not refreshed) across the same path. Mirrors done>5min / interrupted>24h decay which already key off since.*/`,
         `var SBI_RUNNING_STALE_MS=${SBI_RUNNING_STALE_MS};`,
@@ -2490,16 +2519,16 @@ function buildIIFE(resDir: string): string {
         `if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS){st="idle";}`,
         `else if(st==="running"&&since&&(now-since)>SINCE_STALE_MS&&since<now){st="idle";}`,
         `/*reader pending (Notification OR Stop last-message semantic match): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
-        `if(pend && st!=="idle"){try{p.iconPath=ccuri(pth.join(RES,"claude-logo-pending.svg"))}catch(e){}return}`,
+        `if(pend && st!=="idle"){try{p.iconPath=ccuri(favOf(pth.join(RES,"claude-logo-pending.svg"),sid))}catch(e){}return}`,
         `var svg;`,
-        `if(st==="interrupted"){svg=(flashSeq%2===0)?pth.join(RES,"claude-logo-error.svg"):CC_DEFAULT}`,
+        `if(st==="interrupted"){svg=(flashSeq%2===0)?favOf(pth.join(RES,"claude-logo-error.svg"),sid):CC_DEFAULT}`,
         `/*v0.2.6 round-1 stuck-yellow fix: per-tab running decay. A running tab whose 'since' is older than SINCE_STALE_MS (15min) renders idle (gray) instead of running (yellow), surfacing "this session hasn't actually been running for 15min" to the user. Mirrors the done>5min→idle decay one branch below (same since-based defensive form: since && now-since>THRESH && since<now). Catches CC upstream payload drift (Stop inflight=1 stuck + preserveSince keeps state=running + activeSubagents=1 in the file indefinitely; without this decay the tab would stick yellow forever — see docs/STATES.md §7.4 "stale running treatment" row updated in v0.2.6). Real active running sessions (since<15min ago) render yellow unchanged.*/`,
         `else if(st==="running"){svg=(since&&(now-since>SINCE_STALE_MS)&&since<now)?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-running.svg")}`,
         `else if(st==="done"){svg=(since&&(now-since>DONE_TO_IDLE_MS))?pth.join(RES,"claude-logo-idle.svg"):pth.join(RES,"claude-logo-done.svg")}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
         `else{__ccsdDbg("ELSE sid="+(sid||"").slice(0,8)+" st="+st);try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return}`,
         `flashSeq++;`,
-        `try{p.iconPath=ccuri(svg)}catch(e){}try{var __lm=globalThis.__ccsdRenderMap||(globalThis.__ccsdRenderMap={});var __rs=sid+":"+svg+":"+st+":"+pend;if(__lm[sid]!==__rs){__lm[sid]=__rs;__ccsdDbg("RENDER sid="+sid.slice(0,8)+" svg="+svg.split("/").pop()+" st="+st+" pend="+pend+" cpend="+!!t.__ccsdPending)}}catch(e){}`,
+        `try{p.iconPath=ccuri(favOf(svg,sid))}catch(e){}try{var __lm=globalThis.__ccsdRenderMap||(globalThis.__ccsdRenderMap={});var __rs=sid+":"+svg+":"+st+":"+pend;if(__lm[sid]!==__rs){__lm[sid]=__rs;__ccsdDbg("RENDER sid="+sid.slice(0,8)+" svg="+svg.split("/").pop()+" st="+st+" pend="+pend+" cpend="+!!t.__ccsdPending)}}catch(e){}`,
         `},${TICK_MS});`,
         // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,

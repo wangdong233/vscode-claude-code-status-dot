@@ -1,8 +1,8 @@
 {
   "name": "cc-status-dot-companion",
-  "displayName": "cc-status-dot Companion",
-  "description": "Detects Claude Code extension auto-updates and silently re-applies the cc-status-dot patch, plus a CC Favorites view for pinning files and CC sessions (v0.4.0+) and webview tab right-click favorite toggle (v0.5.0+). Ships inside the vscode-claude-code-status-dot npm package — install via: npx vscode-claude-code-status-dot",
-  "version": "0.5.0",
+  "displayName": "%ccsd.displayName%",
+  "description": "%ccsd.description%",
+  "version": "0.5.1",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,
@@ -22,61 +22,61 @@
       "explorer": [
         {
           "id": "ccStatusDot.favorites",
-          "name": "CC Favorites",
+          "name": "%ccsd.fav.viewName%",
           "icon": "$(star-full)",
-          "contextualTitle": "CC Favorites"
+          "contextualTitle": "%ccsd.fav.viewContextualTitle%"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "ccStatusDot.favorites",
-        "contents": "No favorites yet.\nRight-click a file in Explorer to add it.\n[Refresh](command:ccStatusDot.fav.refresh)\nTo favorite the active Claude Code session, run **CC Favorites: Star/Unstar Current CC Tab** from the Command Palette.",
+        "contents": "%ccsd.fav.viewsWelcomeContents%",
         "when": "ccStatusDot.favoritesEmpty == true"
       }
     ],
     "commands": [
       {
         "command": "ccStatusDot.fav.toggleFile",
-        "title": "CC Favorites: Add/Remove File",
+        "title": "%ccsd.fav.toggleFile.title%",
         "icon": "$(star-full)",
-        "category": "CC Favorites"
+        "category": "%ccsd.fav.category%"
       },
       {
         "command": "ccStatusDot.fav.toggleTab",
-        "title": "CC Favorites: Star/Unstar Current CC Tab",
+        "title": "%ccsd.fav.toggleTab.title%",
         "icon": "$(star-full)",
-        "category": "CC Favorites"
+        "category": "%ccsd.fav.category%"
       },
       {
         "command": "ccStatusDot.fav.open",
-        "title": "CC Favorites: Open",
+        "title": "%ccsd.fav.open.title%",
         "icon": "$(go-to-file)",
-        "category": "CC Favorites"
+        "category": "%ccsd.fav.category%"
       },
       {
         "command": "ccStatusDot.fav.remove",
-        "title": "CC Favorites: Remove",
+        "title": "%ccsd.fav.remove.title%",
         "icon": "$(close)",
-        "category": "CC Favorites"
+        "category": "%ccsd.fav.category%"
       },
       {
         "command": "ccStatusDot.fav.copyResume",
-        "title": "CC Favorites: Copy 'claude -r <sid>'",
+        "title": "%ccsd.fav.copyResume.title%",
         "icon": "$(copy)",
-        "category": "CC Favorites"
+        "category": "%ccsd.fav.category%"
       },
       {
         "command": "ccStatusDot.fav.refresh",
-        "title": "CC Favorites: Refresh",
+        "title": "%ccsd.fav.refresh.title%",
         "icon": "$(refresh)",
-        "category": "CC Favorites"
+        "category": "%ccsd.fav.category%"
       },
       {
         "command": "ccStatusDot.fav.browse",
-        "title": "CC Favorites: Browse",
+        "title": "%ccsd.fav.browse.title%",
         "icon": "$(list-filter)",
-        "category": "CC Favorites"
+        "category": "%ccsd.fav.category%"
       }
     ],
     "menus": {
@@ -90,7 +90,7 @@
       "editor/title/context": [
         {
           "command": "ccStatusDot.fav.toggleTab",
-          "when": "resourceScheme == 'webview' && config.ccStatusDot.fav.includeInTabContextMenu",
+          "when": "resourceScheme != 'file' && config.ccStatusDot.fav.includeInTabContextMenu",
           "group": "ccsd_favorites@1"
         }
       ],
@@ -154,17 +154,17 @@
       ]
     },
     "configuration": {
-      "title": "cc-status-dot",
+      "title": "%ccsd.configuration.title%",
       "properties": {
         "ccStatusDot.notify": {
           "type": "boolean",
           "default": true,
-          "description": "Show a notification when Claude Code completes a turn (state transitions to done or interrupted)."
+          "description": "%ccsd.config.notify.description%"
         },
         "ccStatusDot.notifyWhenFocused": {
           "type": "boolean",
           "default": true,
-          "description": "Also fire the completion notification when VSCode is the currently focused window. Disable to only notify when you're in another app."
+          "description": "%ccsd.config.notifyWhenFocused.description%"
         },
         "ccStatusDot.notifySound": {
           "type": "string",
@@ -186,7 +186,7 @@
             "Tink"
           ],
           "default": "Glass",
-          "description": "macOS system sound to play on completion notification (ignored on Linux/Windows)."
+          "description": "%ccsd.config.notifySound.description%"
         },
         "ccStatusDot.tokenStatsWindow": {
           "type": "string",
@@ -201,7 +201,7 @@
             "all"
           ],
           "default": "all",
-          "description": "Time window for the right-side token stats status bar item. 'all' = cumulative (never resets, default); the rolling windows (5min..30d) naturally age out old turns. Match this default with the IIFE cfg.get fallback (pin enforced by test-version-sync.mjs)."
+          "description": "%ccsd.config.tokenStatsWindow.description%"
         },
         "ccStatusDot.tokenDisplayMode": {
           "type": "string",
@@ -211,27 +211,27 @@
             "both"
           ],
           "default": "both",
-          "description": "What to show on the token stats SBI: token count only, USD cost only, or both."
+          "description": "%ccsd.config.tokenDisplayMode.description%"
         },
         "ccStatusDot.tokenSbiVisible": {
           "type": "boolean",
           "default": true,
-          "description": "Show the token stats status bar item on the right side."
+          "description": "%ccsd.config.tokenSbiVisible.description%"
         },
         "ccStatusDot.tokenLiveDeltaEnabled": {
           "type": "boolean",
           "default": true,
-          "description": "Read the active session's transcript tail every tick so token counts update during streaming (between hook fires). Disable on perf-sensitive machines."
+          "description": "%ccsd.config.tokenLiveDeltaEnabled.description%"
         },
         "ccStatusDot.showCost": {
           "type": "boolean",
           "default": true,
-          "description": "Show the USD cost estimate alongside the token count (requires a matching model entry in token-rates.json — unknown models like GLM are auto-hidden)."
+          "description": "%ccsd.config.showCost.description%"
         },
         "ccStatusDot.warnThresholdUsd": {
           "type": "number",
           "default": 0,
-          "description": "Notify when the session cost estimate crosses this USD threshold (0 = disabled). Fires once per crossing."
+          "description": "%ccsd.config.warnThresholdUsd.description%"
         },
         "ccStatusDot.rateDisplayMode": {
           "type": "string",
@@ -241,18 +241,18 @@
             "sparkline",
             "both"
           ],
-          "default": "both",
-          "description": "How to render the live tok/s suffix on the token status bar item: 'off' hides it (for crowded bars / perf-sensitive machines), 'numeric' shows only '1.2k/s', 'sparkline' shows only '▂▄▆█', 'both' (default) shows both."
+          "default": "numeric",
+          "description": "%ccsd.config.rateDisplayMode.description%"
         },
         "ccStatusDot.fav.includeInExplorerContextMenu": {
           "type": "boolean",
           "default": true,
-          "description": "Show 'CC Favorites: Add/Remove File' in the Explorer file right-click menu."
+          "description": "%ccsd.config.fav.includeInExplorerContextMenu.description%"
         },
         "ccStatusDot.fav.includeInTabContextMenu": {
           "type": "boolean",
           "default": true,
-          "description": "Show 'CC Favorites: Star/Unstar Current CC Tab' on the webview tab right-click menu (v0.5.0+). VSCode exposes no CC-specific context key, so the item surfaces on ALL webview tabs; the handler no-ops with an info message when the active tab is not a Claude Code session (no __ccsdActiveSid)."
+          "description": "%ccsd.config.fav.includeInTabContextMenu.description%"
         }
       }
     }

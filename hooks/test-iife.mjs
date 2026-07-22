@@ -358,7 +358,7 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-check('IIFE.21c banner carries v0.5.0 stamp', /\/\*cc-status-dot-injected:v0\.5\.0:/.test(iife));
+check('IIFE.21c banner carries v0.5.1 stamp', /\/\*cc-status-dot-injected:v0\.5\.1:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -1381,13 +1381,13 @@ check(
       /dispatchNotify\s*\(\s*tr\(\s*"alCostAlertTpl"\s*\)/.test(iife)),
 );
 // Token SBI tick is INSIDE __ccsdSbiTimer (shares the 500ms tick — no new setInterval for token update).
-// v0.3.0: a 3rd setInterval was added inside showRateChart for the webview
-// postMessage refresh (form C chart panel) — it is conditionally created
-// (only when the user opens the chart), NOT a token-update timer. Bump the
-// expected count from 2 to 3.
+// v0.3.0 added a 3rd setInterval inside showRateChart for the webview postMessage
+// refresh. v0.5.1 REMOVED the chart panel entirely (inline tok/s suffix covers
+// the user's actual need) — the chart-panel setInterval went with it, so the
+// expected count drops back from 3 to 2 (__ccsdSbiTimer + per-panel timer).
 check(
-  'IIFE.66 token SBI tick shares __ccsdSbiTimer (no new setInterval for token update; v0.3.0 chart-panel timer exempt)',
-  (iife.match(/setInterval/g) || []).length === 3, // __ccsdSbiTimer + per-panel timer + chart-panel msg timer
+  'IIFE.66 token SBI tick shares __ccsdSbiTimer (no new setInterval for token update; v0.5.1 chart-panel timer removed)',
+  (iife.match(/setInterval/g) || []).length === 2, // __ccsdSbiTimer + per-panel timer (chart panel removed v0.5.1)
 );
 // Turn-running tooltip is present.
 // v0.2.4 intra-version i18n: the literal now lives in the I18N dict's en
@@ -2621,10 +2621,11 @@ check(
 );
 
 // IIFE.140 rate gated by cfg.rateDisplayMode (off|numeric|sparkline|both).
-// Default "both" shows sparkline + numeric tok/s suffix.
+// v0.5.1: default changed both→numeric (chart panel removed; inline numeric
+// suffix is now the only rate surface; users wanting sparkline opt in).
 check(
-  'IIFE.140 v0.3.0 §G tick reads cfg.rateDisplayMode (default both)',
-  /cfg\.get\s*\(\s*"rateDisplayMode"\s*,\s*"both"\s*\)/.test(iife),
+  'IIFE.140 v0.5.1 §G tick reads cfg.rateDisplayMode (default numeric)',
+  /cfg\.get\s*\(\s*"rateDisplayMode"\s*,\s*"numeric"\s*\)/.test(iife),
 );
 
 // IIFE.141 rate sampling uses INPUT+OUTPUT only (lane D R2 critical): cache_read
@@ -2653,148 +2654,43 @@ check(
   /function\s+__ccsdRateLoad\s*\(\s*sid\s*\)/.test(iife) && /globalThis\.__ccsdRateLoaded/.test(iife),
 );
 
-// IIFE.145 QuickPick carries the chart entry (form C webview).
-check('IIFE.145 v0.3.0 QuickPick offers "Show live rate chart" entry', iife.includes('qpShowChartLabel'));
-
-// IIFE.146 showRateChart function present (webview panel with strict CSP).
-check('IIFE.146 v0.3.0 showRateChart function present', /function\s+showRateChart\s*\(\s*\)/.test(iife));
-
-// IIFE.147 webview strict CSP — v0.3.1 hardening: script-src switched from
-// 'unsafe-inline' to a per-call nonce. The CSP appears in the IIFE source as:
-// content="default-src \\'none\\'; script-src \\'nonce-'+nonce+'\\'; ..." (the
-// nonce concatenation breaks out of the single-quoted JS string, and the
-// trailing \\' re-opens it). The bridge between Content-Security-Policy and
-// default-src crosses literal " chars (`Content-Security-Policy" content="default-src`),
-// so the bridge pattern uses [\s\S]*? (any char, non-greedy) rather than [^"]*.
-// Each `\\?` makes the backslash optional so the regex matches both the
-// escaped code form (\\') and any unescaped mention. The final
-// `<script[^>]*nonce=` confirms the inline script tag carries the matching
-// nonce attribute (without it the script would be blocked by the CSP and the
-// chart would render blank).
+// IIFE.145-150, 152, 153a/b/c v0.5.1 REMOVED — these asserted the chart panel
+// (showRateChart + __ccsdRateChartHtml/Css/Js + __ccsdGetNonce + the CSP nonce
+// posture + the chart-panel setInterval read-only-ness). v0.5.1 removed the
+// chart panel entirely (inline tok/s suffix on the §G tick covers the user's
+// actual need; the panel added surface area + a 3rd setInterval). The rate-
+// sampling infra that POWERED the chart is KEPT (IIFE.136-144, 151) because it
+// also powers the inline suffix + cross-reload continuity. The chart removal
+// is gated by IIFE.66 (setInterval count 3→2), IIFE.71 (qpShowChart*/wv* keys
+// dropped from the dict), and the negative assertions below.
 check(
-  'IIFE.147 v0.3.1 rate chart webview CSP uses nonce for script-src (no unsafe-inline)',
-  /Content-Security-Policy[\s\S]*?default-src\s+\\?'\\?none\\?'[\s\S]*?script-src\s+\\?'\\?nonce-[\s\S]*?<script[^>]*nonce=/.test(
-    iife,
-  ),
+  'IIFE.145a v0.5.1 chart panel removed — showRateChart function absent',
+  !/function\s+showRateChart\s*\(/.test(iife),
 );
-
-// IIFE.148 webview panel uses pure SVG (no external chart lib — all inline).
-check(
-  'IIFE.148 v0.3.0 rate chart uses inline SVG (no external chart lib)',
-  iife.includes('<svg') && !iife.includes('uPlot') && !iife.includes('Chart.js'),
-);
-
-// IIFE.149 webview panel is single-instance keyed on globalThis.__ccsdRateChart.
-check(
-  'IIFE.149 v0.3.0 rate chart panel single-instance (globalThis.__ccsdRateChart)',
-  /if\s*\(\s*globalThis\.__ccsdRateChart\s*\)\s*\{[^}]*panel\.reveal/.test(iife),
-);
-
-// IIFE.150 v0.3.0 fix (HIGH): chart-panel timer is READ-ONLY on __ccsdRateBuf.
-// The previous implementation called __ccsdRateSample(sid2,0,totalNow,false,Date.now())
-// inside the chart's 500ms msgTimer, which (a) pushed delta=0 samples into the
-// SHARED buffer (since isRunning=false → delta=0), interleaving with the §G SBI
-// tick's real samples to produce zebra-stripe bars + sparkline jitter, and
-// (b) clobbered prev[sid]=-1 each tick, which made the next §G tick's
-// `if(isRunning&&prev[sid]>=0&&realNow>=prev[sid])` short-circuit and skip its
-// own delta compute, AND (c) drove the EMA peak `mx[sid]=mx[sid]*0.85+0*0.15`
-// down 15% per chart tick. The fix: extract __ccsdRateFromBuf(arr,nowMs) as a
-// pure read-only helper, call it from the chart timer instead. The §G tick
-// remains the sole writer (1 sample/500ms); the chart just re-renders from
-// the buffer. This test scopes the check to the showRateChart function body
-// (between `function showRateChart(){` and the next sibling function
-// declaration `function __ccsdRateChartHtml(`) — the body MUST NOT contain a
-// __ccsdRateSample( CALL (comments stripped first so the explanatory comment
-// referencing the old buggy call for posterity doesn't false-positive), and
-// MUST compute rateNow via __ccsdRateFromBuf(.
-{
-  // Strip /* … */ and // … comments so an explanatory comment that mentions
-  // the deleted call (for changelog/posteriority) doesn't false-positive.
-  function stripComments(s) {
-    return s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-  }
-  const fnStart = iife.indexOf('function showRateChart(){');
-  const fnEnd = iife.indexOf('function __ccsdRateChartHtml(');
-  const body = fnStart >= 0 && fnEnd > fnStart ? iife.slice(fnStart, fnEnd) : '';
-  const bodyStripped = stripComments(body);
-  check(
-    'IIFE.150 v0.3.0 fix (HIGH) chart-panel timer is READ-ONLY on __ccsdRateBuf (no __ccsdRateSample call; rateNow via __ccsdRateFromBuf)',
-    body.length > 0 &&
-      !/__ccsdRateSample\s*\(/.test(bodyStripped) &&
-      /__ccsdRateFromBuf\s*\(\s*arr\s*,\s*Date\.now\(\s*\)\s*\)/.test(bodyStripped),
-    'chart panel must compute rateNow via the read-only __ccsdRateFromBuf helper, not __ccsdRateSample (which writes delta=0 samples + clobbers prev[sid] → zebra stripes + sparkline jitter + EMA peak decay)',
-  );
-}
+check('IIFE.145b v0.5.1 chart panel removed — __ccsdRateChartHtml absent', !/__ccsdRateChartHtml/.test(iife));
+check('IIFE.145c v0.5.1 chart panel removed — __ccsdGetNonce absent', !/__ccsdGetNonce/.test(iife));
+check('IIFE.145d v0.5.1 chart i18n keys dropped — qpShowChartLabel absent', !iife.includes('qpShowChartLabel'));
+check('IIFE.145e v0.5.1 chart i18n keys dropped — wvChartTitle absent', !iife.includes('wvChartTitle'));
+check('IIFE.145f v0.5.1 chart webview artifacts gone — no <svg literal', !iife.includes('<svg'));
 
 // IIFE.151 __ccsdRateFromBuf read-only helper present (extracted from
 // __ccsdRateSample's former inline rate compute — same windowed-sum math, just
-// hoisted to a pure function that both __ccsdRateSample and the chart-panel
-// timer can call without mutating the buffer).
+// hoisted to a pure function). v0.5.1 KEEPS this helper even though the chart
+// panel is gone — __ccsdRateSample calls it internally to compute the rate
+// that drives the inline tok/s SBI suffix.
 check(
   'IIFE.151 v0.3.0 fix __ccsdRateFromBuf read-only helper present (rate-from-buffer, no mutation)',
   /function\s+__ccsdRateFromBuf\s*\(\s*arr\s*,\s*nowMs\s*\)/.test(iife),
 );
 
-// IIFE.152 v0.3.0 fix (MEDIUM): chart webview CSS uses VSCode theme CSS
-// variables instead of hardcoded #1e1e1e/#ddd/#4fc3f7/#ffb74d. The webview
-// HTML is string-concatenated in __ccsdRateChartCss; without theme variables,
-// light-theme users see a black slab with dim elements (background:#1e1e1e is
-// the VSCode dark-theme editor background). The fix wraps every color in
-// var(--vscode-…,<fallback>) so the webview inherits the active theme. SVG
-// inline stroke="#xxx"/fill="#xxx" are switched to class-based
-// (.midline/.cum-line/.rate-bar) so CSS variables apply. This test verifies
-// each required theme variable is referenced.
+// IIFE.160 v0.5.1: rate suffix is '·'-separated like cost. The §G tick builds
+// rateSuffix as ' · ' + <sparkline/numeric> (was previously space-separated),
+// so the bar renders '$(clock) 12.3k tok · 1.2k/s · ~$0.42' — rate and cost at
+// the same divider level. Verified by the literal '" · "' push inside the
+// rateSuffix assignment block.
 check(
-  'IIFE.152 v0.3.0 fix (MEDIUM) chart CSS uses VSCode theme variables (--vscode-editor-background/foreground + chart-blue/orange)',
-  /var\(--vscode-editor-background/.test(iife) &&
-    /var\(--vscode-editor-foreground/.test(iife) &&
-    /var\(--vscode-chart-blue/.test(iife) &&
-    /var\(--vscode-chart-orange/.test(iife) &&
-    /var\(--vscode-descriptionForeground/.test(iife) &&
-    /var\(--vscode-editorWidget-border/.test(iife),
-  'webview hardcoded #1e1e1e/#ddd/#4fc3f7/#ffb74d must be wrapped in VSCode theme CSS variables so light theme is readable',
-);
-
-// IIFE.153a v0.3.1 hardening: __ccsdGetNonce helper defined once at IIFE
-// top-level scope (sibling of __ccsdRateChartHtml, NOT inside it — defining
-// inside would re-create the function on every panel open). Primary path is
-// crypto.randomBytes (cryptographic strength, 128 bits / 16 bytes base64-
-// encoded = 24 chars); the Math.random fallback only fires if require("crypto")
-// ever throws (defensive — the IIFE runs in VSCode's Extension Host = real
-// Node.js, so crypto is always available). Both branches return values in the
-// CSP nonce grammar ([A-Za-z0-9+/=], trailing = padding is CSP-legal).
-check(
-  'IIFE.153a v0.3.1 __ccsdGetNonce helper present (crypto.randomBytes primary, Math.random fallback)',
-  /function\s+__ccsdGetNonce\s*\(\s*\)/.test(iife) && /require\(\s*["']crypto["']\s*\)\.randomBytes/.test(iife),
-  'nonce helper must use crypto.randomBytes for cryptographic strength (Math.random fallback only if require throws)',
-);
-
-// IIFE.153b v0.3.1 hardening: style-src 'unsafe-inline' deliberately KEPT.
-// VSCode itself injects theme CSS variables into the webview as inline styles,
-// and the chart CSS relies on var(--vscode-editor-background) etc. (asserted by
-// IIFE.152); noncing style-src would require also pinning VSCode's injected
-// styles, which is impractical. VSCode's own official webview CSP examples ship
-// `style-src ${cspSource} 'unsafe-inline'`. CSS is dramatically lower-risk than
-// JS (no script execution), and zero untrusted input flows into the webview
-// (postMessage carries numeric samples only). This test is a regression guard
-// that the style-src hardening was NOT accidentally removed alongside the
-// script-src nonce change.
-check(
-  'IIFE.153b v0.3.1 style-src unsafe-inline retained (VSCode-recommended; CSS XSS risk negligible)',
-  /style-src\s+\\?'\\?unsafe-inline\\?'/.test(iife),
-  'style-src must keep unsafe-inline (VSCode injects theme CSS vars as inline styles; noncing style-src is impractical)',
-);
-
-// IIFE.153c v0.3.1 hardening: NO script-src 'unsafe-inline' remains anywhere in
-// the IIFE (belt + suspenders negative guard). The v0.3.0 code had it in both
-// the CSP meta line and the descriptive comment; v0.3.1 rephrased the comment
-// to avoid the literal token so this negative assertion can hold. A stray
-// future edit that reintroduces unsafe-inline for script-src would silently
-// weaken the hardening — this test catches that.
-check(
-  'IIFE.153c v0.3.1 NO script-src unsafe-inline remains (nonce-only posture)',
-  !/script-src\s+\\?'\\?unsafe-inline\\?'/.test(iife),
-  'script-src must not use unsafe-inline (nonce replaces it); check CSP meta line + comments for stray mentions',
+  'IIFE.160 v0.5.1 rate suffix uses "·" separator (mirrors cost divider)',
+  /rateSuffix\s*=\s*" · "\s*\+\s*rs/.test(iife),
 );
 
 // IIFE.154-157 v0.4.0 Favorites bridge. The companion's Favorites tree needs

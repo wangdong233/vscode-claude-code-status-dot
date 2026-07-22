@@ -592,26 +592,37 @@ check(
 
 // v0.5.0 ships the editor/title/context tab right-click menu (was deferred
 // from v0.4 per FAVORITES-DESIGN.md §5 Slice 2 pending an L1 PoC on webview
-// tab menu visibility — the PoC is now considered resolved via the explicit
-// `resourceScheme == 'webview'` when clause). VSCode exposes no CC-specific
-// context key for webview tabs, so the menu item surfaces on ALL webview
-// tabs (Copilot Chat, Redis Viewer, etc.) — the handler's __ccsdActiveSid
-// guard at companion/extension.ts favToggleTab() no-ops with an info
-// message when the active tab is not a CC session (FAV.32 checks that
-// guard is in place). A new configuration key
-// `ccStatusDot.fav.includeInTabContextMenu` (default true) gives users an
-// opt-out without disabling the rest of the favorites feature.
+// tab menu visibility). v0.5.1 FIXED the gate: the original
+// `resourceScheme == 'webview'` clause NEVER matched the Claude Code tab
+// because plain WebviewPanels do NOT populate resourceScheme as 'webview'
+// (that scheme belongs to custom-editor document providers, not
+// createWebviewPanel). The CC tab's resourceScheme resolves to empty in
+// editor/title/context, so the gate was permanently false. The fix drops
+// the == 'webview' positive gate in favor of `resourceScheme != 'file'`,
+// which keeps the item OFF normal file-editor tabs (avoids noise on the
+// common case) while letting it appear on webview/untitled/output-style
+// tabs (the CC tab, whatever its scheme resolves to). VSCode exposes no
+// CC-specific context key for the right-clicked tab (custom setContext
+// keys resolve against the ACTIVE editor, not the right-clicked tab, so
+// a global ccTabActive key would mismatch), so the menu item surfaces on
+// ALL non-file tabs — the handler's __ccsdActiveSid guard at
+// companion/extension.ts favToggleTab() no-ops with an info message when
+// the active tab is not a CC session (FAV.32 checks that guard is in
+// place). A configuration key `ccStatusDot.fav.includeInTabContextMenu`
+// (default true) gives users an opt-out without disabling the rest of
+// the favorites feature.
 const editorTitleContext = companionPkg.contributes?.menus?.['editor/title/context'];
 check(
-  'FAV.31 v0.5 contributes editor/title/context with toggleTab (webview tab right-click)',
+  'FAV.31 v0.5 contributes editor/title/context with toggleTab (non-file tab right-click)',
   Array.isArray(editorTitleContext) &&
     editorTitleContext.some(
       (m) =>
         m.command === 'ccStatusDot.fav.toggleTab' &&
         typeof m.when === 'string' &&
-        m.when.includes("resourceScheme == 'webview'"),
+        m.when.includes("resourceScheme != 'file'") &&
+        !m.when.includes("resourceScheme == 'webview'"),
     ),
-  'v0.5 must ship the tab right-click favorite toggle (per docs/FAVORITES-DESIGN.md §5 Slice 2)',
+  'v0.5 must ship the tab right-click favorite toggle (per docs/FAVORITES-DESIGN.md §5 Slice 2); v0.5.1 must use the relaxed resourceScheme != "file" gate (webview-only gate never matched the CC tab)',
 );
 check(
   'FAV.31a editor/title/context entry gated by config.ccStatusDot.fav.includeInTabContextMenu',
@@ -626,6 +637,24 @@ check(
 check(
   'FAV.31b configuration.properties.ccStatusDot.fav.includeInTabContextMenu declared with default === true',
   companionPkg.contributes?.configuration?.properties?.['ccStatusDot.fav.includeInTabContextMenu']?.default === true,
+);
+
+// FAV.32 backs the commentary above (the `resourceScheme != 'file'` gate
+// surfaces the item on ALL non-file tabs, so the favToggleTab handler MUST
+// keep a no-op safety net for the case where the active editor is not a CC
+// session). FAV.20 only asserts the `__ccsdActiveSid` / `__ccsdLastActiveSid`
+// literals exist somewhere in source — it cannot catch the empty-sid guard
+// branch being silently deleted during a refactor. This check pins the guard
+// branch itself: an `if (!sid) { ... showInformationMessage("cc-status-dot:
+// no active Claude Code session...") ... return }` block must remain in
+// companion/extension.ts. If someone removes the guard, non-CC tabs would
+// start hitting a null-sid code path instead of an info message.
+check(
+  'FAV.32 favToggleTab no-ops with an info message when no active CC session (guard branch pinned, not silently removable)',
+  /if\s*\(\s*!\s*sid\s*\)\s*\{[^}]*showInformationMessage\s*\(\s*"cc-status-dot: no active Claude Code session/.test(
+    companionSrc,
+  ),
+  'the empty-sid branch in favToggleTab (companion/extension.ts) must show an info message ("cc-status-dot: no active Claude Code session...") and return — the no-op safety net referenced by the FAV.31 commentary; FAV.20 only checks the sid literals and cannot detect this guard being deleted',
 );
 
 // cleanup

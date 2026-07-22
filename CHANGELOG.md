@@ -2,6 +2,40 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.5.1] - 2026-07-22
+
+**三件修复 + i18n：token SBI 内联速率（图表移除）+ 右键 tab 修复 + companion package.nls 8 语言。** 实施前做了对抗调研（结论：速率本已内联——真正的诉求是"图表冗余 + 分隔符不一致"；右键 `resourceScheme == 'webview'` 是永久 false 因为 plain WebviewPanel 不填该 context key；package.nls 只覆盖 contributes 表面）。
+
+### Fixed — Issue #2 右键 tab 收藏从未显示（HIGH，根因确认）
+
+- **`companion/package.json` `editor/title/context` when 子句**：`resourceScheme == 'webview'` → `resourceScheme != 'file'`。根因：CC tab 是 plain `vscode.window.createWebviewPanel('claudeVSCodePanel', ...)`，而 plain WebviewPanel **不**把 `resourceScheme` context key 填为 `'webview'`（`'webview'` scheme 属于另一种罕见的 custom-editor-via-`openTextDocument` 机制）。CC tab 的 editor input 没有真实 resource URI，所以 `resourceScheme` 在 `editor/title/context` 里是**未定义/空** → `== 'webview'` 永久 false → 该项永远不渲染。这是长期 VSCode 行为（webview panels 不传播 `resource*` context keys；内嵌 iframe 用 `vscode-webview://` 但不暴露为 `resourceScheme`）。新门控 `resourceScheme != 'file'` 让项在 webview/untitled/output-style tabs（含 CC tab，无论其 scheme 解析成什么）上显，在普通 file-editor tabs 上不显（避免常见情况噪声）。`favToggleTab` handler 内 `globalThis.__ccsdActiveSid` 校验仍是 no-op 安全网（非 CC 会话信息提示）。
+- **为何 setContext `ccStatusDot.ccTabActive` 是错的修法（rejected）**：在 `editor/title/context` 里，custom `setContext` keys 解析对的是 **ACTIVE editor**，不是被右键的 tab（只有内建 `resource*` keys 才 scope 到被右键的 tab）。所以全局 `ccTabActive=true`（CC panel 活跃时设）会 (a) 让用户右键非 CC tab 时该项也显，(b) 让用户右键非活跃/后台 CC tab 时该项不显。这个 ceiling 已记录在项目 memory 里。
+
+### Changed — Issue #1 token SBI 内联速率（移图 + 分隔符对齐）
+
+- **速率分隔符 space → `·`**（`patch.ts` §G tick）：`rateSuffix` 从 `(sp?" "+sp:"")+(nm?" "+nm:"")`（空格分隔，渲染 `12.3k tok ▂▄▆█ 1.2k/s`）改为 `[sp,nm].filter(...).join(" ")` 然后前缀 `" · "`（渲染 `12.3k tok · ▂▄▆█ 1.2k/s · ~$0.42`）。速率段现在与 cost 段在同一 divider 级别。
+- **`rateDisplayMode` 默认 `both` → `numeric`**（`companion/package.json` schema default + IIFE `cfg.get("rateDisplayMode","numeric")` fallback）：SBI 更清爽；要 sparkline 的用户 opt-in `both`/`sparkline`。schema default 与 IIFE fallback 仍由 `test-version-sync.mjs` 锁死一致。
+- **图表面板整体移除**（`patch.ts` §E.2 + §F QuickPick）：删 `showRateChart` / `__ccsdRateChartHtml` / `__ccsdRateChartCss` / `__ccsdRateChartJs` / `__ccsdGetNonce`（form C webview：pure-SVG + CSP nonce + 500ms postMessage timer）+ QuickPick `$(graph) Show live rate chart` entry + 对应 `else if(label.indexOf(tr("qpShowChartLabel"))>=0){showRateChart()...}` 分支 + 11 个 chart-only i18n key（qpShowChart*/ttRateTpl/ttSparklineHint/wv*，9 种 language）。SBI click 仍走 `showTokQuickPick`（v0.3.0 前行为），只是 QuickPick 里不再有图表入口。
+- **速率采样 infra 保留**（`__ccsdRateSample` / `__ccsdRateFromBuf` / `__ccsdRateSpark` / `__ccsdRateFlush` / `__ccsdRateLoad` + `RATE_BUF_CAP`/`RATE_WINDOW_MS`/`RATE_FLUSH_MS` 常量 + `<sid>.rate` sidecar）：这些函数既驱动内联 tok/s 后缀，也提供 cross-reload 连续性；chart 只是它们的消费者之一，删 chart 不影响它们。setInterval 数从 3（`__ccsdSbiTimer` + per-panel tick + chart-panel msgTimer）回到 2。
+- **§E.2 commentary + I18N_DICT 注释** 同步更新反映 chart 移除 + 速率采样 infra 保留。
+
+### Added — Issue #3 companion package.nls 8 语言本地化
+
+- **8 个 `companion/package.nls{,.zh-cn,.ja,.de,.es,.fr,.pt-br,.ru}.json`**：26 key/语言，覆盖 displayName/description/view name/contextualTitle/viewsWelcome contents/7 个 command title + shared category/configuration title/12 个 configuration property description。翻译对齐 IIFE `I18N_DICT` 既有术语（token→tok 不译、cost→费用/Kosten/coste/coût/custo/стоимость、session→会话/Session/sesión/session/sessão/сессия、Favorite→收藏/Favorit/Favorito/Favori/Favorito/Избранное）。
+- **`companion/package.json` 26 处 user-visible literal → `%ccsd.*%` 引用**：所有 view/command/configuration 字符串。`main` field 不变；无 `extension.ts` 改动（VSCode 自动从 extension root 加载 nls 文件，locale fallback → en）。
+- **关键差异**：package.nls **不**像 IIFE 那样 collapse `zh-cn→zh` / `pt-br→pt`（IIFE 通过 `split("-")[0]` 做），所以区域 filename `package.nls.zh-cn.json` / `package.nls.pt-br.json` 是强制的——否则该 locale 静默回退到 EN。
+- **scope ceiling**：package.nls 只本地化 `contributes` 表面（views / command palette / Settings UI）。**不**本地化 `extension.ts` runtime 字符串（如 "no active Claude Code session..." 信息提示）—— 那需要 `vscode.l10n.t(...)` API + `package.nls.l10n.bundle.{locale}.json` 集，是独立更大的 scope，留作可选 follow-up。
+
+### Tests
+
+- **`hooks/test-iife.mjs`**：IIFE.66 setInterval 3→2（chart timer 移除）；IIFE.140 默认 `both`→`numeric`；IIFE.145-150/152/153a/b/c 删除（chart 断言）；新增 IIFE.145a-f（chart panel 已移除的负面断言：showRateChart/__ccsdRateChartHtml/__ccsdGetNonce/qpShowChartLabel/wvChartTitle/<svg literal 全 absent）；新增 IIFE.160（rate suffix 用 `·` 分隔符，镜像 cost divider）；IIFE.151 保留（`__ccsdRateFromBuf` helper 仍驱动 inline suffix）；IIFE.21c stamp v0.5.0 → v0.5.1；IIFE.141/142/143/144/136/137/138/139 全保留（速率采样 infra 完整）。
+- **`hooks/test-favorites.mjs` FAV.31** 翻转：从断言 `resourceScheme == 'webview'` 改为断言 `resourceScheme != 'file'` 且 **不**含 `== 'webview'`（避免回归）。FAV.31a/b（config gate + default true）零改动仍有效。
+
+### Version
+
+- **版本 5-way pin** 同步 bump：`package.json` 0.5.0 → 0.5.1；`patch.ts INJECT_VERSION` v0.5.0 → v0.5.1；`companion/package.json` 0.5.0 → 0.5.1（lockstep）；`companion/extension.ts MIN_PATCHER_VERSION` 0.5.0 → 0.5.1 + `injectVersion()` fallback v0.5.0 → v0.5.1（test-version-sync.mjs 强制 MIN_PATCHER_VERSION + injectVersion fallback === companion package.json.version）。`HOOK_VERSION`（v0.2.1）+ `cc-status.js` hash 不变（writer 无改动）。IIFE body bytes 变 → INJECT banner sha1 自动重算。
+- **立场红线全守**：5 态点 / 4 灯 / permission / token SBI 既有（总数/cost）/ Q1-Q7 / v0.2.8 src/v0.3.1 nonce/v0.4.0 收藏视图+导航 / v0.5.0 金线+右键（修后）全保留。
+
 ## [0.5.0] - 2026-07-22
 
 **Favorites tab 右键 + 金线下划线标记：tab 右键直接 star/unstar + 收藏会话的 tab icon 底部加细金线。** 推翻 v0.4 设计 §5 Slice 2 的"先做 PoC"推迟理由——`resourceScheme == 'webview'` 已是 VSCode 暴露的最精确 context key（无 CC 专属 key，handler 内 `__ccsdActiveSid` 校验是唯一过滤器，非 CC webview no-op）。Q3 方案 (a) 落地：每 panel 只一个 iconPath 槽，5 state × 1 favorited = 10 SVG（base 5 不动 + 5 -fav 变体加金线 `<rect>`）。

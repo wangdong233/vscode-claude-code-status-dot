@@ -112,11 +112,10 @@ The bottom bar's 🔵 light ticks up and the tab turns blue the moment Claude Co
 A second status bar item on the **right side** of the status bar shows the token usage and (optional) USD cost estimate for the currently active CC panel:
 
 ```
-$(clock) 12.3k tok ▂▄▆█ 1.2k/s · $0.42
+$(clock) 12.3k tok · 1.2k/s · ~$0.42
 ```
 
-- **v0.3.0 new: instantaneous tok/s rate + unicode sparkline** — every 500ms tick samples input+output tokens (deliberately excludes cache_read/cache_creation; otherwise cache spikes produce meaningless multi-M tok/s readings). The last 8 samples (4s) render as an 8-block `▁▂▃▄▅▆▇█` mini-chart; the tok/s value comes from a 5-second sliding window. `ccStatusDot.rateDisplayMode` (`off|numeric|sparkline|both`, default `both`) controls the rendering; switch to `numeric` or `off` on a crowded status bar.
-- **v0.3.0 new: click the SBI → `$(graph) Show live rate chart`** — opens a webview panel with a dual-series chart (cumulative tokens line in blue + instantaneous tok/s bars in orange), pure-SVG with zero external libraries and a strict CSP `default-src 'none'`.
+- **v0.3.0 new: instantaneous tok/s rate + optional unicode sparkline** — every 500ms tick samples input+output tokens (deliberately excludes cache_read/cache_creation; otherwise cache spikes produce meaningless multi-M tok/s readings). The last 8 samples (4s) can render as an 8-block `▁▂▃▄▅▆▇█` mini-chart; the tok/s value comes from a 5-second sliding window. `ccStatusDot.rateDisplayMode` (`off|numeric|sparkline|both`, default `numeric`) controls the rendering; switch to `both` or `sparkline` for the mini-chart, or `off` on a crowded status bar. While streaming the rate shows (e.g. `· 1.2k/s`); when idle the rate hides and cost shows (e.g. `· ~$0.42`) — rate and cost share the same `·` divider.
 - **v0.3.0 new: B/T units** — `fmtTok` extended from {k, M} to {k, M, B, T} 4-significant-figure adaptive formatting. 1.5B renders as "1.50B" instead of "1500.0M"; 796M renders as "796M" instead of "796.0M".
 - **Token grows in real time while CC is streaming** — it doesn't wait for the reply to finish; every tick reads the transcript tail for the delta. Tooltip stays static (no flicker, already optimized). On perf-sensitive machines you can disable `tokenLiveDeltaEnabled`.
 - **Default window is `all` (cumulative, never resets)** — pick from 5min / 10min / 1h / 24h / 3d / 7d / 30d / all. `all` is whole-session cumulative (monotonically grows at the session level, like a ledger that only goes up); `5min..30d` are rolling windows (old turns slide out when they expire, which can look like the count "resetting" — useful for "how much have I spent in the last X").

@@ -290,9 +290,11 @@ check(
     'decayDone=' + perTabDecayDoneIdx + ' pend=' + pendIdx,
   );
   check(
-    'IIFE.12e v0.5.4: per-tab running→idle decay REMOVED (proposal 2: gray only from green/done, never from yellow/running; active workflows stay yellow)',
-    perTabDecayRunningIdx < 0,
-    'decayRunning should be ABSENT (got idx=' + perTabDecayRunningIdx + ' — running must not decay to idle)',
+    'IIFE.12e v0.5.13: per-tab running→idle decay RESTORED, gated on tokens.last_ts (replaces v0.5.4 removal)',
+    /else if\(st==="running"&&j\.tokens&&j\.tokens\.last_ts&&\(now-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)\{st="idle";\}/.test(
+      iife,
+    ),
+    'v0.5.13: stale running decays to idle when tokens.last_ts > 30min (real model output, aggregates subagent tokens — kills zombie running like 90cc10fb without false-graying active workflows). Replaces v0.5.4 removal.',
   );
   check(
     'IIFE.12f per-tab decay chain sits AFTER __ccsdPending yield (yield still wins for CC-native blue)',
@@ -374,9 +376,8 @@ check(
 // Add/Remove menu labels via setContext('ccStatusDot.fav.currentTabFavorited');
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
-// v0.5.12: perf quick wins — IIFE body CHANGED (SBI tick 立即首绘 __ccsdSbiTick +
-// §H 复用 __ccsdAgCache + I18N globalThis 守卫). Bump triggers necessary re-patch.
-check('IIFE.21c banner carries v0.5.12 stamp', /\/\*cc-status-dot-injected:v0.5.12:/.test(iife));
+// v0.5.13: state-machine fix — IIFE body CHANGED (§F+§H restore running→idle decay gated on tokens.last_ts + §F blue-priority mutually-exclusive count). Replaces v0.5.4 "running NEVER decays".
+check('IIFE.21c banner carries v0.5.13 stamp', /\/\*cc-status-dot-injected:v0.5.13:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -552,11 +553,21 @@ check(
 // `ag.pending++`) all appear in order. The strict position lock (IIFE.29b)
 // pins the new OR form's `ag.pending++` AFTER the interrupted-decay block.
 check(
-  'IIFE.29 SBI counts pending independent of state with idle GC (OR file-pending OR globalThis set)',
-  /__ps\s*=\s*globalThis\.__ccsdPendingSet/.test(iife) &&
-    /j\.pending\s*===\s*true/.test(iife) &&
+  'IIFE.29 v0.5.13: SBI count is blue-priority mutually exclusive (pending wins over running/done; OR file-pending OR globalThis set)',
+  /var\s+isPend\s*=\s*\(\(j\.pending\s*===\s*true\)/.test(iife) &&
+    /__ps\s*=\s*globalThis\.__ccsdPendingSet/.test(iife) &&
     /__ps\[files\[i\]\.slice\(0,-5\)\]/.test(iife) &&
-    /st\s*!==\s*"idle"\s*\)\s*ag\.pending\+\+/.test(iife),
+    /st\s*!==\s*"idle"/.test(iife) &&
+    /if\(isPend\)\{ag\.pending\+\+;\}/.test(iife) &&
+    /else if\(st==="running"\)\{ag\.running\+\+;\}/.test(iife),
+  'v0.5.13: pending is priority-overlay + exclusive with state (blue wins; running+pending = +1 blue only). Pre-0.5.13 counted pending INDEPENDENTLY (running+pending → +1 yellow AND +1 blue) — the cause of "two-yellow one-blue".',
+);
+check(
+  'IIFE.29a v0.5.13: §F aggregation running→idle decay gated on tokens.last_ts (symmetric with §H)',
+  /else if\(st==="running"&&j\.tokens&&j\.tokens\.last_ts&&\(Date\.now\(\)-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)\{st="idle";\}/.test(
+    iife,
+  ),
+  '§F four-light aggregation must apply the SAME stale-running decay as §H (tokens.last_ts > 30min → idle) so the tab color and the bottom count NEVER disagree',
 );
 {
   // Position lock: pending check must come AFTER all three decay branches.

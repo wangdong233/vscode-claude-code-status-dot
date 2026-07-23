@@ -52,8 +52,10 @@
 **前置**：Node.js 18+，VSCode 里已装 Claude Code 扩展。
 
 ```bash
-npx vscode-claude-code-status-dot
+npx -y vscode-claude-code-status-dot@latest
 ```
+
+`-y` 跳过 npx 首次安装确认，全程零交互（patcher 本身无任何提示）。首次安装也可不带 `-y`：`npx vscode-claude-code-status-dot`。
 
 `Cmd+Shift+P`（Mac）/ `Ctrl+Shift+P`（Win/Linux）→ 输入 `Developer: Reload Window` → 在 CC 里发一条 prompt。
 
@@ -248,11 +250,11 @@ VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩�
 <details>
 <summary>📖 命令一览</summary>
 
-| 命令                                         | 作用                                                                         |
-| -------------------------------------------- | ---------------------------------------------------------------------------- |
-| `npx vscode-claude-code-status-dot`          | 安装（patch extension.js + 接 hooks + 装 companion，幂等；自动清理旧版残留） |
-| `npx vscode-claude-code-status-dot --revert` | 还原（从 `.bak` 恢复 + 移除 hooks + 删 INSTALL_DIR，保留用户数据）           |
-| `npx vscode-claude-code-status-dot --status` | dry-run 诊断报告，不改任何文件                                               |
+| 命令                                          | 作用                                                                              |
+| --------------------------------------------- | --------------------------------------------------------------------------------- |
+| `npx -y vscode-claude-code-status-dot@latest` | 安装/升级（patch extension.js + 接 hooks + 装 companion，幂等；自动清理旧版残留） |
+| `npx vscode-claude-code-status-dot --revert`  | 还原（从 `.bak` 恢复 + 移除 hooks + 删 INSTALL_DIR，保留用户数据）                |
+| `npx vscode-claude-code-status-dot --status`  | dry-run 诊断报告，不改任何文件                                                    |
 
 开发态把命令换成 `npx tsx patch.ts`（带同样参数）。
 

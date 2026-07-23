@@ -26,5 +26,6 @@
   "ccsd.config.warnThresholdUsd.description": "当会话费用估算跨过此 USD 阈值时通知（0 = 禁用）。每次跨过触发一次。",
   "ccsd.config.rateDisplayMode.description": "如何在 token 状态栏项上渲染实时 tok/s 后缀：'off' 隐藏（适用于拥挤的状态栏/对性能敏感的机器），'numeric'（默认）仅显示 '1.2k/s'，'sparkline' 仅显示 '▂▄▆█'，'both' 两者都显示。速率段与费用一样使用 '·' 分隔（渲染为 '12.3k tok · 1.2k/s · ~$0.42'）。",
   "ccsd.config.fav.includeInExplorerContextMenu.description": "在资源管理器文件右键菜单中显示 'CC 收藏：添加/移除文件'。",
-  "ccsd.config.fav.includeInTabContextMenu.description": "在非文件编辑器标签页右键菜单中显示 'CC 收藏：加星/取消加星当前 CC 标签页'（v0.5.0+；v0.5.1 将门槛从仅 webview 放宽为非文件，以便该项在 Claude Code 标签页上显示 —— VSCode 不公开 CC 专用的上下文键，且 CC 标签页的 resourceScheme 解析为空，而不是 'webview'）。当活动标签页不是 Claude Code 会话时（无 __ccsdActiveSid），处理程序会以信息提示无操作。"
+  "ccsd.config.fav.includeInTabContextMenu.description": "在非文件编辑器标签页右键菜单中显示 'CC 收藏：加星/取消加星当前 CC 标签页'（v0.5.0+；v0.5.1 将门槛从仅 webview 放宽为非文件，以便该项在 Claude Code 标签页上显示 —— VSCode 不公开 CC 专用的上下文键，且 CC 标签页的 resourceScheme 解析为空，而不是 'webview'）。当活动标签页不是 Claude Code 会话时（无 __ccsdActiveSid），处理程序会以信息提示无操作。",
+  "ccsd.config.fav.includeInWebviewContextMenu.description": "在 Claude Code 聊天 webview 内右键时显示 '加入/退出 CC 收藏'（v0.5.8+）。注入的星标脚本在 webview body 上设置 data-vscode-context，使菜单精确定位到对应会话（ccsdSid 上下文键控制可见性 — 仅在 CC webview 内显示）。"
 }

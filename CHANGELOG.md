@@ -2,6 +2,27 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.5.8] - 2026-07-23
+
+**在 CC 聊天 webview 内加可点击星标 + 右键 webview/context 收藏菜单。** 两方案覆盖活跃 tab 收藏：方案 C（webview 内星标，最快）+ 方案 B（右键聊天内容，备选）。v0.2.7–v0.5.7 既有功能全保留；IIFE 括号配平不变。
+
+### Added — 方案 C：CC webview 会话标题旁的可点击星标（star-in-webview）
+
+- **IIFE 注入 webview**：patch.ts IIFE 新增 §AA section——prototype 级 `Webview.html` setter monkey-patch（`globalThis.__ccsdHtmlSetterPatched` 单次守卫），拦截 CC 创建 panel 时的 html 写入，在 `</head>` 前注入 `<style>` + `<script nonce="...">` 星标脚本。CSP nonce 从 CC 已设的 CSP meta / script 标签中提取（`/nonce-([A-Za-z0-9+/=]+)/`），复用 CC 自己的 nonce → CSP 合规；nonce 提取失败则不注入（guard，R3 缓解）。非 CC webview 过滤（`claude-error` marker 检测）不受影响。
+- **首个 panel 一次性 read-modify-write**：IIFE 由 update_session_state / rename_tab 触发，在 CC createPanel 设 html 之后才 fire（R1 时序死结），故对当前 panel 做一次性 read-modify-write（一次 webview reload flash，每 panel 每会话最多一次，R8 接受）。prototype patch 捕获之后所有新建 panel（零 reload）。
+- **星标脚本（webview 渲染端）**：monkey-patch `window.acquireVsCodeApi`（CC bundle 调用前拦截，stash 引用 `window.__ccsdApi`，不重复 acquire）→ 在 `document.body` 右上角（`position:fixed; top:8px; right:8px; z-index:100001`，高于 CC 全文 z-index 上限 10000）插入 ☆/★ span。☆（U+2606）未收藏（opacity .45）↔ ★（U+2605）金色 `#FFD700` 已收藏。click → `postMessage({type:"ccsdToggleFav",sid})`。键盘可达（role=button + tabindex=0 + Enter/Space handler）。MutationObserver 安全网（documentElement childList）防 body 重挂。
+- **IIFE ←→ webview 双向桥**：IIFE `onDidReceiveMessage` 收到 `ccsdToggleFav` → 转发 `vs.commands.executeCommand("ccStatusDot.fav.toggleTab", {webviewContext:{ccsdSid}})` → companion writeFavAtomic（单一写入方，避免 schema 漂移 R7）→ `.then()` 回调立即 `postMessage({type:"ccsdFavState"})` 回传（感知延迟 <50ms 而非 500ms）。per-tick（§H 500ms）读 `readFavSet()`（mtime-cache，既有）→ 对比 per-panel cache `t.__ccsdLastStarFav` → 变化才 push（稳态零 IPC）。
+
+### Added — 方案 B：webview/context 右键收藏菜单
+
+- **data-vscode-context 注入**：同星标脚本在 `document.body` 上设 `data-vscode-context={"ccsdSid":"<sid>","ccsdFav":<bool>}`，companion 的 `webview/context` menu 拿到精确 sid。
+- **companion/package.json** 新增 `webview/context` menu section：`ccStatusDot.fav.addTab`（when: `ccsdSid && !ccsdFav`）+ `ccStatusDot.fav.removeTab`（when: `ccsdSid && ccsdFav`）+ 新 config `ccStatusDot.fav.includeInWebviewContextMenu`（默认 true）。8 语言 i18n。
+- **companion/extension.ts `resolveActiveSid` 扩展**：接受 optional `arg`，优先提取 `arg.webviewContext.ccsdSid`（精确 sid）；`favToggleTab` / `favAddTab` / `favRemoveTab` 透传 arg。非 webview 路径（resourceUri）不受影响。
+
+### Changed — 5-way version pin
+
+- package.json / companion/package.json: `0.5.7` → `0.5.8`。patch.ts `INJECT_VERSION`: `v0.5.7` → `v0.5.8`。companion `MIN_PATCHER_VERSION` + `injectVersion()` fallback 同步。test-iife.mjs IIFE.21c stamp 更新。
+
 ## [0.5.3] - 2026-07-22
 
 **5 维全面审查修 critical/high/medium 至零 blocking。** 4 维独立审查（code-standards / data-logic / business-logic / e2e-integration / 简单架构）交叉定位用户报的 F1/F2/F7 根因 + 一处 writer 设计前后矛盾 + 6 处 code-standards 卫生债。本版不引入新功能，全为根因修与卫生清理；v0.2.7-v0.5.2 既有功能全保留。

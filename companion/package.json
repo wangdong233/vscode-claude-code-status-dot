@@ -2,7 +2,7 @@
   "name": "cc-status-dot-companion",
   "displayName": "%ccsd.displayName%",
   "description": "%ccsd.description%",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,
@@ -119,6 +119,18 @@
           "command": "ccStatusDot.fav.removeTab",
           "when": "resourceScheme != 'file' && ccStatusDot.fav.currentTabFavorited && config.ccStatusDot.fav.includeInTabContextMenu",
           "group": "ccsd_favorites@3"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "ccStatusDot.fav.addTab",
+          "when": "ccsdSid && !ccsdFav && config.ccStatusDot.fav.includeInWebviewContextMenu",
+          "group": "ccsd_favorites@1"
+        },
+        {
+          "command": "ccStatusDot.fav.removeTab",
+          "when": "ccsdSid && ccsdFav && config.ccStatusDot.fav.includeInWebviewContextMenu",
+          "group": "ccsd_favorites@2"
         }
       ],
       "view/title": [
@@ -288,6 +300,11 @@
           "type": "boolean",
           "default": true,
           "description": "%ccsd.config.fav.includeInTabContextMenu.description%"
+        },
+        "ccStatusDot.fav.includeInWebviewContextMenu": {
+          "type": "boolean",
+          "default": true,
+          "description": "%ccsd.config.fav.includeInWebviewContextMenu.description%"
         }
       }
     }

@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.7";
+const MIN_PATCHER_VERSION = "0.5.8";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.7";
+    return effectiveConfig?.injectVersion ?? "v0.5.8";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1373,7 +1373,30 @@ function deriveLabelFromTranscript(transcriptPath: string): string | null {
  *  The resourceUri passed by editor/title/context + explorer/context is NOT
  *  decodable for a CC webview tab (synthetic URI, no sid), so it's accepted
  *  for API correctness + forward-compat only — see favToggleTab. */
-function resolveActiveSid(): string {
+/** v0.5.8: resolveActiveSid now accepts an optional `arg` that may carry a
+ *  webview/context `webviewContext` payload. When the star-in-webview script
+ *  or the webview/context menu triggers a favorite command, VSCode (or the
+ *  IIFE bridge) passes `{webviewContext:{ccsdSid:"..."}}` as the first arg —
+ *  the sid is the EXACT session whose webview was clicked (no active-tab
+ *  guessing). This is checked FIRST (highest-priority resolution path);
+ *  when absent or empty, the existing resolution chain runs unchanged.
+ *  The parameter name `arg` (not `resourceUri`) reflects that the value can
+ *  now be EITHER a VSCode resourceUri (editor/title/context + explorer/context,
+ *  CC webview synthetic URIs carry no sid — passed through for API contract
+ *  only) OR a webview/context arg ({webviewContext:...}). Both shapes are
+ *  accepted; only the webviewContext shape yields a sid here. */
+function resolveActiveSid(arg?: unknown): string {
+    // v0.5.8 webview/context path: extract the precise sid from the
+    // data-vscode-context JSON the IIFE's star script baked onto document.body.
+    // The IIFE calls toggleTab with {webviewContext:{ccsdSid:sid}}; VSCode's
+    // webview/context menu passes the same shape from data-vscode-context.
+    if (arg && typeof arg === "object") {
+        const ctx = (arg as { webviewContext?: unknown }).webviewContext;
+        if (ctx && typeof ctx === "object") {
+            const webviewSid = (ctx as { ccsdSid?: unknown }).ccsdSid;
+            if (typeof webviewSid === "string" && webviewSid) return webviewSid;
+        }
+    }
     const g = globalThis as Record<string, unknown>;
     let sid =
         (typeof g.__ccsdActiveSid === "string" && g.__ccsdActiveSid) ||
@@ -1467,8 +1490,13 @@ function buildFavSessionRow(sid: string): FavSession | null {
  *  entrypoint; the menu system prefers favAddTab / favRemoveTab (Bug 4
  *  dynamic labels) but toggleTab remains useful as a single-verb macro. */
 function favToggleTab(resourceUri?: unknown): void {
-    void resourceUri; // accepted for menu contract; CC webview URIs carry no sid
-    const sid = resolveActiveSid();
+    // v0.5.8: pass the arg through to resolveActiveSid so the webview/context
+    // path (and the IIFE star-click bridge, which calls this command with
+    // {webviewContext:{ccsdSid:sid}}) resolves the EXACT clicked session, not
+    // the active one. For editor/title/context + explorer/context the arg is a
+    // resourceUri (CC webview synthetic URIs carry no sid — resolveActiveSid
+    // skips it as before).
+    const sid = resolveActiveSid(resourceUri);
     if (!sid) {
         void vscode.window.showInformationMessage(
             "cc-status-dot: no active Claude Code session. Open a CC tab first, then re-run this command.",
@@ -1508,8 +1536,7 @@ function favToggleTab(resourceUri?: unknown): void {
  *  this path even if the user double-clicks: the second click is also an
  *  add-attempt on an already-favorited sid, which no-ops. */
 function favAddTab(resourceUri?: unknown): void {
-    void resourceUri; // accepted for menu contract; CC webview URIs carry no sid
-    const sid = resolveActiveSid();
+    const sid = resolveActiveSid(resourceUri);
     if (!sid) {
         void vscode.window.showInformationMessage(
             "cc-status-dot: no active Claude Code session. Open a CC tab first, then re-run this command.",
@@ -1540,8 +1567,7 @@ function favAddTab(resourceUri?: unknown): void {
  *  true). Idempotent: if the active sid is NOT favorited (stale setContext or
  *  hand-edit), this no-ops instead of accidentally adding it. */
 function favRemoveTab(resourceUri?: unknown): void {
-    void resourceUri; // accepted for menu contract; CC webview URIs carry no sid
-    const sid = resolveActiveSid();
+    const sid = resolveActiveSid(resourceUri);
     if (!sid) {
         void vscode.window.showInformationMessage(
             "cc-status-dot: no active Claude Code session. Open a CC tab first, then re-run this command.",

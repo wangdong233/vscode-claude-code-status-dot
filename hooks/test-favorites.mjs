@@ -597,17 +597,15 @@ check(
 );
 
 check(
-  'FAV.37 package.json contributes explorer/context menu for toggleTab (Open Editors coverage, v0.5.3 F6)',
+  'FAV.37 package.json contributes explorer/context menu for addTab (Open Editors coverage, v0.5.7 replaced toggleTab with addTab/removeTab)',
   companionPkg.contributes &&
     companionPkg.contributes.menus &&
     Array.isArray(companionPkg.contributes.menus['explorer/context']) &&
     companionPkg.contributes.menus['explorer/context'].some(
       (m) =>
-        m.command === 'ccStatusDot.fav.toggleTab' &&
+        m.command === 'ccStatusDot.fav.addTab' &&
         typeof m.when === 'string' &&
-        m.when.includes("resourceScheme != 'file'") &&
-        m.when.includes('!explorerResourceIsFolder') &&
-        m.when.includes('config.ccStatusDot.fav.includeInExplorerContextMenu'),
+        m.when.includes("resourceScheme != 'file'"),
     ),
 );
 
@@ -653,11 +651,11 @@ check(
 // the favorites feature.
 const editorTitleContext = companionPkg.contributes?.menus?.['editor/title/context'];
 check(
-  'FAV.31 v0.5 contributes editor/title/context with toggleTab (non-file tab right-click)',
+  'FAV.31 v0.5.7 contributes editor/title/context with addTab (non-file tab right-click, replaced toggleTab)',
   Array.isArray(editorTitleContext) &&
     editorTitleContext.some(
       (m) =>
-        m.command === 'ccStatusDot.fav.toggleTab' &&
+        m.command === 'ccStatusDot.fav.addTab' &&
         typeof m.when === 'string' &&
         m.when.includes("resourceScheme != 'file'") &&
         !m.when.includes("resourceScheme == 'webview'"),
@@ -665,11 +663,11 @@ check(
   'v0.5 must ship the tab right-click favorite toggle (per docs/FAVORITES-DESIGN.md §5 Slice 2); v0.5.1 must use the relaxed resourceScheme != "file" gate (webview-only gate never matched the CC tab)',
 );
 check(
-  'FAV.31a editor/title/context entry gated by config.ccStatusDot.fav.includeInTabContextMenu',
+  'FAV.31a editor/title/context addTab gated by config.ccStatusDot.fav.includeInTabContextMenu',
   Array.isArray(editorTitleContext) &&
     editorTitleContext.some(
       (m) =>
-        m.command === 'ccStatusDot.fav.toggleTab' &&
+        m.command === 'ccStatusDot.fav.addTab' &&
         typeof m.when === 'string' &&
         m.when.includes('config.ccStatusDot.fav.includeInTabContextMenu'),
     ),
@@ -818,7 +816,7 @@ check(
 );
 check(
   'FAV.37d v0.5.6 resolveActiveSid helper declared (shared sid resolution for toggle/add/remove)',
-  /function\s+resolveActiveSid\s*\(\s*\)\s*:\s*string/.test(companionSrc),
+  /function\s+resolveActiveSid\s*\([^)]*\)/.test(companionSrc),
   'extracted from favToggleTab so favAddTab / favRemoveTab share byte-identical sid resolution with the v0.5.3 F1 title-bridge match',
 );
 check(

@@ -374,11 +374,9 @@ check(
 // Add/Remove menu labels via setContext('ccStatusDot.fav.currentTabFavorited');
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
-// v0.5.10: stamp bumped — IIFE body unchanged (status-bar ★ button is
-// companion-only), 5-way pin requires INJECT_VERSION to track package.json.
-// v0.5.11: same again — companion-only changes (closed-session resume via
-// claude-vscode.editor.open(sid) + ★ button 500ms tick), no IIFE touch.
-check('IIFE.21c banner carries v0.5.11 stamp', /\/\*cc-status-dot-injected:v0.5.11:/.test(iife));
+// v0.5.12: perf quick wins — IIFE body CHANGED (SBI tick 立即首绘 __ccsdSbiTick +
+// §H 复用 __ccsdAgCache + I18N globalThis 守卫). Bump triggers necessary re-patch.
+check('IIFE.21c banner carries v0.5.12 stamp', /\/\*cc-status-dot-injected:v0.5.12:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -488,8 +486,21 @@ check('IIFE.24f panel-instance stash uses __ccsd* (NOT CC __cc[A-Z] ns)', !/(\bt
 // SBI singleton timer — one window-scoped setInterval, idempotent via the
 // __ccsdSbiTimer guard.
 check(
-  'IIFE.25 SBI singleton timer guard (__ccsdSbiTimer)',
-  /if\s*\(\s*!globalThis\.__ccsdSbiTimer\s*\)\s*\{globalThis\.__ccsdSbiTimer\s*=\s*setInterval/.test(iife),
+  'IIFE.25 SBI singleton timer guard (__ccsdSbiTimer) + v0.5.12 immediate first paint (no 500ms delay)',
+  /if\s*\(\s*!globalThis\.__ccsdSbiTimer\s*\)\s*\{function\s+__ccsdSbiTick/.test(iife) &&
+    /globalThis\.__ccsdSbiTimer\s*=\s*setInterval\(\s*__ccsdSbiTick/.test(iife) &&
+    /;__ccsdSbiTick\(\);/.test(iife),
+  'v0.5.12 perf: guard prevents duplicate timers; tick extracted to named __ccsdSbiTick + invoked once immediately after setInterval registration (four-light first paint without waiting 500ms)',
+);
+check(
+  'IIFE.25b v0.5.12 §H per-panel tick reuses __ccsdAgCache (no redundant read+parse)',
+  /ajf\s*=\s*sid\s*\+\s*".json"[\s\S]{0,250}?globalThis\.__ccsdAgCache[\s\S]{0,250}?__ch\.j/.test(iife),
+  'v0.5.12 perf: §H reads sid.json via the §F-populated __ccsdAgCache (mtime+size check) before falling back to readFileSync — eliminates a redundant read+parse every 500ms per panel',
+);
+check(
+  'IIFE.25c v0.5.12 I18N dictionary guarded by globalThis.__ccsdI18N (no per-panel 19KB re-alloc)',
+  /var\s+I18N\s*=\s*globalThis\.__ccsdI18N\s*\|\|\s*\(\s*globalThis\.__ccsdI18N\s*=/.test(iife),
+  'v0.5.12 perf: the 19KB I18N literal is allocated once (first panel) and reused via globalThis — every subsequent panel binds the cached ref instead of re-allocating',
 );
 // v0.1.13 setContext driver is GONE — no `executeCommand("setContext", ...)` in
 // the executable IIFE code (the only matches should be inside developer-facing
@@ -902,15 +913,19 @@ check(
   /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdSbi\s*\)/.test(iife),
 );
 check(
-  'IIFE.34 SBI singleton-timer creation wrapped in try/catch',
-  /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdSbiTimer\s*\)\s*\{globalThis\.__ccsdSbiTimer\s*=\s*setInterval/.test(iife) &&
-    /,\s*500\s*\)\s*;\s*\}\s*\}\s*catch\s*\(\s*e\s*\)\s*\{\s*\}/.test(iife),
+  'IIFE.34 SBI singleton-timer creation wrapped in try/catch (v0.5.12: named tick + immediate invoke)',
+  /try\s*\{\s*if\s*\(\s*!globalThis\.__ccsdSbiTimer\s*\)\s*\{function\s+__ccsdSbiTick/.test(iife) &&
+    /setInterval\(\s*__ccsdSbiTick\s*,\s*500\s*\)\s*;\s*__ccsdSbiTick\(\)\s*;\s*\}\s*\}\s*catch\s*\(\s*e\s*\)\s*\{\s*\}/.test(
+      iife,
+    ),
+  'v0.5.12: outer try/catch intact; inner declares named __ccsdSbiTick + registers setInterval + invokes once for immediate first paint',
 );
 check(
-  'IIFE.35 SBI aggregation body wrapped in try/catch',
-  /setInterval\s*\(\s*function\s*\(\s*\)\s*\{\s*try\s*\{\s*var\s+ag\s*=\s*\{running:0,done:0,interrupted:0,idle:0,pending:0\}/.test(
+  'IIFE.35 SBI aggregation body wrapped in try/catch (v0.5.12: named __ccsdSbiTick)',
+  /function\s+__ccsdSbiTick\s*\(\s*\)\s*\{\s*try\s*\{\s*var\s+ag\s*=\s*\{running:0,done:0,interrupted:0,idle:0,pending:0\}/.test(
     iife,
   ),
+  'v0.5.12: tick extracted to named __ccsdSbiTick; aggregation body still opens with try{var ag={...',
 );
 check(
   'IIFE.36 SBI onDidDispose registration wrapped in try/catch',
@@ -1442,7 +1457,10 @@ check(
   'IIFE.68 LANG detection from vs.env.language (lowercase + primary subtag)',
   /var\s+LANG\s*=\s*\(vs\.env\.language\s*\|\|\s*"en"\s*\)\.toLowerCase\(\)\.split\(\s*"-"\s*\)\[0\]/.test(iife),
 );
-check('IIFE.69 I18N dictionary baked into IIFE', /var\s+I18N\s*=\s*\{/.test(iife));
+check(
+  'IIFE.69 I18N dictionary baked into IIFE (v0.5.12: globalThis.__ccsdI18N guard)',
+  /globalThis\.__ccsdI18N\s*\|\|\s*\(\s*globalThis\.__ccsdI18N\s*=\s*\{/.test(iife),
+);
 check(
   'IIFE.70 tr() helper with en fallback (I18N[k][LANG]→I18N[k].en→k)',
   /function\s+tr\(\s*k\s*\)\s*\{\s*var\s+e\s*=\s*I18N\[k\]\s*;\s*return\s+e\s*&&\s*\(\s*e\[LANG\]\s*\|\|\s*e\.en\s*\)\s*\|\|\s*k/.test(
@@ -1455,7 +1473,7 @@ check(
 // return the key itself for that locale (visibly broken UI).
 {
   // Locate `var I18N={...};` in the IIFE and extract the object literal.
-  const m = iife.match(/var\s+I18N\s*=\s*(\{[^;]*\})\s*;\s*function\s+tr\(/);
+  const m = iife.match(/globalThis\.__ccsdI18N\s*=\s*(\{[^;]*\})\s*\)\s*;\s*function\s+tr\(/);
   if (!m) {
     check('IIFE.71 I18N dict extractable for completeness check', false);
   } else {

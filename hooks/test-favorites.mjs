@@ -1069,6 +1069,31 @@ check(
   'the fast poller must be cleared on deactivation alongside favoritesWatcher',
 );
 
+// ===========================================================================
+// v0.5.12 perf: companion activate path — defer blocking work past activate's
+// synchronous return so the EH paints CC's injected IIFE (four-light/token)
+// first, instead of blocking on detectAndPatch's sync readFileSync.
+// ===========================================================================
+check(
+  'FAV.43a v0.5.12 ccPatchState stat-mtime fast path (skip 2.78MB read when CC unchanged)',
+  /function\s+ccPatchState/.test(companionSrc) &&
+    /fs\.statSync\(\s*extJs\s*\)\.mtimeMs/.test(companionSrc) &&
+    /readRepatchFlag\(\)/.test(companionSrc) &&
+    /extMtime\s*<=\s*flag\.ts/.test(companionSrc),
+  'activate calls ccPatchState synchronously (async fn runs sync pre-await); the stat fast path returns "fresh" without reading the 2.78MB extension.js when CC has not rewritten it since the last patch',
+);
+check(
+  'FAV.43b v0.5.12 activate wraps detectAndPatch in setImmediate (defer past sync return)',
+  /setImmediate\(\s*\(\s*\)\s*=>\s*\{[\s\S]{0,100}?void\s+detectAndPatch\(\)/.test(companionSrc),
+  'detectAndPatch runs sync until its first await (ccPatchState readFileSync); setImmediate lets activate return first so the EH paints CC four-light/token SBI sooner',
+);
+check(
+  'FAV.43c v0.5.12 registerFavorites defers initial paints via setImmediate',
+  /setImmediate\(\s*\(\s*\)\s*=>\s*refreshFavStatusBar\(\)\s*\)/.test(companionSrc) &&
+    /setImmediate\(\s*\(\s*\)\s*=>\s*\{[\s\S]{0,150}?favoritesProvider\?\.refresh\(\)/.test(companionSrc),
+  'the ★ button initial paint + tree initial refresh are deferred one tick so registerFavorites returns sooner (imperceptible — view not revealed until sidebar opened)',
+);
+
 // cleanup
 try {
   fs.rmSync(tmpDir, { recursive: true, force: true });

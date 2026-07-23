@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.11";
+const MIN_PATCHER_VERSION = "0.5.12";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.11";
+    return effectiveConfig?.injectVersion ?? "v0.5.12";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -391,6 +391,23 @@ function ccPatchState(extDir: string): "fresh" | "stale" | "absent" {
     try {
         const extJs = path.join(extDir, "extension.js");
         if (!fs.existsSync(extJs)) return "absent";
+        // v0.5.12 perf: stat-mtime fast path. CC's extension.js is ~2.78MB;
+        // reading it + regex takes ~13ms and runs synchronously inside
+        // activate() (async detectAndPatch runs sync until its first await).
+        // If CC hasn't rewritten extension.js since our last successful patch
+        // (last-repatch.json ts >= extJs mtimeMs, same extDir), the inject
+        // marker is guaranteed still present → return "fresh" without reading.
+        // A CC auto-update rewrites extension.js (mtimeMs advances past ts) →
+        // falls through to the full content check. Cuts ~13ms off activate.
+        try {
+            const extMtime = fs.statSync(extJs).mtimeMs;
+            const flag = readRepatchFlag();
+            if (flag && flag.extDir === extDir && flag.ts && extMtime <= flag.ts) {
+                return "fresh";
+            }
+        } catch {
+            /* stat/flag miss → fall through to full content check */
+        }
         const content = fs.readFileSync(extJs, "utf8");
         const marker = injectMarker();
         const want = injectVersion();
@@ -2157,7 +2174,10 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
     favStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     favStatusBar.command = "ccStatusDot.fav.toggleTab";
     ctx.subscriptions.push(favStatusBar);
-    refreshFavStatusBar(); // initial paint
+    // v0.5.12 perf: defer the ★ button's initial paint past registerFavorites'
+    // synchronous tail so activate returns sooner (EH paints CC's IIFE first);
+    // the star paints one tick later — imperceptible, but unblocks activate.
+    setImmediate(() => refreshFavStatusBar());
 
     // v0.5.10: refresh the star the instant the active tab changes. The IIFE
     // rewrites globalThis.__ccsdActiveSid on CC panel focus (no disk write),
@@ -2243,11 +2263,17 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
     // defensive (readFavDoc swallows all fs/JSON errors → emptyFavDoc) and the
     // first-time signature check (sig === "" lastSig) always fires once.
     // Subsequent ticks are deduped by the signature check inside refresh().
-    try {
-        favoritesProvider?.refresh();
-    } catch {
-        /* best-effort — first polling tick retries */
-    }
+    // v0.5.12 perf: defer the tree's initial paint (setContext + first render)
+    // past registerFavorites' sync tail — activate returns sooner, EH paints
+    // CC's IIFE first; the tree paints one tick later (imperceptible — the
+    // Favorites view isn't even revealed until the user opens the sidebar).
+    setImmediate(() => {
+        try {
+            favoritesProvider?.refresh();
+        } catch {
+            /* best-effort — first polling tick retries */
+        }
+    });
 }
 
 // Extension entry point. activationEvents: ["onStartupFinished"] fires once
@@ -2291,24 +2317,29 @@ export function activate(_ctx: vscode.ExtensionContext): void {
         }
     }
 
-    // Fire-and-forget — activation must not block the extension host.
-    // detectAndPatch is fully async (patch.js is spawned, not execFileSync'd),
-    // so the EH event loop stays responsive for other extensions during the
-    // patch run.
-    void detectAndPatch()
-        .then(() => {
-            // Start the cross-window repatch watcher after our own detect
-            // pass — so the baseline `ts` we read reflects any patch we just
-            // did (otherwise we'd immediately re-prompt for our own patch).
-            const extDir = discoverCcInThisFlavor();
-            if (extDir) startRepatchWatcher(extDir);
-        })
-        .catch((e) => {
-            // Swallow to avoid breaking activation; surface to the user instead.
-            vscode.window.showErrorMessage(
-                `cc-status-dot companion: detection error (${(e as Error)?.message ?? String(e)})`,
-            );
-        });
+    // v0.5.12 perf: defer detectAndPatch past activate's synchronous return.
+    // Despite `void`, an async function runs SYNCHRONOUSLY until its first
+    // await — detectAndPatch calls ccPatchState (readFileSync ~2.78MB, ~13ms)
+    // before any await, which blocked activate. setImmediate lets activate
+    // return FIRST (so the EH paints CC's injected IIFE — four-light + token
+    // SBI), then detectAndPatch runs on the next tick. The detect→patch→reload
+    // safety net is untouched (still fire-and-forget, just one tick later).
+    setImmediate(() => {
+        void detectAndPatch()
+            .then(() => {
+                // Start the cross-window repatch watcher after our own detect
+                // pass — so the baseline `ts` we read reflects any patch we just
+                // did (otherwise we'd immediately re-prompt for our own patch).
+                const extDir = discoverCcInThisFlavor();
+                if (extDir) startRepatchWatcher(extDir);
+            })
+            .catch((e) => {
+                // Swallow to avoid breaking activation; surface to the user instead.
+                vscode.window.showErrorMessage(
+                    `cc-status-dot companion: detection error (${(e as Error)?.message ?? String(e)})`,
+                );
+            });
+    });
 
     // v0.4.0: register Favorites (Explorer view + commands + persistence).
     // Fire-and-forget AFTER detectAndPatch is queued (NOT after it resolves —

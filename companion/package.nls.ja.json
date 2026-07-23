@@ -7,6 +7,8 @@
   "ccsd.fav.category": "CC お気に入り",
   "ccsd.fav.toggleFile.title": "ファイルを追加/削除",
   "ccsd.fav.toggleTab.title": "現在の CC タブのスター切り替え",
+  "ccsd.fav.addTab.title": "CC お気に入りに追加",
+  "ccsd.fav.removeTab.title": "CC お気に入りから削除",
   "ccsd.fav.open.title": "開く",
   "ccsd.fav.remove.title": "削除",
   "ccsd.fav.copyResume.title": "'claude -r <sid>' をコピー",

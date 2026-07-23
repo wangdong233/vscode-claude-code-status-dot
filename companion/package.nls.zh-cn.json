@@ -7,6 +7,8 @@
   "ccsd.fav.category": "CC 收藏",
   "ccsd.fav.toggleFile.title": "添加/移除文件",
   "ccsd.fav.toggleTab.title": "加星/取消加星当前 CC 标签页",
+  "ccsd.fav.addTab.title": "加入 CC 收藏",
+  "ccsd.fav.removeTab.title": "退出 CC 收藏",
   "ccsd.fav.open.title": "打开",
   "ccsd.fav.remove.title": "移除",
   "ccsd.fav.copyResume.title": "复制 'claude -r <sid>'",

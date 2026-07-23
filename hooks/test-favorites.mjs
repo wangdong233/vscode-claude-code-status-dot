@@ -148,7 +148,12 @@ check(
 );
 check(
   'FAV.7f companion refresh() dedupes via signature (no-op when snapshot unchanged)',
-  /lastSig[\s\S]{0,2000}sig\s*===\s*this\.lastSig/.test(companionSrc),
+  // v0.5.6: bound bumped from 2000 → 4000 because the new lastActiveSidForCtx
+  // field (Bug 4 setContext tracking) + its JSDoc grew the gap between the
+  // `lastSig` field declaration and the `if (sig === this.lastSig) return;`
+  // early-return gate. The dedup pattern is unchanged; only the surrounding
+  // code grew.
+  /lastSig[\s\S]{0,4000}sig\s*===\s*this\.lastSig/.test(companionSrc),
   'a signature-diff early-return prevents needless full-tree invalidates from clearing selection every 2s',
 );
 check(
@@ -423,6 +428,26 @@ check(
     'ccStatusDot.fav.refresh',
     'ccStatusDot.fav.browse',
   ].every((id) => companionSrc.includes(`"${id}"`)),
+);
+
+// v0.5.6 (Bug 4 dynamic add/remove text): two new commands split the unified
+// "Star/Unstar" toggle into explicit Add/Remove verbs. The menu system uses
+// setContext('ccStatusDot.fav.currentTabFavorited', true/false) to gate which
+// label shows; toggleTab remains as the command-palette macro.
+check(
+  'FAV.19a v0.5.6 favAddTab command registered (Bug 4 explicit Add verb)',
+  /vscode\.commands\.registerCommand\(\s*"ccStatusDot\.fav\.addTab"\s*,\s*favAddTab\)/.test(companionSrc),
+  'the menu shows "Add to CC Favorites" only when currentTabFavorited === false (when-clause filter)',
+);
+check(
+  'FAV.19b v0.5.6 favRemoveTab command registered (Bug 4 explicit Remove verb)',
+  /vscode\.commands\.registerCommand\(\s*"ccStatusDot\.fav\.removeTab"\s*,\s*favRemoveTab\)/.test(companionSrc),
+  'the menu shows "Remove from CC Favorites" only when currentTabFavorited === true (when-clause filter)',
+);
+check(
+  'FAV.19c v0.5.6 favAddTab + favRemoveTab declared as top-level functions (shared sid resolution via resolveActiveSid)',
+  /function\s+favAddTab\s*\(/.test(companionSrc) && /function\s+favRemoveTab\s*\(/.test(companionSrc),
+  'both must be callable from the registered-command arrow wrapper',
 );
 
 check(
@@ -703,6 +728,181 @@ check(
   'FAV.36 v0.5.3 deriveLabelFromTranscript skips tool_result user-messages (avoid labeling a favorite with tool output)',
   /type\s*===\s*["']tool_result["']/.test(companionSrc) && /tool_use_id/.test(companionSrc),
   'user turns that carry tool_result blocks are tool replies, not prompts — must be skipped',
+);
+
+// ---------------------------------------------------------------------------
+// v0.5.6 — Favorites Bug 1/2/3/4 fixes.
+//
+// Bug 1 (HIGH latency): toggleTab/toggleFile/favRemove/favOpen lastSeenAt now
+//   call forceRefresh() instead of refresh() so the tree re-renders IMMEDIATELY
+//   after a successful write. Pre-fix the user clicked "add", saw no feedback
+//   for up to 2s (the polling tick), and either re-clicked (Bug 2) or assumed
+//   the feature was broken. The signature dedup gate (lastSig === sig) was
+//   theoretically sufficient — the doc state changed so the signature should
+//   differ — but VSCode-internal tree-render scheduling made the immediate
+//   refresh unreliable in practice. forceRefresh clears lastSig="" before
+//   refresh() so the emitter.fire(undefined) is guaranteed to run.
+//
+// Bug 2 (second-add-clears-all): root cause is Bug 1's delay. The user clicks
+//   "add", sees no feedback (Bug 1), assumes it didn't register, and clicks
+//   again — but the SAME sid is now favorited, so the second click toggles it
+//   OFF and the view clears. forceRefresh closes the race window; the new
+//   favAddTab/favRemoveTab commands (Bug 4) also make this UNREACHABLE: an
+//   explicit Add on an already-favorited sid is a NO-OP (never toggles off).
+//
+// Bug 3 (Open Editors coverage): explorer/context for toggleTab was already
+//   in place; v0.5.6 adds addTab + removeTab to BOTH explorer/context AND
+//   editor/title/context so the dynamic labels reach the Open Editors view
+//   (CC webview tabs are surface there in modern VSCode). The gate drops the
+//   over-constraining `!explorerResourceIsFolder` for the add/remove items
+//   so they appear even when VSCode treats the Open Editors entry as a
+//   non-file resource without a clear folder/file distinction.
+//
+// Bug 4 (dynamic add/remove text): the unified "Star/Unstar" toggle is split
+//   into explicit Add + Remove commands whose menu items are gated by
+//   setContext('ccStatusDot.fav.currentTabFavorited', true/false). The
+//   companion publishes this context inside refresh() so it stays fresh on
+//   every (doc, active sid) transition. favAddTab / favRemoveTab are
+//   idempotent — a stale setContext can NEVER cause a double-toggle that
+//   removes a real favorite.
+// ---------------------------------------------------------------------------
+check(
+  'FAV.37a v0.5.6 FavoritesProvider declares forceRefresh (Bug 1 immediate tree re-render)',
+  /forceRefresh\s*\(\s*\)\s*:\s*void\s*\{/.test(companionSrc) &&
+    /this\.lastSig\s*=\s*""\s*;[\s\S]{0,400}this\.refresh\(\)/.test(companionSrc),
+  'forceRefresh must clear lastSig before calling refresh so the signature dedup gate never skips the write-path re-render',
+);
+check(
+  'FAV.37b v0.5.6 favToggleTab calls forceRefresh (Bug 1 — toggle path re-renders immediately)',
+  // Both the add and remove branches of favToggleTab must end in forceRefresh.
+  /function\s+favToggleTab[\s\S]{0,4000}?favoritesProvider\?\.forceRefresh\(\)/.test(companionSrc) &&
+    // count occurrences across the whole file — write paths total: favToggleFile=1,
+    // favToggleTab=2, favAddTab=2, favRemoveTab=2, favRemove=1, favOpen=1 → ≥9.
+    (companionSrc.match(/favoritesProvider\?\.forceRefresh\(\)/g) || []).length >= 9,
+  'every write path (toggle/toggleFile/addTab/removeTab/remove/open) must call forceRefresh so the tree re-renders synchronously after a successful write — polling-tick + favRefresh command stay on plain refresh()',
+);
+check(
+  'FAV.37c v0.5.6 NO write-path function calls bare refresh() (Bug 1 — write paths must bypass signature dedup)',
+  // The plain refresh() calls that remain must ONLY be in (a) the favRefresh()
+  // command handler (manual "Refresh" toolbar button — no write), (b) the
+  // setInterval polling tick body, (c) the initial-sync call inside
+  // registerFavorites. We verify by extracting each WRITE-PATH function body
+  // (favToggleFile / favToggleTab / favAddTab / favRemoveTab / favRemove /
+  // favOpen) and asserting none contains a bare favoritesProvider?.refresh().
+  (() => {
+    const writeFns = ['favToggleFile', 'favToggleTab', 'favAddTab', 'favRemoveTab', 'favRemove', 'favOpen'];
+    for (const fn of writeFns) {
+      // Grab from `function <fn>(` to the matching close brace of the fn body.
+      const start = companionSrc.indexOf(`function ${fn}(`);
+      if (start < 0) return false;
+      // Scan brace depth from the first `{` after the signature.
+      let i = companionSrc.indexOf('{', start);
+      if (i < 0) return false;
+      let depth = 1;
+      i += 1;
+      const begin = i;
+      while (i < companionSrc.length && depth > 0) {
+        const c = companionSrc[i];
+        if (c === '{') depth += 1;
+        else if (c === '}') depth -= 1;
+        i += 1;
+      }
+      const body = companionSrc.slice(begin, i - 1);
+      if (/favoritesProvider\?\.refresh\(\)/.test(body)) {
+        return false;
+      }
+    }
+    return true;
+  })(),
+  'polling tick + favRefresh command + registerFavorites initial sync are the only callers that should still hit the dedup gate; write paths must use forceRefresh',
+);
+check(
+  'FAV.37d v0.5.6 resolveActiveSid helper declared (shared sid resolution for toggle/add/remove)',
+  /function\s+resolveActiveSid\s*\(\s*\)\s*:\s*string/.test(companionSrc),
+  'extracted from favToggleTab so favAddTab / favRemoveTab share byte-identical sid resolution with the v0.5.3 F1 title-bridge match',
+);
+check(
+  'FAV.37e v0.5.6 buildFavSessionRow helper declared (shared row schema for toggle/add)',
+  /function\s+buildFavSessionRow\s*\(\s*sid\s*:\s*string\s*\)\s*:\s*FavSession\s*\|\s*null/.test(companionSrc),
+  'extracted so favToggleTab + favAddTab build the session row identically — divergent schemas would corrupt favorites.json',
+);
+check(
+  'FAV.37f v0.5.6 favAddTab is idempotent on an already-favorited sid (Bug 2 — explicit Add never removes)',
+  // The Add handler must bail WITHOUT writing when the sid is already in doc.sessions.
+  // Stale setContext must never cause an accidental removal via toggle-style behavior.
+  /function\s+favAddTab[\s\S]{0,3000}?doc\.sessions\.some\(\s*\(\s*s\s*\)\s*=>\s*s\.sid\s*===\s*sid\s*\)[\s\S]{0,400}?return\s*;/.test(
+    companionSrc,
+  ),
+  'a stale "Add" click on an already-favorited sid must NO-OP, not toggle off — Bug 2 root cause is the user double-clicking Add thinking the first click failed',
+);
+check(
+  'FAV.37g v0.5.6 favRemoveTab is idempotent on a not-favorited sid (defensive — never accidentally Add)',
+  /function\s+favRemoveTab[\s\S]{0,3000}?findIndex[\s\S]{0,1000}?idx\s*<\s*0[\s\S]{0,400}?return\s*;/.test(
+    companionSrc,
+  ),
+  'a stale "Remove" click on a not-favorited sid must NO-OP, not accidentally Add',
+);
+check(
+  'FAV.37h v0.5.6 refresh() publishes setContext ccStatusDot.fav.currentTabFavorited (Bug 4 dynamic menu labels)',
+  /executeCommand\(\s*"setContext"\s*,\s*"ccStatusDot\.fav\.currentTabFavorited"/.test(companionSrc),
+  'the Add/Remove menu items use when: ccStatusDot.fav.currentTabFavorited == true/false — the context key MUST be published from refresh() so polling keeps it fresh',
+);
+check(
+  'FAV.37i v0.5.6 refresh() tracks lastActiveSidForCtx to dedup setContext dispatches across polling ticks',
+  /lastActiveSidForCtx/.test(companionSrc),
+  'without per-active-sid dedup, the 2s polling tick would re-dispatch setContext on every cycle even when the active sid is unchanged',
+);
+
+// ---------------------------------------------------------------------------
+// package.json: addTab + removeTab menu contributions (Bug 3 + Bug 4).
+// ---------------------------------------------------------------------------
+check(
+  'FAV.38a v0.5.6 package.json contributes ccStatusDot.fav.addTab command (Bug 4 explicit Add verb)',
+  Array.isArray(companionPkg.contributes.commands) &&
+    companionPkg.contributes.commands.some((c) => c.command === 'ccStatusDot.fav.addTab'),
+);
+check(
+  'FAV.38b v0.5.6 package.json contributes ccStatusDot.fav.removeTab command (Bug 4 explicit Remove verb)',
+  Array.isArray(companionPkg.contributes.commands) &&
+    companionPkg.contributes.commands.some((c) => c.command === 'ccStatusDot.fav.removeTab'),
+);
+check(
+  'FAV.38c v0.5.6 explorer/context has addTab gated on !currentTabFavorited (Bug 4 dynamic label)',
+  companionPkg.contributes?.menus?.['explorer/context']?.some(
+    (m) =>
+      m.command === 'ccStatusDot.fav.addTab' &&
+      typeof m.when === 'string' &&
+      m.when.includes('!ccStatusDot.fav.currentTabFavorited'),
+  ),
+);
+check(
+  'FAV.38d v0.5.6 explorer/context has removeTab gated on currentTabFavorited (Bug 4 dynamic label)',
+  companionPkg.contributes?.menus?.['explorer/context']?.some(
+    (m) =>
+      m.command === 'ccStatusDot.fav.removeTab' &&
+      typeof m.when === 'string' &&
+      m.when.includes('ccStatusDot.fav.currentTabFavorited'),
+  ),
+);
+check(
+  'FAV.38e v0.5.6 editor/title/context has addTab + removeTab (Bug 3 — covers CC webview tab right-click via the editor tab bar too)',
+  (() => {
+    const etc = companionPkg.contributes?.menus?.['editor/title/context'] || [];
+    return (
+      etc.some((m) => m.command === 'ccStatusDot.fav.addTab') &&
+      etc.some((m) => m.command === 'ccStatusDot.fav.removeTab')
+    );
+  })(),
+);
+check(
+  'FAV.38f v0.5.6 commandPalette hides ccStatusDot.fav.addTab + ccStatusDot.fav.removeTab (menu-only commands, not palette macros)',
+  (() => {
+    const cp = companionPkg.contributes?.menus?.commandPalette || [];
+    const add = cp.find((m) => m.command === 'ccStatusDot.fav.addTab');
+    const rem = cp.find((m) => m.command === 'ccStatusDot.fav.removeTab');
+    return add && add.when === 'false' && rem && rem.when === 'false';
+  })(),
+  'the palette entrypoint stays as toggleTab (unified macro); the Add/Remove split is for the menu labels only',
 );
 
 // cleanup

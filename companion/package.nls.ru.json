@@ -7,6 +7,8 @@
   "ccsd.fav.category": "CC Избранное",
   "ccsd.fav.toggleFile.title": "Добавить/Удалить файл",
   "ccsd.fav.toggleTab.title": "Отметить/Снять отметку с текущей вкладки CC",
+  "ccsd.fav.addTab.title": "Добавить в избранное CC",
+  "ccsd.fav.removeTab.title": "Убрать из избранного CC",
   "ccsd.fav.open.title": "Открыть",
   "ccsd.fav.remove.title": "Удалить",
   "ccsd.fav.copyResume.title": "Копировать 'claude -r <sid>'",

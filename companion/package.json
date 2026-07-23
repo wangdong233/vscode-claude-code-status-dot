@@ -2,7 +2,7 @@
   "name": "cc-status-dot-companion",
   "displayName": "%ccsd.displayName%",
   "description": "%ccsd.description%",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,
@@ -49,6 +49,18 @@
         "category": "%ccsd.fav.category%"
       },
       {
+        "command": "ccStatusDot.fav.addTab",
+        "title": "%ccsd.fav.addTab.title%",
+        "icon": "$(star-add)",
+        "category": "%ccsd.fav.category%"
+      },
+      {
+        "command": "ccStatusDot.fav.removeTab",
+        "title": "%ccsd.fav.removeTab.title%",
+        "icon": "$(star-trash)",
+        "category": "%ccsd.fav.category%"
+      },
+      {
         "command": "ccStatusDot.fav.open",
         "title": "%ccsd.fav.open.title%",
         "icon": "$(go-to-file)",
@@ -90,6 +102,16 @@
           "command": "ccStatusDot.fav.toggleTab",
           "when": "resourceScheme != 'file' && !explorerResourceIsFolder && config.ccStatusDot.fav.includeInExplorerContextMenu",
           "group": "ccsd_favorites@2"
+        },
+        {
+          "command": "ccStatusDot.fav.addTab",
+          "when": "resourceScheme != 'file' && !ccStatusDot.fav.currentTabFavorited && config.ccStatusDot.fav.includeInExplorerContextMenu",
+          "group": "ccsd_favorites@3"
+        },
+        {
+          "command": "ccStatusDot.fav.removeTab",
+          "when": "resourceScheme != 'file' && ccStatusDot.fav.currentTabFavorited && config.ccStatusDot.fav.includeInExplorerContextMenu",
+          "group": "ccsd_favorites@4"
         }
       ],
       "editor/title/context": [
@@ -97,6 +119,16 @@
           "command": "ccStatusDot.fav.toggleTab",
           "when": "resourceScheme != 'file' && config.ccStatusDot.fav.includeInTabContextMenu",
           "group": "ccsd_favorites@1"
+        },
+        {
+          "command": "ccStatusDot.fav.addTab",
+          "when": "resourceScheme != 'file' && !ccStatusDot.fav.currentTabFavorited && config.ccStatusDot.fav.includeInTabContextMenu",
+          "group": "ccsd_favorites@2"
+        },
+        {
+          "command": "ccStatusDot.fav.removeTab",
+          "when": "resourceScheme != 'file' && ccStatusDot.fav.currentTabFavorited && config.ccStatusDot.fav.includeInTabContextMenu",
+          "group": "ccsd_favorites@3"
         }
       ],
       "view/title": [
@@ -135,6 +167,14 @@
         },
         {
           "command": "ccStatusDot.fav.toggleTab"
+        },
+        {
+          "command": "ccStatusDot.fav.addTab",
+          "when": "false"
+        },
+        {
+          "command": "ccStatusDot.fav.removeTab",
+          "when": "false"
         },
         {
           "command": "ccStatusDot.fav.refresh",

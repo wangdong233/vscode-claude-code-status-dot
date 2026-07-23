@@ -7,6 +7,8 @@
   "ccsd.fav.category": "CC Favorites",
   "ccsd.fav.toggleFile.title": "Add/Remove File",
   "ccsd.fav.toggleTab.title": "Star/Unstar Current CC Tab",
+  "ccsd.fav.addTab.title": "Add to CC Favorites",
+  "ccsd.fav.removeTab.title": "Remove from CC Favorites",
   "ccsd.fav.open.title": "Open",
   "ccsd.fav.remove.title": "Remove",
   "ccsd.fav.copyResume.title": "Copy 'claude -r <sid>'",

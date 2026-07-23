@@ -14,6 +14,7 @@
   "ccsd.fav.copyResume.title": "Copier 'claude -r <sid>'",
   "ccsd.fav.refresh.title": "Actualiser",
   "ccsd.fav.browse.title": "Parcourir",
+  "ccsd.fav.pickSession.title": "Choisir une session CC à marquer/démarquer",
   "ccsd.configuration.title": "cc-status-dot",
   "ccsd.config.notify.description": "Afficher une notification lorsque Claude Code termine un tour (transition d'état vers done ou interrupted).",
   "ccsd.config.notifyWhenFocused.description": "Déclencher aussi la notification de fin lorsque VSCode est la fenêtre actuellement focalisée. Désactive pour notifier uniquement lorsque tu es dans une autre application.",
@@ -25,7 +26,5 @@
   "ccsd.config.showCost.description": "Afficher l'estimation du coût USD à côté du nombre de tokens (requiert une entrée de modèle correspondante dans token-rates.json — les modèles inconnus comme GLM sont masqués automatiquement).",
   "ccsd.config.warnThresholdUsd.description": "Notifier lorsque l'estimation du coût de la session franchit ce seuil USD (0 = désactivé). Se déclenche une fois par franchissement.",
   "ccsd.config.rateDisplayMode.description": "Comment rendre le suffixe tok/s en direct sur l'item de barre d'état de token : 'off' le masque (pour les barres encombrées / machines sensibles aux performances), 'numeric' (par défaut) affiche uniquement '1.2k/s', 'sparkline' affiche uniquement '▂▄▆█', 'both' affiche les deux. Le segment de débit est séparé par '·' comme le coût (rendu '12.3k tok · 1.2k/s · ~$0.42').",
-  "ccsd.config.fav.includeInExplorerContextMenu.description": "Afficher 'Favoris CC : Ajouter/Retirer un fichier' dans le menu clic droit des fichiers de l'Explorateur.",
-  "ccsd.config.fav.includeInTabContextMenu.description": "Afficher 'Favoris CC : Marquer/Démarquer l'onglet CC actuel' dans les menus clic droit des onglets d'éditeur autres que fichiers (v0.5.0+ ; v0.5.1 a assoupli la condition de webview-uniquement vers non-fichier afin que l'élément apparaisse sur l'onglet Claude Code — VSCode n'expose aucune clé de contexte spécifique à CC, et le resourceScheme de l'onglet CC se résout à vide, pas à 'webview'). Le gestionnaire ne fait rien avec un message d'information lorsque l'onglet actif n'est pas une session Claude Code (pas de __ccsdActiveSid).",
-  "ccsd.config.fav.includeInWebviewContextMenu.description": "Afficher 'Ajouter/Retirer des Favoris CC' lors du clic droit dans un webview de discussion Claude Code (v0.5.8+). Le script detoile injecte definit data-vscode-context sur le corps du webview, afin que le menu cible la session exacte (la cle de contexte ccsdSid controle la visibilite — les elements n'apparaissent que dans les webviews CC)."
+  "ccsd.config.fav.includeInExplorerContextMenu.description": "Afficher 'Favoris CC : Ajouter/Retirer un fichier' dans le menu clic droit des fichiers de l'Explorateur. Remarque : les éléments Ajouter/Retirer également affichés sur les onglets webview de chat CC (Open Editors) ne ciblent de manière fiable que l'onglet CC ACTIF — VSCode n'expose aucune clé de contexte spécifique à CC pour l'onglet cliqué, donc un clic droit sur un onglet CC en ARRIÈRE-PLAN peut résoudre vers la session active. Pour cibler un onglet en arrière-plan, utilisez 'Choisir une session CC à marquer/démarquer' (palette de commandes)."
 }

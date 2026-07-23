@@ -14,12 +14,14 @@ Claude Code 的 VS Code 扩展自动更新时，`extension.js` 被替换为全�
 2. 若标记缺失（CC 更新覆盖了），自动重跑 patcher（`node ~/.claude/cc-status-dot/patch.js`）。
 3. 提示一次 **Reload Window** 激活新 patch。
 
-## v0.5.0 新增：tab 右键收藏 + 金线下划线
+## v0.5.0 tab 收藏标记 + v0.5.9 ★ 标题前缀
 
-v0.5.0 补全 Favorites 体验（设计 [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md) §5 Slice 2 + §Q3）：
+v0.5.0 补全 Favorites 体验（设计 [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md) §5 Slice 2 + §Q3）；v0.5.9 修订收藏入口（见下）：
 
-- **tab 右键菜单**：右键任意 webview tab → **CC Favorites: Star/Unstar Current CC Tab**。`when: resourceScheme == 'webview'`——VSCode 没暴露 CC 专属 context key，菜单会出现在所有 webview tab 上（Copilot Chat 等），handler 内 `__ccsdActiveSid` 校验对非 CC tab no-op + 信息提示。配置项 `ccStatusDot.fav.includeInTabContextMenu`（默认开）可 opt-out。
-- **金线下划线标记**：收藏的 CC 会话，tab icon 底部加一条细金线 `<rect fill="#F5A623">`（5 态点色/形完全不变）。IIFE 每 500ms tick 经 mtime-cache 读 `favorites.json`，sid 命中 → 把 leaf `claude-logo-<state>.svg` 替换为 `claude-logo-<state>-fav.svg`。
+- **★ 标题前缀（v0.5.9+，推荐）**：收藏的 CC 会话，tab **标题**前自动加 `★ `。IIFE 每 500ms tick 经 mtime-cache 读 `favorites.json`，sid 命中 → 给 `panelTab.title` 加 `★ ` 前缀（基于缓存逻辑标题，无 ★★ 叠加）。这是 reload-free 的收藏可视信号。v0.5.8 曾尝试在 webview 内注入可点击星标，经取证证明架构不可行（CC 只设一次 webview.html，重设触发整页重载摧毁会话）已废弃。
+- **金线下划线标记（v0.5.0+）**：收藏的 CC 会话，tab icon 底部加一条细金线 `<rect fill="#F5A623">`（5 态点色/形完全不变）。IIFE 每 500ms tick 经 mtime-cache 读 `favorites.json`，sid 命中 → 把 leaf `claude-logo-<state>.svg` 替换为 `claude-logo-<state>-fav.svg`。
+- **QuickPick 会话选择器（v0.5.9+）**：命令面板 **CC Favorites: Pick CC Session to Star/Unstar**——列出所有打开的 CC 会话（已收藏 ★ 在前），选一个即 toggle，不依赖当前活动 tab。
+- **tab 右键菜单（v0.5.0 引入，v0.5.9 移除）**：`editor/title/context` 的 addTab/removeTab 已在 v0.5.9 移除——VSCode 不对被右键的 tab 暴露 CC 专属 context key（菜单只能对所有非文件 tab 出现，handler 靠 `__ccsdActiveSid` 对非 CC tab no-op），且 v0.5.8 用星标注入设的 `data-vscode-context` 随注入一起废弃。配置项 `ccStatusDot.fav.includeInTabContextMenu` 同步删除。可靠的收藏入口现在是上面三条。
 
 ## v0.4.0：CC Favorites 视图
 
@@ -82,12 +84,14 @@ When Claude Code's VS Code extension auto-updates, its `extension.js` is replace
 2. If the marker is missing (CC update wiped it), it re-runs the patcher (`node ~/.claude/cc-status-dot/patch.js`).
 3. Offers a one-click **Reload Window** to activate the fresh patch.
 
-## v0.5.0: Tab right-click favorite toggle + gold-underline favorited icon
+## v0.5.0 favorite indicators + v0.5.9 ★ title prefix
 
-v0.5.0 completes the Favorites UX (design [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md) §5 Slice 2 + §Q3):
+v0.5.0 completes the Favorites UX (design [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md) §5 Slice 2 + §Q3); v0.5.9 revises the toggle entrypoints (see below):
 
-- **Tab right-click menu**: right-click any webview tab → **CC Favorites: Star/Unstar Current CC Tab**. `when: resourceScheme == 'webview'` — VSCode exposes no CC-specific context key, so the menu surfaces on ALL webview tabs (Copilot Chat etc.); the handler's `__ccsdActiveSid` check no-ops with an info message on non-CC webviews. The setting `ccStatusDot.fav.includeInTabContextMenu` (default on) lets you opt out.
-- **Gold-underline indicator**: favorited CC sessions get a thin gold `<rect fill="#F5A623">` underline at the tab icon's viewBox bottom (5 state colors/shapes unchanged). The IIFE's 500ms tick reads `favorites.json` via an mtime-cache and swaps the base leaf `claude-logo-<state>.svg` for `claude-logo-<state>-fav.svg` when the panel's sid is favorited.
+- **★ Title prefix (v0.5.9+, recommended)**: favorited CC sessions get a `★ ` prefix on the tab **title**. The IIFE's 500ms tick reads `favorites.json` via an mtime-cache and prefixes `panelTab.title` (based on the cached logical title, so no ★★ stacking). This is the reload-free favorited signal. v0.5.8 tried to inject a clickable star inside the CC webview; forensics proved that architecturally infeasible (CC sets webview.html once at panel creation; any reassignment triggers a destructive full reload of the session), so it was removed.
+- **Gold-underline indicator (v0.5.0+)**: favorited CC sessions get a thin gold `<rect fill="#F5A623">` underline at the tab icon's viewBox bottom (5 state colors/shapes unchanged). The IIFE's 500ms tick reads `favorites.json` via an mtime-cache and swaps the base leaf `claude-logo-<state>.svg` for `claude-logo-<state>-fav.svg` when the panel's sid is favorited.
+- **QuickPick session selector (v0.5.9+)**: command palette → **CC Favorites: Pick CC Session to Star/Unstar** — lists every open CC session (favorited ★ first), pick one to toggle, independent of the active tab.
+- **Tab right-click menu (added v0.5.0, REMOVED v0.5.9)**: the `editor/title/context` addTab/removeTab items were removed in v0.5.9 — VSCode exposes no CC-specific context key for the right-clicked tab (the menu could only surface on ALL non-file tabs, with the handler no-op'ing on non-CC tabs), and the `data-vscode-context` that v0.5.8's star injection set was removed with it. The `ccStatusDot.fav.includeInTabContextMenu` setting was removed too. The reliable toggle entrypoints are the three above.
 
 ## v0.4.0: CC Favorites view
 

@@ -14,6 +14,7 @@
   "ccsd.fav.copyResume.title": "Copy 'claude -r <sid>'",
   "ccsd.fav.refresh.title": "Refresh",
   "ccsd.fav.browse.title": "Browse",
+  "ccsd.fav.pickSession.title": "Pick CC Session to Star/Unstar",
   "ccsd.configuration.title": "cc-status-dot",
   "ccsd.config.notify.description": "Show a notification when Claude Code completes a turn (state transitions to done or interrupted).",
   "ccsd.config.notifyWhenFocused.description": "Also fire the completion notification when VSCode is the currently focused window. Disable to only notify when you're in another app.",
@@ -25,7 +26,5 @@
   "ccsd.config.showCost.description": "Show the USD cost estimate alongside the token count (requires a matching model entry in token-rates.json — unknown models like GLM are auto-hidden).",
   "ccsd.config.warnThresholdUsd.description": "Notify when the session cost estimate crosses this USD threshold (0 = disabled). Fires once per crossing.",
   "ccsd.config.rateDisplayMode.description": "How to render the live tok/s suffix on the token status bar item: 'off' hides it (for crowded bars / perf-sensitive machines), 'numeric' (default) shows only '1.2k/s', 'sparkline' shows only '▂▄▆█', 'both' shows both. The rate segment is '·'-separated like cost (renders '12.3k tok · 1.2k/s · ~$0.42').",
-  "ccsd.config.fav.includeInExplorerContextMenu.description": "Show 'CC Favorites: Add/Remove File' in the Explorer file right-click menu.",
-  "ccsd.config.fav.includeInTabContextMenu.description": "Show 'CC Favorites: Star/Unstar Current CC Tab' on non-file editor tab right-click menus (v0.5.0+; v0.5.1 relaxed the gate from webview-only to non-file so the item surfaces on the Claude Code tab — VSCode exposes no CC-specific context key, and the CC tab's resourceScheme resolves to empty, not 'webview'). The handler no-ops with an info message when the active tab is not a Claude Code session (no __ccsdActiveSid).",
-  "ccsd.config.fav.includeInWebviewContextMenu.description": "Show 'Add/Remove from CC Favorites' when right-clicking inside a Claude Code chat webview (v0.5.8+). The injected star script sets data-vscode-context on the webview body, so the menu targets the exact session (the ccsdSid context key gates visibility — items only appear inside CC webviews)."
+  "ccsd.config.fav.includeInExplorerContextMenu.description": "Show 'CC Favorites: Add/Remove File' in the Explorer file right-click menu. The Add/Remove items also shown on CC chat webview tabs (Open Editors) only target the ACTIVE CC tab reliably — right-clicking a BACKGROUND CC tab may resolve to the active session because VSCode exposes no CC-specific context key for the right-clicked tab. Use 'Pick CC Session to Star/Unstar' (command palette) to target a background tab."
 }

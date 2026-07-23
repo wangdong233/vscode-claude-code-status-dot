@@ -628,53 +628,40 @@ check(
     companionPkg.contributes.configuration.properties['ccStatusDot.fav.includeInExplorerContextMenu'].default === true,
 );
 
-// v0.5.0 ships the editor/title/context tab right-click menu (was deferred
+// v0.5.0 shipped the editor/title/context tab right-click menu (was deferred
 // from v0.4 per FAVORITES-DESIGN.md §5 Slice 2 pending an L1 PoC on webview
-// tab menu visibility). v0.5.1 FIXED the gate: the original
-// `resourceScheme == 'webview'` clause NEVER matched the Claude Code tab
-// because plain WebviewPanels do NOT populate resourceScheme as 'webview'
-// (that scheme belongs to custom-editor document providers, not
-// createWebviewPanel). The CC tab's resourceScheme resolves to empty in
-// editor/title/context, so the gate was permanently false. The fix drops
-// the == 'webview' positive gate in favor of `resourceScheme != 'file'`,
-// which keeps the item OFF normal file-editor tabs (avoids noise on the
-// common case) while letting it appear on webview/untitled/output-style
-// tabs (the CC tab, whatever its scheme resolves to). VSCode exposes no
-// CC-specific context key for the right-clicked tab (custom setContext
-// keys resolve against the ACTIVE editor, not the right-clicked tab, so
-// a global ccTabActive key would mismatch), so the menu item surfaces on
-// ALL non-file tabs — the handler's __ccsdActiveSid guard at
-// companion/extension.ts favToggleTab() no-ops with an info message when
-// the active tab is not a CC session (FAV.32 checks that guard is in
-// place). A configuration key `ccStatusDot.fav.includeInTabContextMenu`
-// (default true) gives users an opt-out without disabling the rest of
-// the favorites feature.
+// tab menu visibility). v0.5.1 FIXED the gate (resourceScheme != 'file').
+// v0.5.9 REMOVED editor/title/context + the includeInTabContextMenu config:
+// the in-webview star injection that v0.5.8 added to set data-vscode-context
+// was architecturally infeasible (CC sets webview.html once at panel creation;
+// the read-modify-write fallback forced a destructive full reload of CC's
+// React session — see patch.ts §AA forensics), and the tab right-click path
+// itself only no-ops on non-CC tabs (VSCode exposes no CC-specific context
+// key for the right-clicked tab). The reliable replacement is the
+// ccStatusDot.fav.pickSession QuickPick (zero webview coupling) + the IIFE's
+// "★ " tab-title prefix. These regression guards pin the removal so a future
+// edit cannot silently re-introduce the broken menu + dead config.
 const editorTitleContext = companionPkg.contributes?.menus?.['editor/title/context'];
 check(
-  'FAV.31 v0.5.7 contributes editor/title/context with addTab (non-file tab right-click, replaced toggleTab)',
-  Array.isArray(editorTitleContext) &&
-    editorTitleContext.some(
-      (m) =>
-        m.command === 'ccStatusDot.fav.addTab' &&
-        typeof m.when === 'string' &&
-        m.when.includes("resourceScheme != 'file'") &&
-        !m.when.includes("resourceScheme == 'webview'"),
-    ),
-  'v0.5 must ship the tab right-click favorite toggle (per docs/FAVORITES-DESIGN.md §5 Slice 2); v0.5.1 must use the relaxed resourceScheme != "file" gate (webview-only gate never matched the CC tab)',
+  'FAV.31 v0.5.9 REMOVED editor/title/context menu (architecturally broken — no CC-specific tab context key + star injection infeasible)',
+  !editorTitleContext || editorTitleContext.length === 0,
+  'editor/title/context must stay removed (v0.5.9): the tab right-click path only no-ops on non-CC tabs and the star injection that set the sid was infeasible. Use pickSession QuickPick + tab-title ★ prefix instead.',
 );
 check(
-  'FAV.31a editor/title/context addTab gated by config.ccStatusDot.fav.includeInTabContextMenu',
-  Array.isArray(editorTitleContext) &&
-    editorTitleContext.some(
-      (m) =>
-        m.command === 'ccStatusDot.fav.addTab' &&
-        typeof m.when === 'string' &&
-        m.when.includes('config.ccStatusDot.fav.includeInTabContextMenu'),
-    ),
+  'FAV.31a v0.5.9 REMOVED config.ccStatusDot.fav.includeInTabContextMenu (no longer gates anything — editor/title/context is gone)',
+  !companionPkg.contributes?.configuration?.properties?.['ccStatusDot.fav.includeInTabContextMenu'],
+  'includeInTabContextMenu only gated the removed editor/title/context menu; keeping a config toggle that controls nothing misleads users in the Settings UI.',
 );
 check(
-  'FAV.31b configuration.properties.ccStatusDot.fav.includeInTabContextMenu declared with default === true',
-  companionPkg.contributes?.configuration?.properties?.['ccStatusDot.fav.includeInTabContextMenu']?.default === true,
+  'FAV.31b v0.5.9 no menu entry references config.ccStatusDot.fav.includeInTabContextMenu (dead config fully rooted out)',
+  (() => {
+    const menus = companionPkg.contributes?.menus || {};
+    return Object.values(menus).every(
+      (arr) =>
+        Array.isArray(arr) &&
+        arr.every((m) => !(typeof m.when === 'string' && m.when.includes('includeInTabContextMenu'))),
+    );
+  })(),
 );
 
 // FAV.32 backs the commentary above (the `resourceScheme != 'file'` gate
@@ -771,13 +758,41 @@ check(
   'forceRefresh must clear lastSig before calling refresh so the signature dedup gate never skips the write-path re-render',
 );
 check(
-  'FAV.37b v0.5.6 favToggleTab calls forceRefresh (Bug 1 — toggle path re-renders immediately)',
-  // Both the add and remove branches of favToggleTab must end in forceRefresh.
-  /function\s+favToggleTab[\s\S]{0,4000}?favoritesProvider\?\.forceRefresh\(\)/.test(companionSrc) &&
-    // count occurrences across the whole file — write paths total: favToggleFile=1,
-    // favToggleTab=2, favAddTab=2, favRemoveTab=2, favRemove=1, favOpen=1 → ≥9.
-    (companionSrc.match(/favoritesProvider\?\.forceRefresh\(\)/g) || []).length >= 9,
-  'every write path (toggle/toggleFile/addTab/removeTab/remove/open) must call forceRefresh so the tree re-renders synchronously after a successful write — polling-tick + favRefresh command stay on plain refresh()',
+  'FAV.37b v0.5.6 every Favorites write path calls forceRefresh (Bug 1 — toggle/toggleFile/addTab/removeTab/remove/open each re-render synchronously after a successful write)',
+  // deepfix round-1 refactor: the write paths now go through mutateFavDoc
+  // (CAS-guarded read-mutate-write, see HIGH multi-window-race fix). Each
+  // write-path function ends in exactly ONE forceRefresh() — the pre-refactor
+  // code had redundant double-calls (one per early-return idempotency branch
+  // + one at the end); consolidation to a single end-of-function call is
+  // equivalent and cleaner because the idempotency guards now live inside the
+  // mutate callback (return { changed: false }) rather than early-returning
+  // before forceRefresh. Assert each of the 6 write-path function bodies
+  // contains forceRefresh, scanned by brace depth so the check is robust to
+  // the mutateFavDoc callback's nested braces.
+  (() => {
+    const writeFns = ['favToggleFile', 'favToggleTab', 'favAddTab', 'favRemoveTab', 'favRemove', 'favOpen'];
+    for (const fn of writeFns) {
+      const start = companionSrc.indexOf(`function ${fn}(`);
+      if (start < 0) return false;
+      let i = companionSrc.indexOf('{', start);
+      if (i < 0) return false;
+      let depth = 1;
+      i += 1;
+      const begin = i;
+      while (i < companionSrc.length && depth > 0) {
+        const c = companionSrc[i];
+        if (c === '{') depth += 1;
+        else if (c === '}') depth -= 1;
+        i += 1;
+      }
+      const body = companionSrc.slice(begin, i - 1);
+      if (!/favoritesProvider\?\.forceRefresh\(\)/.test(body)) {
+        return false;
+      }
+    }
+    return true;
+  })(),
+  'every write path must call forceRefresh so the tree re-renders synchronously after a successful write — polling-tick + favRefresh command stay on plain refresh()',
 );
 check(
   'FAV.37c v0.5.6 NO write-path function calls bare refresh() (Bug 1 — write paths must bypass signature dedup)',
@@ -826,16 +841,21 @@ check(
 );
 check(
   'FAV.37f v0.5.6 favAddTab is idempotent on an already-favorited sid (Bug 2 — explicit Add never removes)',
-  // The Add handler must bail WITHOUT writing when the sid is already in doc.sessions.
-  // Stale setContext must never cause an accidental removal via toggle-style behavior.
-  /function\s+favAddTab[\s\S]{0,3000}?doc\.sessions\.some\(\s*\(\s*s\s*\)\s*=>\s*s\.sid\s*===\s*sid\s*\)[\s\S]{0,400}?return\s*;/.test(
+  // The Add handler must bail WITHOUT writing when the sid is already in
+  // doc.sessions. Stale setContext must never cause an accidental removal via
+  // toggle-style behavior. deepfix round-1: the guard now lives inside the
+  // mutateFavDoc callback and returns { changed: false } (no write) instead of
+  // an early bare `return;` — the no-write invariant is identical.
+  /function\s+favAddTab[\s\S]{0,3000}?doc\.sessions\.some\(\s*\(\s*s\s*\)\s*=>\s*s\.sid\s*===\s*sid\s*\)[\s\S]{0,400}?return\s*\{\s*changed\s*:\s*false\s*\}/.test(
     companionSrc,
   ),
   'a stale "Add" click on an already-favorited sid must NO-OP, not toggle off — Bug 2 root cause is the user double-clicking Add thinking the first click failed',
 );
 check(
   'FAV.37g v0.5.6 favRemoveTab is idempotent on a not-favorited sid (defensive — never accidentally Add)',
-  /function\s+favRemoveTab[\s\S]{0,3000}?findIndex[\s\S]{0,1000}?idx\s*<\s*0[\s\S]{0,400}?return\s*;/.test(
+  // deepfix round-1: the idx<0 guard now returns { changed: false } from inside
+  // the mutateFavDoc callback (no write) instead of a bare `return;`.
+  /function\s+favRemoveTab[\s\S]{0,3000}?findIndex[\s\S]{0,1000}?idx\s*<\s*0[\s\S]{0,400}?return\s*\{\s*changed\s*:\s*false\s*\}/.test(
     companionSrc,
   ),
   'a stale "Remove" click on a not-favorited sid must NO-OP, not accidentally Add',
@@ -883,14 +903,12 @@ check(
   ),
 );
 check(
-  'FAV.38e v0.5.6 editor/title/context has addTab + removeTab (Bug 3 — covers CC webview tab right-click via the editor tab bar too)',
+  'FAV.38e v0.5.9 editor/title/context has NEITHER addTab NOR removeTab (Bug 3 menu retired — star injection infeasible, tab right-click only no-ops on non-CC tabs)',
   (() => {
     const etc = companionPkg.contributes?.menus?.['editor/title/context'] || [];
-    return (
-      etc.some((m) => m.command === 'ccStatusDot.fav.addTab') &&
-      etc.some((m) => m.command === 'ccStatusDot.fav.removeTab')
-    );
+    return !etc.some((m) => m.command === 'ccStatusDot.fav.addTab' || m.command === 'ccStatusDot.fav.removeTab');
   })(),
+  'editor/title/context must NOT carry addTab/removeTab (v0.5.9): the in-webview star injection that v0.5.8 used to resolve the clicked tab sid forced a destructive CC session reload and was removed; the reliable toggles are now pickSession + explorer/context + commandPalette toggleTab + the tab-title ★ prefix.',
 );
 check(
   'FAV.38f v0.5.6 commandPalette hides ccStatusDot.fav.addTab + ccStatusDot.fav.removeTab (menu-only commands, not palette macros)',
@@ -901,6 +919,34 @@ check(
     return add && add.when === 'false' && rem && rem.when === 'false';
   })(),
   'the palette entrypoint stays as toggleTab (unified macro); the Add/Remove split is for the menu labels only',
+);
+// v0.5.9: QuickPick session selector — the zero-webview-coupling toggle that
+// replaces the infeasible in-webview star click. Pins the command + its
+// commandPalette visibility (no when:false — it IS the primary palette macro).
+check(
+  'FAV.39a v0.5.9 package.json contributes ccStatusDot.fav.pickSession command (QuickPick session selector — replaces in-webview star)',
+  Array.isArray(companionPkg.contributes.commands) &&
+    companionPkg.contributes.commands.some((c) => c.command === 'ccStatusDot.fav.pickSession'),
+);
+check(
+  'FAV.39b v0.5.9 ccStatusDot.fav.pickSession is VISIBLE in commandPalette (primary in-conversation toggle, not hidden)',
+  (() => {
+    const cp = companionPkg.contributes?.menus?.commandPalette || [];
+    const e = cp.find((m) => m.command === 'ccStatusDot.fav.pickSession');
+    // No entry OR an entry without when:false both count as visible (VSCode
+    // defaults a command to palette-visible unless gated). Assert explicitly.
+    return !e || e.when !== 'false';
+  })(),
+);
+check(
+  'FAV.39c v0.5.9 companion registers ccStatusDot.fav.pickSession handler',
+  /registerCommand\(\s*"ccStatusDot\.fav\.pickSession"/.test(companionSrc),
+  'the QuickPick session selector must be registered so the command palette entry is not dead',
+);
+check(
+  'FAV.39d v0.5.9 favPickSession reads globalThis.__ccsdSidToTitle (lists ALL CC sessions, not just favorites)',
+  /function\s+favPickSession\s*\(\s*\)/.test(companionSrc) && /__ccsdSidToTitle/.test(companionSrc),
+  'the QuickPick must enumerate every open CC session via the IIFE bridge so the user can star/unstar any one without guessing sids',
 );
 
 // cleanup

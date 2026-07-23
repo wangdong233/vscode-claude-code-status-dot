@@ -2,7 +2,7 @@
   "name": "cc-status-dot-companion",
   "displayName": "%ccsd.displayName%",
   "description": "%ccsd.description%",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,
@@ -89,6 +89,12 @@
         "title": "%ccsd.fav.browse.title%",
         "icon": "$(list-filter)",
         "category": "%ccsd.fav.category%"
+      },
+      {
+        "command": "ccStatusDot.fav.pickSession",
+        "title": "%ccsd.fav.pickSession.title%",
+        "icon": "$(star-empty)",
+        "category": "%ccsd.fav.category%"
       }
     ],
     "menus": {
@@ -107,30 +113,6 @@
           "command": "ccStatusDot.fav.removeTab",
           "when": "resourceScheme != 'file' && ccStatusDot.fav.currentTabFavorited && config.ccStatusDot.fav.includeInExplorerContextMenu",
           "group": "ccsd_favorites@4"
-        }
-      ],
-      "editor/title/context": [
-        {
-          "command": "ccStatusDot.fav.addTab",
-          "when": "resourceScheme != 'file' && !ccStatusDot.fav.currentTabFavorited && config.ccStatusDot.fav.includeInTabContextMenu",
-          "group": "ccsd_favorites@2"
-        },
-        {
-          "command": "ccStatusDot.fav.removeTab",
-          "when": "resourceScheme != 'file' && ccStatusDot.fav.currentTabFavorited && config.ccStatusDot.fav.includeInTabContextMenu",
-          "group": "ccsd_favorites@3"
-        }
-      ],
-      "webview/context": [
-        {
-          "command": "ccStatusDot.fav.addTab",
-          "when": "ccsdSid && !ccsdFav && config.ccStatusDot.fav.includeInWebviewContextMenu",
-          "group": "ccsd_favorites@1"
-        },
-        {
-          "command": "ccStatusDot.fav.removeTab",
-          "when": "ccsdSid && ccsdFav && config.ccStatusDot.fav.includeInWebviewContextMenu",
-          "group": "ccsd_favorites@2"
         }
       ],
       "view/title": [
@@ -169,6 +151,9 @@
         },
         {
           "command": "ccStatusDot.fav.toggleTab"
+        },
+        {
+          "command": "ccStatusDot.fav.pickSession"
         },
         {
           "command": "ccStatusDot.fav.addTab",
@@ -295,16 +280,6 @@
           "type": "boolean",
           "default": true,
           "description": "%ccsd.config.fav.includeInExplorerContextMenu.description%"
-        },
-        "ccStatusDot.fav.includeInTabContextMenu": {
-          "type": "boolean",
-          "default": true,
-          "description": "%ccsd.config.fav.includeInTabContextMenu.description%"
-        },
-        "ccStatusDot.fav.includeInWebviewContextMenu": {
-          "type": "boolean",
-          "default": true,
-          "description": "%ccsd.config.fav.includeInWebviewContextMenu.description%"
         }
       }
     }

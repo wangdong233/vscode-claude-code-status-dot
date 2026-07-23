@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.8";
+const MIN_PATCHER_VERSION = "0.5.9";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.8";
+    return effectiveConfig?.injectVersion ?? "v0.5.9";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -841,13 +841,42 @@ let corruptFavFileWarned = false;
  *  refuses the write outright — silently downgrading a v2 file by writing v1
  *  bytes would destroy newer data the user's next companion upgrade expects
  *  to find (the round-0 warning text 'Showing an empty list to avoid
- *  clobbering newer data' is now an honest contract). */
-function writeFavAtomic(doc: FavDoc): boolean {
+ *  clobbering newer data' is now an honest contract).
+ *
+ *  deepfix round-1 (HIGH multi-window race): adds a compare-and-swap (mtime) gate.
+ *  Callers that captured the file's mtime at read time (via readFavDocWithMtime,
+ *  wrapped by mutateFavDoc) pass it as `expectedMtime`; writeFavAtomic stats
+ *  the file again and returns "conflict" WITHOUT writing when the mtime moved —
+ *  signaling the caller to re-read + re-apply + retry. This closes the classic
+ *  lost-update race between two VSCode windows (each its own Extension Host
+ *  process) sharing ~/.claude/cc-tab-status/favorites.json: pre-fix all 7
+ *  mutation points did readFavDoc → splice/push → writeFavAtomic with no mtime
+ *  check, so concurrent toggles silently lost one update (writeFavAtomic still
+ *  returned true). The comment below claiming "companion is the SOLE writer"
+ *  only covered the companion↔IIFE direction; it ignored companion↔companion
+ *  across windows. Returns "ok" on success, "conflict" on mtime mismatch (no
+ *  toast — caller retries via mutateFavDoc), or "error" on future-version
+ *  refusal / fs failure (toast surfaced here). */
+function writeFavAtomic(doc: FavDoc, expectedMtime?: number): "ok" | "conflict" | "error" {
     if (futureVersionLocked) {
         void vscode.window.showErrorMessage(
             `cc-status-dot: favorites.json was written by a newer companion. Adding, removing, or opening a favorite would overwrite it with an older schema — refusing. Upgrade the companion (or delete the file at ${FAV_FILE}) to make changes.`,
         );
-        return false;
+        return "error";
+    }
+    // Compare-and-swap: when the caller captured a read-time mtime, verify the
+    // on-disk file hasn't been written by another window since. -1 = file
+    // absent on both sides (first write); a mismatch means another writer
+    // landed in between → return "conflict" so the caller retries instead of
+    // clobbering the winner's update.
+    if (typeof expectedMtime === "number") {
+        let diskMtime = -1;
+        try {
+            diskMtime = fs.statSync(FAV_FILE).mtimeMs;
+        } catch {
+            diskMtime = -1;
+        }
+        if (diskMtime !== expectedMtime) return "conflict";
     }
     try {
         try {
@@ -869,13 +898,13 @@ function writeFavAtomic(doc: FavDoc): boolean {
             }
             throw e;
         }
-        return true;
+        return "ok";
     } catch (e) {
         const msg = (e as Error)?.message ?? String(e);
         void vscode.window.showErrorMessage(
             `cc-status-dot: could not save Favorites (${msg}). Check permissions / disk space on ${FAV_STATE_DIR}.`,
         );
-        return false;
+        return "error";
     }
 }
 
@@ -938,6 +967,66 @@ function readFavDoc(): FavDoc | null {
         sessions,
         files,
     };
+}
+
+/** Read favorites.json together with the file's current mtimeMs, so the caller
+ *  can pass the mtime to writeFavAtomic as a compare-and-swap token. -1 means
+ *  the file is absent; writeFavAtomic treats its own stat-throws as -1 too, so
+ *  a first-ever write (read mtime -1, CAS disk mtime -1) succeeds without a
+ *  false conflict. deepfix round-1 (HIGH multi-window race). */
+function readFavDocWithMtime(): { doc: FavDoc | null; mtime: number } {
+    let mtime = -1;
+    try {
+        mtime = fs.statSync(FAV_FILE).mtimeMs;
+    } catch {
+        mtime = -1;
+    }
+    return { doc: readFavDoc(), mtime };
+}
+
+/** Result of a CAS-guarded Favorites mutation (mutateFavDoc). */
+interface FavMutationResult {
+    /** true if favorites.json was written. */
+    wrote: boolean;
+    /** true if the mutation was an idempotent no-op (the mutate callback
+     *  returned { changed: false }) and NO write was attempted — e.g. favAddTab
+     *  on an already-favorited sid, or favRemoveTab on a not-favorited sid. */
+    noop: boolean;
+}
+
+/** Read-mutate-write favorites.json under a compare-and-swap (mtime) guard,
+ *  retrying once on conflict. Closes the deepfix round-1 HIGH multi-window lost-update
+ *  race (see writeFavAtomic).
+ *
+ *  `mutate` receives a FRESH FavDoc each attempt and mutates it IN PLACE:
+ *    - return { changed: false } for an idempotent no-op (no write);
+ *    - return { changed: true } after mutating (splice/push/filter/assign).
+ *  Side-effect bookkeeping (e.g. whether the action was add vs remove, for the
+ *  status-bar message) should be stashed in closure `let`s that the callback
+ *  RESETS at the top of every call, so a retry reflects the re-applied action
+ *  rather than the abandoned first attempt. A single retry resolves the common
+ *  case (the other window's write completes within ms); two conflicts in a row
+ *  (truly simultaneous writers) give up with a user-visible toast.
+ *
+ *  Residual TOCTOU: the CAS stat and the rename are not one atomic step, so a
+ *  writer that lands between them can still be last-writer-wins. For
+ *  favorites.json (low-frequency, human-triggered writes) this is amply
+ *  sufficient; full fcntl/lockfile mutual exclusion is disproportionate. */
+function mutateFavDoc(mutate: (doc: FavDoc) => { changed: boolean }): FavMutationResult {
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const { doc: existing, mtime } = readFavDocWithMtime();
+        const doc = existing ?? emptyFavDoc();
+        const res = mutate(doc);
+        if (!res.changed) return { wrote: false, noop: true };
+        const outcome = writeFavAtomic({ ...doc, updatedAt: Date.now() }, mtime);
+        if (outcome === "ok") return { wrote: true, noop: false };
+        if (outcome === "error") return { wrote: false, noop: false }; // toast already surfaced
+        // outcome === "conflict" → loop and re-read + re-mutate + re-write once
+    }
+    void vscode.window.showErrorMessage(
+        `cc-status-dot: Favorites changed in another window while saving; the toggle was not applied. Try again.`,
+    );
+    return { wrote: false, noop: false };
 }
 
 function isValidFavSession(x: unknown): x is FavSession {
@@ -1239,18 +1328,18 @@ function favToggleFile(uri?: vscode.Uri): void {
         );
         return;
     }
-    const doc = readFavDoc() ?? emptyFavDoc();
     const fsPath = uri.fsPath;
-    const idx = doc.files.findIndex((f) => f.fsPath === fsPath);
     const editor = vscode.window.activeTextEditor;
     const line = editor && editor.document.uri.fsPath === fsPath ? editor.selection.active.line + 1 : undefined;
-    if (idx >= 0) {
-        doc.files.splice(idx, 1);
-        const wrote = writeFavAtomic({ ...doc, updatedAt: Date.now() });
-        if (wrote) {
-            void vscode.window.setStatusBarMessage(`Removed ${path.basename(fsPath)} from Favorites`, 3000);
+    let removed = false;
+    const result = mutateFavDoc((doc) => {
+        removed = false;
+        const idx = doc.files.findIndex((f) => f.fsPath === fsPath);
+        if (idx >= 0) {
+            doc.files.splice(idx, 1);
+            removed = true;
+            return { changed: true };
         }
-    } else {
         doc.files.push({
             fsPath,
             label: path.basename(fsPath),
@@ -1258,10 +1347,13 @@ function favToggleFile(uri?: vscode.Uri): void {
             workspace: vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath,
             addedAt: Date.now(),
         });
-        const wrote = writeFavAtomic({ ...doc, updatedAt: Date.now() });
-        if (wrote) {
-            void vscode.window.setStatusBarMessage(`Added ${path.basename(fsPath)} to Favorites`, 3000);
-        }
+        return { changed: true };
+    });
+    if (result.wrote) {
+        void vscode.window.setStatusBarMessage(
+            `${removed ? "Removed" : "Added"} ${path.basename(fsPath)} ${removed ? "from" : "to"} Favorites`,
+            3000,
+        );
     }
     // v0.5.6 (Bug 1 HIGH latency fix): forceRefresh bypasses the signature
     // dedup gate so the tree re-renders immediately after the write lands —
@@ -1357,12 +1449,12 @@ function deriveLabelFromTranscript(transcriptPath: string): string | null {
     return null;
 }
 
-/** v0.5.6 (Bug 1 + Bug 4): resolve the sid of the right-clicked / active CC
- *  tab. Extracted from favToggleTab so the new explicit addTab / removeTab
- *  variants (Bug 4 dynamic labels) share the SAME resolution path and stay
- *  byte-identical for the F1 fix (v0.5.3 — title-bridge match first, then
- *  __ccsdActiveSid / __ccsdLastActiveSid fallback). Returns "" when no CC
- *  session is active (callers surface the user-facing message).
+/** v0.5.6 (Bug 1 + Bug 4): resolve the sid of the active CC tab. Extracted
+ *  from favToggleTab so the explicit addTab / removeTab variants (Bug 4 dynamic
+ *  labels) share the SAME resolution path and stay byte-identical for the F1
+ *  fix (v0.5.3 — title-bridge match, then __ccsdActiveSid / __ccsdLastActiveSid
+ *  fallback). Returns "" when no CC session is active (callers surface the
+ *  user-facing message).
  *
  *  Resolution order (unchanged from v0.5.3 favToggleTab):
  *    1. globalThis.__ccsdActiveSid (IIFE-maintained per-window focus sid)
@@ -1370,33 +1462,31 @@ function deriveLabelFromTranscript(transcriptPath: string): string | null {
  *    3. Best-effort: walk globalThis.__ccsdSidToTitle and match the active
  *       tab's label exactly — if VSCode activated the right-clicked tab
  *       (platform-dependent), this nails the EXACT sid (vs the welded active).
- *  The resourceUri passed by editor/title/context + explorer/context is NOT
- *  decodable for a CC webview tab (synthetic URI, no sid), so it's accepted
- *  for API correctness + forward-compat only — see favToggleTab. */
-/** v0.5.8: resolveActiveSid now accepts an optional `arg` that may carry a
- *  webview/context `webviewContext` payload. When the star-in-webview script
- *  or the webview/context menu triggers a favorite command, VSCode (or the
- *  IIFE bridge) passes `{webviewContext:{ccsdSid:"..."}}` as the first arg —
- *  the sid is the EXACT session whose webview was clicked (no active-tab
- *  guessing). This is checked FIRST (highest-priority resolution path);
- *  when absent or empty, the existing resolution chain runs unchanged.
- *  The parameter name `arg` (not `resourceUri`) reflects that the value can
- *  now be EITHER a VSCode resourceUri (editor/title/context + explorer/context,
- *  CC webview synthetic URIs carry no sid — passed through for API contract
- *  only) OR a webview/context arg ({webviewContext:...}). Both shapes are
- *  accepted; only the webviewContext shape yields a sid here. */
-function resolveActiveSid(arg?: unknown): string {
-    // v0.5.8 webview/context path: extract the precise sid from the
-    // data-vscode-context JSON the IIFE's star script baked onto document.body.
-    // The IIFE calls toggleTab with {webviewContext:{ccsdSid:sid}}; VSCode's
-    // webview/context menu passes the same shape from data-vscode-context.
-    if (arg && typeof arg === "object") {
-        const ctx = (arg as { webviewContext?: unknown }).webviewContext;
-        if (ctx && typeof ctx === "object") {
-            const webviewSid = (ctx as { ccsdSid?: unknown }).ccsdSid;
-            if (typeof webviewSid === "string" && webviewSid) return webviewSid;
-        }
-    }
+ *
+ *  deepfix round-1 cleanup (HIGH e2e / MEDIUM business-logic): the v0.5.8 in-webview
+ *  star-injection path — which fed this function a `{webviewContext:{ccsdSid}}`
+ *  arg baked onto the CC webview DOM — was forensically proven infeasible (CC
+ *  sets webview.html exactly once at panel creation; any reassignment forces a
+ *  destructive full reload of its React session) and was fully removed in
+ *  v0.5.9. The dead `arg` / `webviewContext` branch that consumed it, plus its
+ *  stale JSDoc describing the removed star script and webview/context menu as
+ *  live trigger sources, are removed here. The parameter is dropped entirely
+ *  (callers still accept the VSCode menu resourceUri via `void resourceUri` but
+ *  never forward it — CC webview synthetic URIs carry no sid). The reliable
+ *  favorite-toggle entrypoints are now: this active-sid + title-bridge
+ *  resolution (for the active tab) and the QuickPick `favPickSession` (for any
+ *  session, incl. background). Right-clicking a BACKGROUND CC webview tab in
+ *  Open Editors cannot be resolved to a sid without the removed injection; the
+ *  explorer/context Add/Remove items therefore document (via NLS) that they
+ *  reliably target only the ACTIVE tab — use pickSession for a background tab.
+ *
+ *  deepfix round-1 (MEDIUM ★-prefix title match): the IIFE paints "★ " onto the tab
+ *  title of favorited sessions, while __ccsdSidToTitle[sid] holds the BARE
+ *  logical title. Pre-fix, a favorited active tab's label ("★ X") never
+ *  equaled the bridge title ("X"), so the exact-match fallback silently
+ *  misresolved. The prefix is now stripped before the comparison so the
+ *  title-bridge path still nails a favorited active tab. */
+function resolveActiveSid(): string {
     const g = globalThis as Record<string, unknown>;
     let sid =
         (typeof g.__ccsdActiveSid === "string" && g.__ccsdActiveSid) ||
@@ -1407,13 +1497,33 @@ function resolveActiveSid(arg?: unknown): string {
         if (titleMap && typeof titleMap === "object") {
             const map = titleMap as Record<string, string>;
             const activeTab = vscode.window.tabGroups?.activeTabGroup?.activeTab;
-            const activeLabel = activeTab && typeof activeTab.label === "string" ? activeTab.label : "";
+            // Strip the "★ " prefix the IIFE paints on favorited tabs so the
+            // exact-title match still resolves a favorited active tab through
+            // the bridge (whose titles carry no prefix). The replace is a no-op
+            // for non-favorited active tabs (label already has no prefix).
+            let activeLabel = activeTab && typeof activeTab.label === "string" ? activeTab.label : "";
+            activeLabel = activeLabel.replace(/^★\s/, "");
             if (activeLabel) {
                 // Find a known CC sid whose bridge title matches the active tab
                 // label. Exact match only — a substring match would false-hit
                 // when one session title contains another.
+                //
+                // GATE (deepfix round-2, data-logic MEDIUM): only let the title
+                // match override the authoritative __ccsdActiveSid when that sid
+                // is missing OR its own bridge title disagrees with the active
+                // label (i.e. it's stale). Without this gate, two CC sessions
+                // sharing the same title (same cwd/project, or first-prompt-
+                // derived identical strings — a common scenario) would have the
+                // favorite written to whichever sid Object.keys().find() hits
+                // first, silently the wrong session. The IIFE already writes the
+                // authoritative globalThis.__ccsdActiveSid on panel activation,
+                // so for the active tab it is already the correct answer; the
+                // title match only needs to correct the ≤500ms stale window or
+                // fill a missing sid. This also aligns the code with the JSDoc's
+                // stated "fallback" order (the pre-fix code overrode rather
+                // than fell back).
                 const matched = Object.keys(map).find((k) => map[k] === activeLabel);
-                if (matched) sid = matched;
+                if (matched && (!sid || map[sid] !== activeLabel)) sid = matched;
             }
         }
     } catch {
@@ -1490,37 +1600,33 @@ function buildFavSessionRow(sid: string): FavSession | null {
  *  entrypoint; the menu system prefers favAddTab / favRemoveTab (Bug 4
  *  dynamic labels) but toggleTab remains useful as a single-verb macro. */
 function favToggleTab(resourceUri?: unknown): void {
-    // v0.5.8: pass the arg through to resolveActiveSid so the webview/context
-    // path (and the IIFE star-click bridge, which calls this command with
-    // {webviewContext:{ccsdSid:sid}}) resolves the EXACT clicked session, not
-    // the active one. For editor/title/context + explorer/context the arg is a
-    // resourceUri (CC webview synthetic URIs carry no sid — resolveActiveSid
-    // skips it as before).
-    const sid = resolveActiveSid(resourceUri);
+    void resourceUri; // accepted for the editor/title/context + explorer/context menu contract; CC webview synthetic URIs carry no sid, so resolveActiveSid takes no arg (deepfix round-1 — see its JSDoc for why the v0.5.8 webviewContext/star path was removed).
+    const sid = resolveActiveSid();
     if (!sid) {
         void vscode.window.showInformationMessage(
             "cc-status-dot: no active Claude Code session. Open a CC tab first, then re-run this command.",
         );
         return;
     }
-    const doc = readFavDoc() ?? emptyFavDoc();
-    const idx = doc.sessions.findIndex((s) => s.sid === sid);
-    if (idx >= 0) {
-        const removed = doc.sessions.splice(idx, 1)[0];
-        const wrote = writeFavAtomic({ ...doc, updatedAt: Date.now() });
-        if (wrote) {
-            void vscode.window.setStatusBarMessage(`Removed session ${removed.sid.slice(0, 8)} from Favorites`, 3000);
+    let removed = false;
+    const result = mutateFavDoc((doc) => {
+        removed = false;
+        const idx = doc.sessions.findIndex((s) => s.sid === sid);
+        if (idx >= 0) {
+            doc.sessions.splice(idx, 1);
+            removed = true;
+            return { changed: true };
         }
-        favoritesProvider?.forceRefresh();
-        return;
-    }
-    const row = buildFavSessionRow(sid);
-    if (row) {
+        const row = buildFavSessionRow(sid);
+        if (!row) return { changed: false };
         doc.sessions.push(row);
-        const wrote = writeFavAtomic({ ...doc, updatedAt: row.addedAt });
-        if (wrote) {
-            void vscode.window.setStatusBarMessage(`Added session ${sid.slice(0, 8)} to Favorites`, 3000);
-        }
+        return { changed: true };
+    });
+    if (result.wrote) {
+        void vscode.window.setStatusBarMessage(
+            `${removed ? "Removed" : "Added"} session ${sid.slice(0, 8)} ${removed ? "from" : "to"} Favorites`,
+            3000,
+        );
     }
     favoritesProvider?.forceRefresh();
 }
@@ -1536,27 +1642,26 @@ function favToggleTab(resourceUri?: unknown): void {
  *  this path even if the user double-clicks: the second click is also an
  *  add-attempt on an already-favorited sid, which no-ops. */
 function favAddTab(resourceUri?: unknown): void {
-    const sid = resolveActiveSid(resourceUri);
+    void resourceUri; // accepted for menu contract; CC webview synthetic URIs carry no sid (deepfix round-1).
+    const sid = resolveActiveSid();
     if (!sid) {
         void vscode.window.showInformationMessage(
             "cc-status-dot: no active Claude Code session. Open a CC tab first, then re-run this command.",
         );
         return;
     }
-    const doc = readFavDoc() ?? emptyFavDoc();
-    if (doc.sessions.some((s) => s.sid === sid)) {
-        // Already favorited — refresh the context key (in case stale) and
-        // bail WITHOUT writing. The "Add" verb must never remove a favorite.
-        favoritesProvider?.forceRefresh();
-        return;
-    }
-    const row = buildFavSessionRow(sid);
-    if (row) {
+    const result = mutateFavDoc((doc) => {
+        // Idempotent: if the active sid is ALREADY favorited, bail WITHOUT
+        // writing. The "Add" verb must never remove a favorite, so this is a
+        // no-op even under the CAS retry (re-checked against the freshest doc).
+        if (doc.sessions.some((s) => s.sid === sid)) return { changed: false };
+        const row = buildFavSessionRow(sid);
+        if (!row) return { changed: false };
         doc.sessions.push(row);
-        const wrote = writeFavAtomic({ ...doc, updatedAt: row.addedAt });
-        if (wrote) {
-            void vscode.window.setStatusBarMessage(`Added session ${sid.slice(0, 8)} to Favorites`, 3000);
-        }
+        return { changed: true };
+    });
+    if (result.wrote) {
+        void vscode.window.setStatusBarMessage(`Added session ${sid.slice(0, 8)} to Favorites`, 3000);
     }
     favoritesProvider?.forceRefresh();
 }
@@ -1567,25 +1672,25 @@ function favAddTab(resourceUri?: unknown): void {
  *  true). Idempotent: if the active sid is NOT favorited (stale setContext or
  *  hand-edit), this no-ops instead of accidentally adding it. */
 function favRemoveTab(resourceUri?: unknown): void {
-    const sid = resolveActiveSid(resourceUri);
+    void resourceUri; // accepted for menu contract; CC webview synthetic URIs carry no sid (deepfix round-1).
+    const sid = resolveActiveSid();
     if (!sid) {
         void vscode.window.showInformationMessage(
             "cc-status-dot: no active Claude Code session. Open a CC tab first, then re-run this command.",
         );
         return;
     }
-    const doc = readFavDoc() ?? emptyFavDoc();
-    const idx = doc.sessions.findIndex((s) => s.sid === sid);
-    if (idx < 0) {
-        // Not favorited — refresh context key (in case stale) and bail
-        // WITHOUT writing. The "Remove" verb must never add a favorite.
-        favoritesProvider?.forceRefresh();
-        return;
-    }
-    const removed = doc.sessions.splice(idx, 1)[0];
-    const wrote = writeFavAtomic({ ...doc, updatedAt: Date.now() });
-    if (wrote) {
-        void vscode.window.setStatusBarMessage(`Removed session ${removed.sid.slice(0, 8)} from Favorites`, 3000);
+    const result = mutateFavDoc((doc) => {
+        // Idempotent: if the active sid is NOT favorited, bail WITHOUT writing.
+        // The "Remove" verb must never add a favorite, so this is a no-op even
+        // under the CAS retry (re-checked against the freshest doc).
+        const idx = doc.sessions.findIndex((s) => s.sid === sid);
+        if (idx < 0) return { changed: false };
+        doc.sessions.splice(idx, 1);
+        return { changed: true };
+    });
+    if (result.wrote) {
+        void vscode.window.setStatusBarMessage(`Removed session ${sid.slice(0, 8)} from Favorites`, 3000);
     }
     favoritesProvider?.forceRefresh();
 }
@@ -1626,22 +1731,20 @@ async function favOpen(node: FavNode): Promise<void> {
     if (panel && typeof panel.reveal === "function") {
         try {
             panel.reveal();
-            // Update lastSeenAt on successful focus (companion is the sole
-            // writer — no race with the IIFE). writeFavAtomic returning false
-            // (future-version lock or fs error) is silent here — the panel
-            // already focused; failing to persist lastSeenAt just means the
-            // session may not float to the top of the list until the next
-            // successful toggle. We do NOT show an error toast on this path
-            // (it would interrupt a successful reveal) — the next toggle's
-            // writeFavAtomic surfaces the same error if it persists.
-            const doc = readFavDoc();
-            if (doc) {
+            // Update lastSeenAt on successful focus. deepfix round-1: routes through
+            // mutateFavDoc so the bump is CAS-guarded against a concurrent
+            // multi-window write (no lost update). The result is intentionally
+            // ignored — the panel already focused; failing to persist
+            // lastSeenAt just means the session may not float to the top of
+            // the list until the next successful toggle, and mutateFavDoc's
+            // error toast would interrupt a successful reveal (the next
+            // toggle's write surfaces the same error if it persists).
+            void mutateFavDoc((doc) => {
                 const s = doc.sessions.find((x) => x.sid === sid);
-                if (s) {
-                    s.lastSeenAt = Date.now();
-                    writeFavAtomic({ ...doc, updatedAt: Date.now() });
-                }
-            }
+                if (!s) return { changed: false };
+                s.lastSeenAt = Date.now();
+                return { changed: true };
+            });
             // v0.5.6 (Bug 1): force-refresh so the tree's lastSeenAt ordering
             // updates immediately (the just-focused session floats to the top
             // without waiting for the 2s polling tick).
@@ -1666,23 +1769,20 @@ async function favOpen(node: FavNode): Promise<void> {
 }
 
 function favRemove(node: FavNode): void {
-    const doc = readFavDoc();
-    if (!doc) return;
-    if (node.kind === "file") {
-        const before = doc.files.length;
-        doc.files = doc.files.filter((f) => f.fsPath !== node.file.fsPath);
-        if (doc.files.length === before) return;
-    } else {
+    mutateFavDoc((doc) => {
+        if (node.kind === "file") {
+            const before = doc.files.length;
+            doc.files = doc.files.filter((f) => f.fsPath !== node.file.fsPath);
+            return { changed: doc.files.length !== before };
+        }
         const before = doc.sessions.length;
         doc.sessions = doc.sessions.filter((s) => s.sid !== node.session.sid);
-        if (doc.sessions.length === before) return;
-    }
+        return { changed: doc.sessions.length !== before };
+    });
     // writeFavAtomic reports its own error toast on failure; on success or
-    // failure we still force-refresh so the tree reflects the on-disk truth
-    // (failure rolls back the in-memory filter; success picks up the new
-    // ordering). v0.5.6 (Bug 1): force variant bypasses signature dedup so
-    // the removal is perceived as immediate by the user.
-    writeFavAtomic({ ...doc, updatedAt: Date.now() });
+    // failure (incl. CAS conflict-after-retry) we still force-refresh so the
+    // tree reflects the on-disk truth. v0.5.6 (Bug 1): force variant bypasses
+    // signature dedup so the removal is perceived as immediate by the user.
     favoritesProvider?.forceRefresh();
 }
 
@@ -1763,6 +1863,137 @@ async function favBrowse(): Promise<void> {
     }
 }
 
+/** v0.5.9 QuickPick session selector — the zero-webview-coupling favorite
+ *  toggle. v0.5.8's in-webview star click was architecturally infeasible (see
+ *  patch.ts §AA forensics: CC sets webview.html once at panel creation; any
+ *  reassignment forces a destructive full reload of CC's React session). This
+ *  command replaces it as the primary "toggle a session from inside the
+ *  conversation" entrypoint that does NOT depend on injecting into the CC
+ *  webview DOM.
+ *
+ *  Source of truth: `globalThis.__ccsdSidToTitle` (sid → logical title),
+ *  published by the IIFE's §A preamble + refreshed every 500ms tick (so a
+ *  newly-opened CC session appears here within one tick). We ALSO union
+ *  `globalThis.__ccsdSidToPanel` keys (open panels whose title hasn't landed
+ *  yet — they get a sid-prefix label). The companion + IIFE share the same
+ *  Extension Host process, so the bridge is a direct in-memory read (no IPC).
+ *
+ *  Each item shows ★ when already favorited (☆ otherwise) + the session label
+ *  + an open/closed + state detail. Picking a favorited session REMOVES it;
+ *  picking a non-favorited one ADDS it. The write goes through the SOLE writer
+ *  (writeFavAtomic) and forceRefresh re-renders the Favorites tree inline
+ *  (latency fix #2: first add shows immediately, not on the 2s polling tick).
+ *  The IIFE's per-panel tick picks the new favorite up within ≤500ms via
+ *  readFavSet's mtime cache and paints the "★ " tab-title prefix (#1). */
+async function favPickSession(): Promise<void> {
+    const g = globalThis as Record<string, unknown>;
+    const titleMap = g.__ccsdSidToTitle as Record<string, string> | undefined;
+    const panelMap = g.__ccsdSidToPanel as Record<string, unknown> | undefined;
+    // Union of all known sids: title map (labeled sessions) + panel map (open
+    // sessions whose title may not have landed yet). titleMap wins for label.
+    const sidSet = new Set<string>();
+    if (titleMap && typeof titleMap === "object") {
+        for (const k of Object.keys(titleMap)) sidSet.add(k);
+    }
+    if (panelMap && typeof panelMap === "object") {
+        for (const k of Object.keys(panelMap)) sidSet.add(k);
+    }
+    if (sidSet.size === 0) {
+        void vscode.window.showInformationMessage(
+            "cc-status-dot: no open Claude Code session found. Open a CC tab first, then re-run this command.",
+        );
+        return;
+    }
+    // DISPLAY-ONLY read: which sids are currently favorited (drives the ★
+    // marker in the list). deepfix round-1 (MEDIUM stale-doc fix): this snapshot is
+    // intentionally NOT used for the mutation — after the user picks, the
+    // mutation re-reads fresh inside mutateFavDoc's CAS loop, so a
+    // favorites.json change during the await can never leave the toggle acting
+    // on a stale doc (the pre-fix bug was: read doc → await showQuickPick →
+    // splice/push the now-stale doc → write).
+    const displayDoc = readFavDoc() ?? emptyFavDoc();
+    const favSids = new Set(displayDoc.sessions.map((s) => s.sid));
+    const openSet = openSidSet();
+    type Item = vscode.QuickPickItem & { sid?: string };
+    const items: Item[] = [];
+    // Stable order: favorited first (★), then open, then closed — so the user's
+    // starred work surfaces at the top.
+    const sids = Array.from(sidSet).sort((a, b) => {
+        const fa = favSids.has(a) ? 0 : 1;
+        const fb = favSids.has(b) ? 0 : 1;
+        if (fa !== fb) return fa - fb;
+        const oa = openSet.has(a) ? 0 : 1;
+        const ob = openSet.has(b) ? 0 : 1;
+        if (oa !== ob) return oa - ob;
+        return a.localeCompare(b);
+    });
+    // Best-effort state lookup per sid (read the <sid>.json sidecar the IIFE
+    // reads). A missing/corrupt file just yields "(unknown)".
+    function stateOf(sid: string): string {
+        try {
+            const raw = fs.readFileSync(path.join(FAV_STATE_DIR, `${sid}.json`), "utf8");
+            const j = JSON.parse(raw) as Record<string, unknown>;
+            return typeof j.state === "string" ? j.state : "(unknown)";
+        } catch {
+            return "(unknown)";
+        }
+    }
+    function labelOf(sid: string): string {
+        const t = titleMap && typeof titleMap === "object" ? titleMap[sid] : "";
+        if (typeof t === "string" && t.trim()) return t.trim();
+        return sid.slice(0, 8);
+    }
+    for (const sid of sids) {
+        const isFav = favSids.has(sid);
+        const isOpen = openSet.has(sid);
+        items.push({
+            label: (isFav ? "$(star-full) " : "$(star-empty) ") + labelOf(sid),
+            description: sid.slice(0, 8),
+            detail:
+                (isFav ? "favorited — pick to REMOVE" : "not favorited — pick to ADD") +
+                " · " +
+                (isOpen ? `open · state: ${stateOf(sid)}` : "closed"),
+            sid,
+        });
+    }
+    const picked = (await vscode.window.showQuickPick(items, {
+        placeHolder: "Toggle CC Favorites: pick a session to star/unstar",
+    })) as Item | undefined;
+    if (!picked || !picked.sid) return;
+    const sid = picked.sid;
+    // deepfix round-1 (MEDIUM stale-doc fix): the mutation re-reads favorites.json
+    // fresh inside mutateFavDoc's CAS loop (AFTER the await), so it reflects
+    // any concurrent change during the QuickPick. The ★ the user saw is from
+    // displayDoc (pre-await); under a concurrent edit the actual add/remove
+    // outcome may differ from that marker — the status message below always
+    // reports the REAL outcome, and CAS guarantees no lost update.
+    let removed = false;
+    const result = mutateFavDoc((doc) => {
+        removed = false;
+        const idx = doc.sessions.findIndex((s) => s.sid === sid);
+        if (idx >= 0) {
+            // Currently favorited → remove.
+            doc.sessions.splice(idx, 1);
+            removed = true;
+            return { changed: true };
+        }
+        // Not favorited → add. Reuse buildFavSessionRow so the row schema
+        // matches favAddTab exactly (divergent schemas silently corrupt
+        // favorites.json).
+        const row = buildFavSessionRow(sid);
+        if (!row) return { changed: false };
+        doc.sessions.push(row);
+        return { changed: true };
+    });
+    if (result.wrote) {
+        void vscode.window.setStatusBarMessage(
+            `Session ${sid.slice(0, 8)} ${removed ? "removed from" : "added to"} Favorites`,
+            3000,
+        );
+    }
+    favoritesProvider?.forceRefresh();
+}
+
 /** Register all Favorites contributions. Called from activate() AFTER
  *  detectAndPatch's fire-and-forget is set up. detectAndPatch is never
  *  blocked by Favorites I/O. The view auto-activates on first reveal — the
@@ -1801,6 +2032,12 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
         }),
         vscode.commands.registerCommand("ccStatusDot.fav.refresh", favRefresh),
         vscode.commands.registerCommand("ccStatusDot.fav.browse", favBrowse),
+        // v0.5.9: QuickPick session selector — primary zero-webview-coupling
+        // toggle (replaces the infeasible in-webview star click). Visible in
+        // the command palette as "CC Favorites: Pick Session to Star/Unstar".
+        vscode.commands.registerCommand("ccStatusDot.fav.pickSession", () => {
+            void favPickSession();
+        }),
     );
 
     // setInterval polling — refresh the tree every FAV_POLL_MS so it picks up

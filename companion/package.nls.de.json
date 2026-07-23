@@ -14,6 +14,7 @@
   "ccsd.fav.copyResume.title": "'claude -r <sid>' kopieren",
   "ccsd.fav.refresh.title": "Aktualisieren",
   "ccsd.fav.browse.title": "Durchsuchen",
+  "ccsd.fav.pickSession.title": "CC-Sitzung zum Markieren/Markierung aufheben wählen",
   "ccsd.configuration.title": "cc-status-dot",
   "ccsd.config.notify.description": "Zeige eine Benachrichtigung, wenn Claude Code einen Turn abschließt (Zustandsübergang zu done oder interrupted).",
   "ccsd.config.notifyWhenFocused.description": "Die Abschluss-Benachrichtigung auch auslösen, wenn VSCode das aktuell fokussierte Fenster ist. Deaktivieren, um nur zu benachrichtigen, wenn du in einer anderen App arbeitest.",
@@ -25,7 +26,5 @@
   "ccsd.config.showCost.description": "Zeige die USD-Kostenschätzung neben der Token-Anzahl (erfordert einen passenden Modelleintrag in token-rates.json — unbekannte Modelle wie GLM werden automatisch ausgeblendet).",
   "ccsd.config.warnThresholdUsd.description": "Benachrichtigen, wenn die Session-Kostenschätzung diese USD-Schwelle überschreitet (0 = deaktiviert). Wird einmal pro Überschreitung ausgelöst.",
   "ccsd.config.rateDisplayMode.description": "Wie das Live-tok/s-Suffix im Token-Statusleistenelement gerendert wird: 'off' blendet es aus (für überfüllte Balken / leistungsempfindliche Rechner), 'numeric' (Standard) zeigt nur '1.2k/s', 'sparkline' zeigt nur '▂▄▆█', 'both' zeigt beides. Das Rate-Segment ist wie die Kosten mit '·' abgetrennt (rendert als '12.3k tok · 1.2k/s · ~$0.42').",
-  "ccsd.config.fav.includeInExplorerContextMenu.description": "'CC-Favoriten: Datei hinzufügen/entfernen' im Datei-Rechtsklickmenü des Explorers anzeigen.",
-  "ccsd.config.fav.includeInTabContextMenu.description": "'CC-Favoriten: Aktuellen CC-Tab markieren/Markierung aufheben' in den Rechtsklickmenüs von Nicht-Datei-Editor-Tabs anzeigen (v0.5.0+; v0.5.1 lockerte die Bedingung von nur-webview zu nicht-Datei, damit der Eintrag auf dem Claude Code-Tab erscheint — VSCode legt keinen CC-spezifischen Kontextschlüssel frei, und der resourceScheme des CC-Tabs löst sich zu leer auf, nicht zu 'webview'). Der Handler reagiert mit einer Infomeldung als No-op, wenn der aktive Tab keine Claude Code-Session ist (kein __ccsdActiveSid).",
-  "ccsd.config.fav.includeInWebviewContextMenu.description": "'Zu CC-Favoriten hinzufügen/entfernen' beim Rechtsklick in einem Claude Code-Chat-Webview anzeigen (v0.5.8+). Das injizierte Stern-Skript setzt data-vscode-context auf den Webview-Body, sodass das Menü die genaue Session ansteuert (der ccsdSid-Kontextschluessel steuert die Sichtbarkeit — Elemente erscheinen nur in CC-Webviews)."
+  "ccsd.config.fav.includeInExplorerContextMenu.description": "'CC-Favoriten: Datei hinzufügen/entfernen' im Datei-Rechtsklickmenü des Explorers anzeigen. Hinweis: Die Einträge 'Hinzufügen/Entfernen', die auch auf CC-Chat-Webview-Tabs (Open Editors) erscheinen, wirken NUR zuverlässig auf dem AKTIVEN CC-Tab — VSCode legt keinen CC-spezifischen Kontextschlüssel für den rechtsgeklickten Tab offen, daher kann ein Rechtsklick auf einen HINTERGRÜND-CC-Tab zur aktiven Session auflösen. Verwende zum Targetieren eines Hintergrund-Tabs 'CC-Sitzung zum Markieren/Markierung aufheben wählen' (Befehlspalette)."
 }

@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.8";
+const INJECT_VERSION = "v0.5.9";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -1437,72 +1437,6 @@ const ANCHOR_A =
 const ANCHOR_B = "this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)";
 
 // ---------------------------------------------------------------------------
-// v0.5.8 Star-in-webview — the webview-side script source (runs inside the CC
-// webview renderer, NOT the extension host). Injected into the panel's HTML
-// via the IIFE's prototype-level html setter monkey-patch (see §AA in
-// buildIIFE). The script:
-//   1. Monkey-patches window.acquireVsCodeApi BEFORE CC's bundle calls it, so
-//      we can stash a postMessage reference without re-acquiring (VSCode only
-//      allows ONE acquireVsCodeApi() call per webview).
-//   2. Creates a floating clickable star (☆/★) at top-right of the webview body.
-//   3. On click → postMessage({type:"ccsdToggleFav",sid}) → IIFE's
-//      onDidReceiveMessage → companion writeFavAtomic → star updates.
-//   4. Listens for {type:"ccsdFavState"} / {type:"ccsdSidSync"} messages from
-//      the IIFE to sync star color + data-vscode-context.
-//   5. Sets data-vscode-context={ccsdSid,ccsdFav} on document.body so the
-//      companion's webview/context menu (method B) can read the precise sid.
-//
-// CONSTRAINTS (the code below is baked via JSON.stringify into the IIFE which
-// is itself injected into CC's extension.js — so it must not contain the
-// literal substring "</script>" which would prematurely close the injected
-// <script> tag when the HTML is parsed by the webview):
-//   - No "</script>" anywhere in the body.
-//   - No backticks (would break if this were ever inlined in a template literal;
-//     JSON.stringify handles escaping regardless, but keeping it clean is safer).
-//   - Uses only string concatenation (+) and array.join("") — no template
-//     literals — so ${...} is never misinterpreted.
-//   - All chars are either ASCII or \uXXXX escapes (the source stays
-//     prettier-friendly + grep-friendly).
-// ---------------------------------------------------------------------------
-const STAR_SCRIPT_SRC = [
-    "(function(){",
-    'var N="__ccsdStar";',
-    'var sid="",fav=false;',
-    "var orig=window.acquireVsCodeApi;",
-    'if(typeof orig==="function"&&!window.__ccsdApi){',
-    "window.acquireVsCodeApi=function(){var api=orig.apply(this,arguments);if(!window.__ccsdApi)window.__ccsdApi=api;return api;};",
-    "}",
-    'var css=document.createElement("style");',
-    'css.textContent="#__ccsdStar{position:fixed;top:8px;right:8px;z-index:100001;cursor:pointer;font-size:18px;line-height:1;user-select:none;-webkit-user-select:none;padding:4px 6px;border-radius:4px;opacity:.45;transition:opacity .15s,color .15s}#__ccsdStar:hover{opacity:.85}#__ccsdStar.__f{color:#FFD700;opacity:1}";',
-    "function sync(){",
-    "var s=document.getElementById(N);if(!s)return;",
-    's.textContent=fav?"\\u2605":"\\u2606";',
-    'if(fav){s.classList.add("__f")}else{s.classList.remove("__f")}',
-    'try{document.body.setAttribute("data-vscode-context",JSON.stringify({ccsdSid:sid,ccsdFav:fav}))}catch(e){}',
-    "}",
-    "function ensure(){",
-    "if(document.getElementById(N))return;",
-    "if(!document.body)return;",
-    "if(!css.parentNode)document.head.appendChild(css);",
-    'var s=document.createElement("div");',
-    's.id=N;s.textContent="\\u2606";s.title="Toggle favorite";',
-    's.setAttribute("role","button");s.setAttribute("tabindex","0");',
-    's.addEventListener("click",function(){if(window.__ccsdApi)window.__ccsdApi.postMessage({type:"ccsdToggleFav",sid:sid})});',
-    's.addEventListener("keydown",function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();if(window.__ccsdApi)window.__ccsdApi.postMessage({type:"ccsdToggleFav",sid:sid})}});',
-    "document.body.appendChild(s);sync();",
-    "}",
-    'window.addEventListener("message",function(ev){',
-    'var d=ev&&ev.data;if(!d||typeof d!=="object")return;',
-    'if(d.type==="ccsdFavState"){fav=!!d.favorited;sync();}',
-    'else if(d.type==="ccsdSidSync"){sid=d.sid||"";sync();}',
-    "});",
-    'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",ensure)}else{ensure()}',
-    "var mo=new MutationObserver(function(){if(!document.getElementById(N))ensure()});",
-    "if(document.documentElement){mo.observe(document.documentElement,{childList:true})}",
-    "})();",
-].join("");
-
-// ---------------------------------------------------------------------------
 // Logging — plain text, no emojis (kept terminal-friendly & greppable)
 // ---------------------------------------------------------------------------
 
@@ -1891,12 +1825,6 @@ function buildIIFE(resDir: string): string {
     // IIFE bytes as literal UTF-8 (VSCode parses the IIFE as UTF-8) — same as
     // SBI_LIGHTS_CFG's emoji bytes.
     const i18nLiteral = JSON.stringify(I18N_DICT);
-    // v0.5.8: bake STAR_SCRIPT_SRC (the webview-side star script) as a
-    // JSON-stringified string literal. JSON.stringify correctly escapes all
-    // special chars (quotes, backslashes, unicode) so the baked IIFE bytes are
-    // valid JS. The script is injected into CC webview HTML inside a
-    // <script nonce="..."> tag by injectStarHtml() below (§AA).
-    const starScriptLiteral = JSON.stringify(STAR_SCRIPT_SRC);
     // State machine + notification + SBI aggregation mirror docs/STATES.md §1/§4/§4b/§7. Keep in sync.
     //
     // The banner carries INJECT_VERSION + a content hash of the body (everything
@@ -2081,62 +2009,6 @@ function buildIIFE(resDir: string): string {
         `var LANG=(vs.env.language||"en").toLowerCase().split("-")[0];`,
         `var I18N=${i18nLiteral};`,
         `function tr(k){var e=I18N[k];return e&&(e[LANG]||e.en)||k;}`,
-        // === §AA v0.5.8 Star-in-webview (html setter patch + inject + message bridge) ===
-        // Bakes STAR_SCRIPT_SRC (the webview-side star script) as a JS string
-        // literal. JSON.stringify in patch.ts (starScriptLiteral) already
-        // escaped all quotes/backslashes/unicode, so we splice the literal
-        // directly into the IIFE body.
-        `var STAR_SRC=${starScriptLiteral};`,
-        // injectStarHtml(html): takes a raw CC webview HTML string and returns it
-        // with our <style> + <script nonce="..."> injected before </head>.
-        // Guards: (a) only CC webviews (html must contain "claude-error" — the
-        // <pre id="claude-error"> marker unique to CC's getHtmlForWebview
-        // template); (b) idempotent (skip if "__ccsdStar" already present);
-        // (c) nonce extraction via regex on the CSP meta / existing script
-        // tags — if extraction fails, skip injection (CSP would block a
-        // nonce-less script, so half-injection is worse than no injection);
-        // (d) the </head> injection point is stable (CC's template always has
-        // a </head> before <body>) — if absent, bail (return unmodified).
-        // The injected <script> uses the SAME nonce CC generated for its own
-        // scripts, so CSP script-src 'nonce-XXX' passes. The <style> needs no
-        // nonce (CC's CSP is style-src 'unsafe-inline').
-        `function injectStarHtml(html){try{if(typeof html!=="string")return html;if(html.indexOf("__ccsdStar")!==-1)return html;if(html.indexOf("claude-error")===-1)return html;var m=html.match(/nonce-([A-Za-z0-9+\\/=]+)/);if(!m)return html;var nonce=m[1];var css='<style id="__ccsdStarCss">#__ccsdStar{position:fixed;top:8px;right:8px;z-index:100001;cursor:pointer;font-size:18px;line-height:1;user-select:none;-webkit-user-select:none;padding:4px 6px;border-radius:4px;opacity:.45;transition:opacity .15s,color .15s}#__ccsdStar:hover{opacity:.85}#__ccsdStar.__f{color:#FFD700;opacity:1}<\\/style>';var scr='<script nonce="'+nonce+'">'+STAR_SRC+'<\\/script>';var idx=html.indexOf("</head>");if(idx===-1)return html;return html.slice(0,idx)+css+scr+html.slice(idx);}catch(e){return html;}}`,
-        // Prototype-level html setter patch (installed ONCE per window via
-        // globalThis.__ccsdHtmlSetterPatched guard). Intercepts ALL future
-        // webview.html = "..." writes on ANY webview — injectStarHtml filters
-        // to CC-only (claude-error marker), so non-CC webviews pass through
-        // unchanged. This catches panels created AFTER the IIFE first runs
-        // (IIFE fires on update_session_state/rename_tab which are AFTER
-        // createPanel sets html — see research R1 timing deadlock). R4
-        // mitigation: guard desc && typeof desc.set==='function' before
-        // patching; if the prototype's setter is non-configurable or missing
-        // (future VSCode change), degrade gracefully (the per-panel
-        // read-modify-write below still covers existing panels).
-        `try{if(!globalThis.__ccsdHtmlSetterPatched){globalThis.__ccsdHtmlSetterPatched=true;var __proto=Object.getPrototypeOf(t.panelTab.webview);var __desc=Object.getOwnPropertyDescriptor(__proto,"html");if(__desc&&typeof __desc.set==="function"&&typeof __desc.configurable!==false){var __origSet=__desc.set;Object.defineProperty(__proto,"html",{configurable:true,enumerable:__desc.enumerable!==false,get:__desc.get,set:function(v){try{v=injectStarHtml(v)}catch(_){}__origSet.call(this,v)}});}}}catch(_){}`,
-        // Per-panel current-html injection: the FIRST panel already had its
-        // html set by CC BEFORE the IIFE ran (R1 timing deadlock). The
-        // prototype patch above catches FUTURE panels, but THIS panel needs a
-        // one-time read-modify-write to inject the star script into the
-        // already-rendered HTML. Setting .html triggers a webview reload (one
-        // brief flash per panel per VSCode session — accepted tradeoff per
-        // research R8). injectStarHtml is idempotent so a re-trigger by the
-        // prototype patch after reload is a no-op. Guarded by t.__ccsdStarInjected
-        // so we only do the read-modify-write ONCE per panel.
-        `try{if(!t.__ccsdStarInjected){t.__ccsdStarInjected=true;var __wh=t.panelTab.webview.html;if(__wh&&__wh.indexOf("claude-error")!==-1&&__wh.indexOf("__ccsdStar")===-1){t.panelTab.webview.html=injectStarHtml(__wh);}}}catch(_){}`,
-        // onDidReceiveMessage bridge: the webview star script posts
-        // {type:"ccsdToggleFav",sid} when the user clicks the star. We forward
-        // to the companion's ccStatusDot.fav.toggleTab command (the SOLE
-        // writer of favorites.json — avoids schema drift between IIFE and
-        // companion, per research R7 recommendation). The arg
-        // {webviewContext:{ccsdSid:sid}} is the same shape VSCode passes to
-        // webview/context menu commands, so the companion's resolveActiveSid
-        // (extended in v0.5.8 to extract webviewContext.ccsdSid) handles it.
-        // After the toggle returns, we immediately push the updated fav state
-        // to the webview so the star updates without waiting for the 500ms
-        // tick (perceived latency < 50ms vs 500ms).
-        // onDidReceiveMessage can be called multiple times (VSCode allows
-        // multiple listeners) — this does NOT disturb CC's own listener.
-        `try{t.panelTab.webview.onDidReceiveMessage(function(msg){try{if(msg&&msg.type==="ccsdToggleFav"){var __sid=msg.sid||t.__ccsdSid||"";if(__sid){vs.commands.executeCommand("ccStatusDot.fav.toggleTab",{webviewContext:{ccsdSid:__sid}}).then(function(){try{var __fs=readFavSet();var __fav=!(!__fs||!__fs[__sid]);t.panelTab.webview.postMessage({type:"ccsdFavState",favorited:__fav,sid:__sid});}catch(_){}},function(){})}}}catch(e){}});}catch(_){}`,
         // === §B SBI helpers (dispatchNotify + notify — shared by §G threshold alert) ===
         // v0.2.4 (architecture MEDIUM fix): shared osascript dispatch helper.
         // Pre-refactor notify() and the threshold alert path (in the token
@@ -2524,17 +2396,36 @@ function buildIIFE(resDir: string): string {
         // real session title. Best-effort, wrapped in try/catch — a missing
         // title just leaves the bridge entry stale (companion falls back).
         `try{if(globalThis.__ccsdSidToTitle&&sid){var __tt=t.__ccsdTitle||(t.panelTab&&t.panelTab.title)||"";if(__tt)globalThis.__ccsdSidToTitle[sid]=__tt;}}catch(_){}`,
-        // v0.5.8 §AA star sync: push fav state + sid to the webview's star
-        // script every tick. The webview script's message listener is
-        // idempotent (same fav/sid → no DOM change), so pushing every 500ms
-        // is cheap (one postMessage, no layout thrash). Only pushes when the
-        // fav state CHANGED since last tick (per-panel cache on
-        // t.__ccsdLastStarFav) OR the sid changed (t.__ccsdLastStarSid) —
-        // minimizes IPC in the steady state (same fav, same sid → skip).
-        // After the initial read-modify-write reload (§AA above), the webview
-        // JS context is fresh (fav=false, sid=""); this tick re-establishes
-        // the correct star state within 500ms of the reload completing.
-        `try{var __fset=readFavSet();var __isFav=!(!__fset||!__fset[sid]);if(t.__ccsdLastStarFav!==__isFav||t.__ccsdLastStarSid!==sid){t.__ccsdLastStarFav=__isFav;t.__ccsdLastStarSid=sid;t.panelTab.webview.postMessage({type:"ccsdFavState",favorited:__isFav,sid:sid});t.panelTab.webview.postMessage({type:"ccsdSidSync",sid:sid});}}catch(_){}`,
+        // v0.5.9 tab-title star prefix. v0.5.8 injected a clickable star INTO
+        // the CC webview HTML (Prong 1 prototype-setter monkey-patch + Prong 2
+        // per-panel read-modify-write). Forensics on CC 2.1.218 extension.js
+        // proved this architecturally infeasible: CC sets webview.html exactly
+        // ONCE at panel creation (3 createPanel paths) and never reassigns it,
+        // so Prong 1's setter installed AFTER the only write never fires
+        // (timing deadlock); Prong 2's read-modify-write forces a full webview
+        // reload (VSCode replaces entire content on any .html assignment) which
+        // destroys CC's React session state (scroll position, in-flight agent
+        // responses, input draft, postMessage handshake). CSP + MutationObserver
+        // were NOT blockers (both verified compliant). The reliable replacement
+        // is a "★ " prefix on the TAB TITLE itself: the IIFE already owns
+        // panelTab.title (ANCHOR_B) and already reads favorites every 500ms tick
+        // via readFavSet() (mtime+size cached → picks up a companion
+        // writeFavAtomic within one tick = ≤500ms). This needs NO webview
+        // injection, NO CSP nonce, NO DOM coupling, NO reload — VSCode's
+        // panelTab.title API is stable and reload-free.
+        //
+        // Base title source: t.__ccsdTitle (the LOGICAL title cached by
+        // replA/replB from e.request.title, NEVER carries a ★). Using __ccsdTitle
+        // (not the live panelTab.title) as the base PREVENTS ★★ stacking across
+        // ticks AND keeps the §A sid→title bridge above publishing the un-starred
+        // logical title (so resolveActiveSid's exact-label match against the
+        // active tab still hits — see companion favToggleTab FAV.34). The
+        // assignment is guarded by `if(__base)` so the title is never blanked
+        // before the first rename_tab/update_session_state fires (CC keeps its
+        // own title until then). The `panelTab.title !== __want` gate avoids a
+        // redundant write on every tick when the fav state is unchanged (VSCode
+        // would otherwise re-render the tab label 2×/sec for no visible change).
+        `try{var __fset=readFavSet();var __isFav=!(!__fset||!__fset[sid]);var __base=t.__ccsdTitle||"";if(__base){var __want=__isFav?("\\u2605 "+__base):__base;if(t.panelTab.title!==__want)t.panelTab.title=__want;}}catch(_){}`,
         `var st=null,since=null,err="",pend=false;`,
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,

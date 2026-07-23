@@ -14,6 +14,7 @@
   "ccsd.fav.copyResume.title": "'claude -r <sid>' をコピー",
   "ccsd.fav.refresh.title": "更新",
   "ccsd.fav.browse.title": "参照",
+  "ccsd.fav.pickSession.title": "スター切り替えする CC セッションを選択",
   "ccsd.configuration.title": "cc-status-dot",
   "ccsd.config.notify.description": "Claude Code がターンを完了したとき（状態が done または interrupted に遷移）に通知を表示します。",
   "ccsd.config.notifyWhenFocused.description": "VSCode が現在フォーカスされているウィンドウの場合にも完了通知を発火します。別のアプリを使用しているときのみ通知するには無効にしてください。",
@@ -25,7 +26,5 @@
   "ccsd.config.showCost.description": "token 数と並べて USD コスト見積もりを表示します（token-rates.json に一致するモデルエントリが必要 —— GLM などの未知モデルは自動非表示）。",
   "ccsd.config.warnThresholdUsd.description": "セッションコスト見積もりがこの USD しきい値を超えたときに通知します（0 = 無効）。交差ごとに 1 回発火します。",
   "ccsd.config.rateDisplayMode.description": "token ステータスバー項目にライブ tok/s 接尾辞をレンダリングする方法：'off' は非表示（混雑したバー/パフォーマンス重視のマシン向け）、'numeric'（デフォルト）は '1.2k/s' のみ、'sparkline' は '▂▄▆█' のみ、'both' は両方を表示します。rate セグメントは cost と同様に '·' で区切ります（'12.3k tok · 1.2k/s · ~$0.42' とレンダリング）。",
-  "ccsd.config.fav.includeInExplorerContextMenu.description": "エクスプローラーのファイル右クリックメニューに 'CC お気に入り：ファイルを追加/削除' を表示します。",
-  "ccsd.config.fav.includeInTabContextMenu.description": "非ファイルエディタタブの右クリックメニューに 'CC お気に入り：現在の CC タブのスター切り替え' を表示します（v0.5.0+；v0.5.1 では CC タブに項目を表示するため、ゲートを webview のみから非ファイルに緩和しました —— VSCode は CC 固有のコンテキストキーを公開せず、CC タブの resourceScheme は 'webview' ではなく空に解決されます）。アクティブなタブが Claude Code セッションでない場合（__ccsdActiveSid なし）、ハンドラは情報メッセージで no-op します。",
-  "ccsd.config.fav.includeInWebviewContextMenu.description": "Claude Code チャット webview 内で右クリックした際に 'CC お気に入りに追加/削除' を表示します（v0.5.8+）。注入されたスタースクリプトが webview body に data-vscode-context を設定するため、メニューは正確なセッションをターゲットにします（ccsdSid コンテキストキーが表示を制御 — CC webview 内でのみ表示）。"
+  "ccsd.config.fav.includeInExplorerContextMenu.description": "エクスプローラーのファイル右クリックメニューに 'CC お気に入り：ファイルを追加/削除' を表示します。注意：Open Editors の CC チャット webview タブに表示される追加/削除項目は【アクティブな CC タブ】のみに確実に作用します——VSCode は右クリックされたタブの CC 固有コンテキストキーを公開しないため、背景 CC タブの右クリックはアクティブなセッションに解決される場合があります。背景タブを操作するにはコマンドパレットの 'スター切り替えする CC セッションを選択' を使ってください。"
 }

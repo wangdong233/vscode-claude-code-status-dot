@@ -14,6 +14,7 @@
   "ccsd.fav.copyResume.title": "Copiar 'claude -r <sid>'",
   "ccsd.fav.refresh.title": "Refrescar",
   "ccsd.fav.browse.title": "Explorar",
+  "ccsd.fav.pickSession.title": "Elegir sesión CC para marcar/desmarcar",
   "ccsd.configuration.title": "cc-status-dot",
   "ccsd.config.notify.description": "Mostrar una notificación cuando Claude Code completa un turno (la transición de estado a done o interrupted).",
   "ccsd.config.notifyWhenFocused.description": "Disparar también la notificación de finalización cuando VSCode es la ventana actualmente enfocada. Desactiva para notificar solo cuando estás en otra aplicación.",
@@ -25,7 +26,5 @@
   "ccsd.config.showCost.description": "Mostrar la estimación de coste USD junto al recuento de tokens (requiere una entrada de modelo coincidente en token-rates.json — los modelos desconocidos como GLM se ocultan automáticamente).",
   "ccsd.config.warnThresholdUsd.description": "Notificar cuando la estimación de coste de la sesión cruce este umbral USD (0 = deshabilitado). Se dispara una vez por cruce.",
   "ccsd.config.rateDisplayMode.description": "Cómo renderizar el sufijo tok/s en vivo en el elemento de la barra de estado de token: 'off' lo oculta (para barras abarrotadas / máquinas sensibles al rendimiento), 'numeric' (predeterminado) muestra solo '1.2k/s', 'sparkline' muestra solo '▂▄▆█', 'both' muestra ambos. El segmento de velocidad se separa con '·' como el coste (renderiza '12.3k tok · 1.2k/s · ~$0.42').",
-  "ccsd.config.fav.includeInExplorerContextMenu.description": "Mostrar 'Favoritos de CC: Añadir/Quitar archivo' en el menú de clic derecho de archivos del Explorador.",
-  "ccsd.config.fav.includeInTabContextMenu.description": "Mostrar 'Favoritos de CC: Marcar/Desmarcar pestaña CC actual' en los menús de clic derecho de pestañas del editor que no sean archivos (v0.5.0+; v0.5.1 relajó la condición de solo-webview a no-archivo para que el elemento aparezca en la pestaña de Claude Code — VSCode no expone ninguna clave de contexto específica de CC, y el resourceScheme de la pestaña de CC se resuelve a vacío, no a 'webview'). El manejador no hace nada con un mensaje informativo cuando la pestaña activa no es una sesión de Claude Code (sin __ccsdActiveSid).",
-  "ccsd.config.fav.includeInWebviewContextMenu.description": "Mostrar 'Anadir/Quitar de Favoritos de CC' al hacer clic derecho dentro de un webview de chat de Claude Code (v0.5.8+). El script de estrella inyectado establece data-vscode-context en el cuerpo del webview, por lo que el menu se dirige a la sesion exacta (la clave de contexto ccsdSid controla la visibilidad — los elementos solo aparecen dentro de webviews de CC)."
+  "ccsd.config.fav.includeInExplorerContextMenu.description": "Mostrar 'Favoritos de CC: Añadir/Quitar archivo' en el menú de clic derecho de archivos del Explorador. Nota: los elementos Añadir/Quitar que también aparecen en las pestañas webview de chat de CC (Open Editors) solo actúan de forma fiable en la pestaña CC ACTIVA — VSCode no expone ninguna clave de contexto específica de CC para la pestaña clicada, por lo que un clic derecho en una pestaña de CC en SEGUNDO PLANO puede resolver a la sesión activa. Para apuntar a una pestaña en segundo plano, usa 'Elegir sesión CC para marcar/desmarcar' (paleta de comandos)."
 }

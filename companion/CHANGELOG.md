@@ -5,6 +5,21 @@ All notable changes to the **cc-status-dot Companion** VS Code extension are doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.9] — 2026-07-23
+
+### Added — QuickPick session selector (replaces the infeasible in-webview star)
+
+- **`ccStatusDot.fav.pickSession` command** (`favPickSession()` in `extension.ts`): command-palette entry "CC Favorites: Pick CC Session to Star/Unstar" — lists every open CC session via `globalThis.__ccsdSidToTitle` ∪ `__ccsdSidToPanel` (favorited ★ first, then open, then closed), pick one to toggle. Goes through the sole writer `writeFavAtomic` + `forceRefresh` so the tree re-renders inline. This is the zero-webview-coupling replacement for v0.5.8's in-webview star click (which was architecturally infeasible — see root CHANGELOG #1).
+
+### Removed — `editor/title/context` tab right-click menu + dead config
+
+- **`editor/title/context` menu section** (the v0.5.0 addTab/removeTab items): removed. VSCode exposes no CC-specific context key for the right-clicked tab, so the menu could only surface on ALL non-file tabs (handler no-op'ing on non-CC tabs), and the `data-vscode-context` that v0.5.8's star injection set on the webview body was removed with the injection. `explorer/context` (Open Editors) + `commandPalette` (toggleTab + pickSession) + `webview/context` (retained for forward-compat, currently dormant) remain.
+- **Configuration**: `ccStatusDot.fav.includeInTabContextMenu` (the v0.5.0 opt-out) removed — its only gating target (`editor/title/context`) is gone. 8-language NLS descriptions updated; the `includeInWebviewContextMenu` description updated to note the menu is dormant pending a future context mechanism (point users at pickSession).
+
+### Changed — 5-way version pin
+
+- companion/package.json: `0.5.8` → `0.5.9`. `MIN_PATCHER_VERSION` + `injectVersion()` fallback synced to the patcher.
+
 ## [0.5.0] — 2026-07-22
 
 ### Added — Tab right-click favorite toggle + gold-underline favorited icon

@@ -374,7 +374,7 @@ check(
 // Add/Remove menu labels via setContext('ccStatusDot.fav.currentTabFavorited');
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
-check('IIFE.21c banner carries v0.5.8 stamp', /\/\*cc-status-dot-injected:v0.5.8:/.test(iife));
+check('IIFE.21c banner carries v0.5.9 stamp', /\/\*cc-status-dot-injected:v0.5.9:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -2783,6 +2783,45 @@ check(
   'IIFE.163 v0.5.3 FAV BRIDGE §Z — onDidDispose deletes __ccsdSidToTitle[sid]',
   /if\(globalThis\.__ccsdSidToTitle&&t\.__ccsdSid\)delete globalThis\.__ccsdSidToTitle\[t\.__ccsdSid\]/.test(iife),
   '§Z onDidDispose must clear the title entry (symmetric to the sid→panel delete at IIFE.155)',
+);
+
+// --- v0.5.9 Star-in-webview removal + tab-title ★ prefix --------------------
+// v0.5.8 injected a clickable star into the CC webview HTML via two paths
+// (Prong 1 prototype html-setter monkey-patch + Prong 2 per-panel
+// read-modify-write). CC 2.1.218 forensics proved this architecturally
+// infeasible: CC sets webview.html exactly once at panel creation (3
+// createPanel paths) and never reassigns it, so Prong 1's setter installs
+// AFTER the only write and never fires; Prong 2 forces a full webview reload
+// (VSCode replaces entire content on any .html assignment) which destroys
+// CC's React session state. v0.5.9 DELETES all of that and replaces it with
+// a "★ " prefix on the TAB TITLE (the IIFE already owns panelTab.title and
+// already reads favorites every tick). These guards pin both halves so the
+// broken injection cannot silently return and the tab-title signal cannot
+// be dropped during a refactor.
+check(
+  'IIFE.170 v0.5.9 in-webview star injection REMOVED — no injectStarHtml',
+  !/injectStarHtml/.test(iife),
+  'injectStarHtml (Prong 2 read-modify-write) forces a destructive CC session reload and was removed',
+);
+check(
+  'IIFE.171 v0.5.9 in-webview star injection REMOVED — no __ccsdStar / STAR_SRC / html setter patch',
+  !/__ccsdStar|STAR_SRC|__ccsdHtmlSetterPatched|__ccsdStarInjected|ccsdToggleFav|ccsdFavState|ccsdSidSync/.test(iife),
+  'the entire §AA injection surface (script src, prototype setter, read-modify-write, message bridge) was removed',
+);
+check(
+  'IIFE.172 v0.5.9 tab-title ★ prefix present — __want uses \\u2605 when favorited',
+  /var __want=__isFav\?\("\\u2605 "\+__base\):__base/.test(iife),
+  'the IIFE per-panel tick must prepend a ★ to panelTab.title when the sid is favorited (the in-webview star replacement)',
+);
+check(
+  'IIFE.173 v0.5.9 tab-title prefix bases on t.__ccsdTitle (logical title — no ★★ stacking)',
+  /var __base=t\.__ccsdTitle\|\|"";if\(__base\)/.test(iife),
+  'the ★ prefix must use the cached LOGICAL title (t.__ccsdTitle, set by replA/replB) as the base so repeated ticks do not stack ★★★ and the §A sid→title bridge keeps publishing the un-starred label',
+);
+check(
+  'IIFE.174 v0.5.9 tab-title write guarded by `panelTab.title !== __want` (no redundant 2×/sec IPC)',
+  /if\(t\.panelTab\.title!==__want\)t\.panelTab\.title=__want/.test(iife),
+  'only re-assign panelTab.title when the desired value differs from the current — avoids a redundant renderer write every 500ms tick when fav state is unchanged',
 );
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

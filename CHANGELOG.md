@@ -2,6 +2,41 @@
 
 本项目的显著变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.5.9] - 2026-07-23
+
+**修 3 问题：星标改用 tab 标题 ★ 前缀 + QuickPick（webview 注入经取证证明架构不可行而废弃）；收藏首次加入即显延迟复核；tab 右键菜单（editor/title/context）移除。** v0.2.7–v0.5.8 既有功能全保留；IIFE 括号配平不变。
+
+### #1 星标 — 深度分析结论：webview HTML 注入架构不可行 → 改用 tab 标题 ★ 前缀 + QuickPick
+
+**根因取证（CC 2.1.218 extension.js）**：v0.5.8 的两条注入路径都不可能安全落地——
+
+- **Prong 1（prototype 级 `Webview.html` setter monkey-patch）**：CC 主聊天 panel 在 `createWebviewPanel` 后立即 `e.webview.html=this.getHtmlForWebview(...)` **只设一次**（3 条创建路径），**会话期间永不重设**。IIFE 拼在 `update_session_state` / `rename_tab` 处理器里，这些事件在 panel 创建之后才 fire，所以 setter 安装时 CC 那唯一一次 html 写入早已完成 → setter **永远不触发**（no-op）。
+- **Prong 2（per-panel read-modify-write）**：读出原 html → 注入 `<script nonce>` → 写回。但 VSCode 对 `webview.html` 任何赋值都触发**整页重载**（replaces entire content）——摧毁 CC React app 的运行时状态（对话滚动位置、in-flight agent 响应流、输入草稿、postMessage 握手）。CC React app 从未设计成能扛过 mid-session 重载。
+- **排除 CSP 与 MutationObserver**：CC CSP `script-src 'nonce-${u}'`，`u=crypto.randomBytes(16).toString("hex")`（32 位 hex），patch 的 nonce 正则能匹配 → CSP 不阻；`style-src 'unsafe-inline'` → `<style>` 合规。星标脚本只 observe `documentElement` 自建 star，不找 CC 标题元素 → MutationObserver 不阻。
+
+**修（首选，最小改动，复用既有 tick）—— tab 标题 ★ 前缀**：删除整段 §AA 注入代码（patch.ts 的 `STAR_SCRIPT_SRC` 常量 + `starScriptLiteral` 烘焙 + `injectStarHtml` + Prong 1 prototype setter patch + Prong 2 read-modify-write + `onDidReceiveMessage` ccsdToggleFav 桥 + per-tick §AA star sync postMessage），同时减小 IIFE 体积。在 IIFE 已有的 per-panel tick 路径（§H，500ms）加 ★ 前缀：读 `readFavSet()`（既有 mtime+size 缓存 → companion `writeFavAtomic` 后下一 tick ≤500ms 感知）→ 基于缓存逻辑标题 `t.__ccsdTitle`（replA/replB 保鲜，永不带 ★）算 `__want = __isFav ? "★ " + __base : __base` → 仅当 `panelTab.title !== __want` 才赋值（稳态零冗余 IPC）。**无需 webview 注入、无 CSP、无 DOM 耦合、无重载**；VSCode `panelTab.title` API 稳定且 reload-free。基于 `t.__ccsdTitle`（非 live title）防 ★★ 叠加 + 保 §A sid→title 桥仍发布无星标题（`resolveActiveSid` 精确标题匹配不破）。
+
+**修（零 webview 耦合兜底）—— QuickPick 会话选择器**：新增 `ccStatusDot.fav.pickSession` 命令（command palette 可见，非 `when:false`）→ `favPickSession()`（companion/extension.ts）列 `globalThis.__ccsdSidToTitle` ∪ `__ccsdSidToPanel` 所有 CC 会话（★ 已收藏在前 / open 次之 / closed 末尾），★/☆ + 标题 + open/closed + state detail → 选 → toggle（已收藏则移除/未收藏则 `buildFavSessionRow` 加入，复用 favAddTab 同款 row schema）→ `writeFavAtomic`（单一写入方）→ `forceRefresh`（树立即重渲，见 #2）。新 CC 会话在 §A preamble + per-tick 桥发布后 ≤500ms 出现在选择器。
+
+### #2 延迟 — forceRefresh 调用链复核：首次加入即显
+
+**复核结论**：v0.5.6 的 `forceRefresh()`（`lastSig=""; refresh();` 绕过签名 dedup → `emitter.fire(undefined)` 同步重渲树）已挂在**每个**写入路径（`favToggleTab` / `favToggleFile` / `favAddTab` / `favRemoveTab` / `favRemove` / `favOpen` 的 lastSeenAt 更新）。本版新增的 `favPickSession` 同样在 add/remove 两路都调 `forceRefresh`——QuickPick 选完即显，不依赖 2s 轮询 tick。IIFE 侧 ★ 前缀由 500ms tick 的 `readFavSet` mtime 缓存感知（写入后 ≤1s 内显）。二者均在 2s 内。
+
+### #3 tab 右键删 — editor/title/context 移除
+
+**根因**：`editor/title/context` 的 addTab/removeTab 经取证为低效入口——VSCode 不对被右键的 tab 暴露 CC 专用 context key（custom setContext 只对 ACTIVE editor 解析，非被右键 tab），所以菜单项只能对所有非文件 tab 出现，handler 靠 `__ccsdActiveSid` guard 对非 CC tab no-op；且 v0.5.8 用星标注入设的 `data-vscode-context` 随注入一起被废弃（见 #1）。
+
+**修**：从 companion/package.json 删 `editor/title/context` menu section（addTab + removeTab）。保留 `commandPalette`（toggleTab + 新 pickSession，可见）+ `explorer/context`（addTab/removeTab）+ `webview/context`（addTab/removeTab，但因 #1 注入已废，当前休眠——保留作前向兼容，描述已更新说明现状，指向 pickSession）。删除已变 dead 的 config `ccStatusDot.fav.includeInTabContextMenu`（其唯一 gating 对象 editor/title/context 已移除）+ 8 语言 NLS 描述。测试断言反向锁（FAV.31/31a/31b/38e 改为断言「已移除」防回归）。
+
+### Changed — 5-way version pin
+
+- package.json / companion/package.json: `0.5.8` → `0.5.9`。patch.ts `INJECT_VERSION`: `v0.5.8` → `v0.5.9`。companion `MIN_PATCHER_VERSION` + `injectVersion()` fallback 同步。test-iife.mjs IIFE.21c stamp 更新（v0.5.8 → v0.5.9）。
+
+### Test — 新增回归锁
+
+- test-iife.mjs IIFE.170-174：星标注入代码全删除（无 `injectStarHtml`/`__ccsdStar`/`STAR_SRC`/`__ccsdHtmlSetterPatched`/`__ccsdStarInjected`/`ccsdToggleFav`/`ccsdFavState`/`ccsdSidSync`）+ tab 标题 ★ 前缀逻辑在位（基于 `t.__ccsdTitle` 防 ★★ 叠加 + `panelTab.title !== __want` 守卫防冗余 IPC）。
+- test-favorites.mjs FAV.31/31a/31b/38e 反向锁（editor/title/context + includeInTabContextMenu 已移除）+ FAV.39a-d 新锁（pickSession 命令声明 / commandPalette 可见 / handler 注册 / 读 `__ccsdSidToTitle` 列全部 CC 会话）。
+
 ## [0.5.8] - 2026-07-23
 
 **在 CC 聊天 webview 内加可点击星标 + 右键 webview/context 收藏菜单。** 两方案覆盖活跃 tab 收藏：方案 C（webview 内星标，最快）+ 方案 B（右键聊天内容，备选）。v0.2.7–v0.5.7 既有功能全保留；IIFE 括号配平不变。

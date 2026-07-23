@@ -1011,6 +1011,64 @@ check(
   'no stray clickable star when there is no session to act on (toggleTab would just toast anyway)',
 );
 
+// ===========================================================================
+// v0.5.11: one-click session resume. Pre-0.5.11 only OPEN session nodes
+// bound the open command, so clicking a CLOSED (favorited, not currently
+// open) session was a DEAD CLICK — no command fired at all. Now closed
+// nodes bind it too, and favOpen routes them through CC's own
+// claude-vscode.editor.open(sid) → createPanel(sid), which (a) reveals an
+// already-open session via CC's sessionPanels map, or (b) starts the CLI
+// with --session-id=<sid> to load that session's transcript = resume. This
+// closes the v0.4.0 "closed-session resume is unreachable" gap (CC 2.1.x
+// added the sid-aware createPanel path).
+// ===========================================================================
+check(
+  'FAV.41a v0.5.11 closed session nodes ALSO bind ccStatusDot.fav.open (was a dead click pre-0.5.11)',
+  /title:\s*isOpen\s*\?\s*"Focus CC Session"\s*:\s*"Resume CC Session"/.test(companionSrc),
+  'the command binding must NOT be gated on isOpen — closed nodes need it to trigger resume',
+);
+check(
+  'FAV.41b v0.5.11 favOpen resumes a closed session via claude-vscode.editor.open(sid)',
+  /claude-vscode\.editor\.open/.test(companionSrc) &&
+    /node\.kind\s*===\s*"sessionClosed"[\s\S]{0,500}?claude-vscode\.editor\.open/.test(companionSrc),
+  'CC 2.1.x createPanel(sid) resumes the session into a panel (closes the v0.4.0 "unreachable" gap)',
+);
+check(
+  'FAV.41c v0.5.11 closed-session tooltip says "click to resume" (not the old right-click hint)',
+  /"click to resume session"/.test(companionSrc),
+  'tooltip must reflect the new one-click resume, not the stale copy-cmd hint',
+);
+check(
+  'FAV.41d v0.5.11 open-session fallback chain also tries claude-vscode.editor.open (bridge-miss recovery)',
+  /ccStatusDot\.fav\.focusSession[\s\S]{0,700}?claude-vscode\.editor\.open/.test(companionSrc),
+  "if the IIFE bridge missed the panel, CC's own editor.open(sid) focuses it via CC's sessionPanels map",
+);
+
+// ===========================================================================
+// v0.5.11: ★ button tab-switch latency fix. The star shared the tree's 2s
+// tick (plus onDidChangeTabs/Groups, which are unreliable for webview-panel
+// tab activation — they often don't fire on a plain active-tab click), so a
+// tab switch could lag ~2s. Now a dedicated 500ms poll drives
+// refreshFavStatusBar, independent of the 2s tree tick.
+// ===========================================================================
+check(
+  'FAV.42a v0.5.11 dedicated fast poll constant FAV_BAR_POLL_MS = 500',
+  /const\s+FAV_BAR_POLL_MS\s*=\s*500/.test(companionSrc),
+  'the ★ button needs a faster cadence than the 2s tree tick to follow tab switches promptly',
+);
+check(
+  'FAV.42b v0.5.11 favBarWatcher polls refreshFavStatusBar at FAV_BAR_POLL_MS (independent of 2s tree tick)',
+  /favBarWatcher\s*=\s*setInterval\([\s\S]{0,300}?refreshFavStatusBar\(\)[\s\S]{0,200}?FAV_BAR_POLL_MS/.test(
+    companionSrc,
+  ),
+  'onDidChangeTabs is unreliable for webview-panel activation — a 500ms poll is the dependable backstop',
+);
+check(
+  'FAV.42c v0.5.11 deactivate clears favBarWatcher (no leak across reload)',
+  /if\s*\(\s*favBarWatcher\s*\)\s*\{[\s\S]{0,90}?clearInterval\(\s*favBarWatcher\s*\)/.test(companionSrc),
+  'the fast poller must be cleared on deactivation alongside favoritesWatcher',
+);
+
 // cleanup
 try {
   fs.rmSync(tmpDir, { recursive: true, force: true });

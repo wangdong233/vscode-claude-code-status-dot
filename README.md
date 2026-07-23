@@ -211,16 +211,16 @@ VSCode 资源管理器侧边栏新增 **CC Favorites** 视图——把常用文�
 - **加 CC 会话**（三种入口）：
   - 命令面板搜 **CC Favorites: Star/Unstar Current CC Tab**——把当前活动会话加入/移出 Favorites。
   - 命令面板搜 **CC Favorites: Pick CC Session to Star/Unstar**（v0.5.9+）——QuickPick 列出所有打开的 CC 会话（已收藏的 ★ 在前），选一个即 toggle，**不依赖当前活动 tab**，是会话内收藏的可靠入口。
-  - **状态栏 ★ 按钮（v0.5.10+，最顺手）**——右下角状态栏（token 计数旁）一个 ★/☆ 按钮，**一键**收藏/取消当前活动 CC 会话：已收藏显实心金星 ★（金色，对齐金线），未收藏显空心 ☆。永远作用于当前活动会话（绕开 webview 只写一次 / 右键认错 tab 的平台限制），点击即翻；无活动 CC 会话时自动隐藏。
+  - **状态栏 ★ 按钮（v0.5.10+，最顺手）**——右下角状态栏（token 计数旁）一个 ★/☆ 按钮，**一键**收藏/取消当前活动 CC 会话：已收藏显实心金星 ★（金色，对齐金线），未收藏显空心 ☆。永远作用于当前活动会话（绕开 webview 只写一次 / 右键认错 tab 的平台限制），点击即翻（切 tab 后 ≤500ms 跟上状态，v0.5.11）；无活动 CC 会话时自动隐藏。
   - 在 Explorer 的 **Open Editors** 区右键 CC tab → **加入/退出 CC 收藏**（动态文案，设置项 `ccStatusDot.fav.includeInExplorerContextMenu`）。
 - **★ 标题前缀（v0.5.9+）**：收藏的 CC 会话，tab **标题**前自动加 `★ `（5 态点色/形不变，金线标记仍在）。IIFE 每 500ms tick 从 `favorites.json` 同步（mtime 缓存 → 收藏写入后 ≤1s 内显）。v0.5.8 的"webview 内可点击星标"经取证证明架构不可行（CC 只在创建 panel 时设一次 webview.html，任何重设触发整页重载摧毁会话）已废弃，标题前缀是其 reload-free 替代。
-- **跳转**：点文件节点 → 跳到该文件（带行号定位）；点已开会话节点 → 焦点切到那个 CC webview panel；右键已闭会话 → **Copy 'claude -r <sid>'** 复制 resume 命令到剪贴板。
+- **跳转**：点文件节点 → 跳到该文件（带行号定位）；**点会话节点 → 已开的切过去，未开的恢复打开（resume 到新 panel，v0.5.11+）**；右键已闭会话 → **Copy 'claude -r <sid>'** 复制 resume 命令到剪贴板（终端兜底）。
 - **浏览**：命令面板 **CC Favorites: Browse** 用 QuickPick 键盘导航（打开已收藏项）。
 - **金线标记（v0.5.0+）**：收藏的 CC 会话，tab icon 底部加一条细金线（5 态点色/形完全不变），IIFE 500ms tick 自动从 `favorites.json` 同步。
 
 收藏存在 `~/.claude/cc-tab-status/favorites.json`（atomic 写，跨重启保留）。完整设计（4 路调研 + 5 个不明确点的确定答案 + 推迟到 v0.5 的风险部分）见 [`docs/FAVORITES-DESIGN.md`](docs/FAVORITES-DESIGN.md)。
 
-> v0.4 已闭会话重开为 webview panel 是 CC 上游架构性限制（CC 无公开 sid-arg 命令、viewType 私有不可冒充、CLI `claude -r <sid>` 开终端非 panel）——所以已闭会话只提供"复制 resume 命令到剪贴板"降级路径。等 Anthropic 上线公开 `claude-vscode.session.open` 命令后本扩展可在 24h 内接入。
+> v0.5.11 起已闭会话点击直接 resume 到 panel——走 CC 自己的 `claude-vscode.editor.open(sid)` → `createPanel(sid)`，启动 CLI 时带 `--session-id=<sid>` 加载该会话历史。（v0.4 时这还是上游架构性限制——CC 无 sid-resume 入口，只提供"复制 resume 命令"降级；CC 2.1.x 的 `createPanel` 闭合了这个缺口。右键 Copy cmd 保留为终端兜底。）
 
 ### ⚙️ workflow 跑期间保持 running
 

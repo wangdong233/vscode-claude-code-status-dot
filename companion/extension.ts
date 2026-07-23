@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.10";
+const MIN_PATCHER_VERSION = "0.5.11";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.10";
+    return effectiveConfig?.injectVersion ?? "v0.5.11";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -767,6 +767,17 @@ const FAV_SCHEMA_VERSION = 1;
  *  and some macOS configs; poll a tiny file every 2s (mirrors the
  *  startRepatchWatcher cadence philosophy). */
 const FAV_POLL_MS = 2000;
+/** v0.5.11: poll cadence for the status-bar ★ button (refreshFavStatusBar).
+ *  Faster than the tree's FAV_POLL_MS because the star must follow a tab
+ *  switch near-instantly. onDidChangeTabs / onDidChangeTabGroups are
+ *  unreliable for webview-panel tab activation (they frequently do NOT
+ *  fire on a plain active-tab click), so this poll is the dependable
+ *  backstop. Cheap: refreshFavStatusBar dedupes on a (sid|favorited)
+ *  signature, so the steady-state tick is a no-op (one globalThis read +
+ *  one small readFavDoc, signature-equal → bail before any .text/.color
+ *  write). Aligned to the IIFE's own 500ms per-panel tick so the star
+ *  picks up a new active sid within one tick of it being published. */
+const FAV_BAR_POLL_MS = 500;
 
 interface FavSession {
     sid: string;
@@ -1256,18 +1267,22 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
             s.model ? `model: ${s.model}` : "",
             `state: ${s.state || "(unknown)"}`,
             `added: ${new Date(s.addedAt).toLocaleString()}`,
-            isOpen ? "click to focus panel" : "closed — right-click for resume cmd",
+            isOpen ? "click to focus panel" : "click to resume session",
         ]
             .filter(Boolean)
             .join("\n");
         item.tooltip = tip;
-        if (isOpen) {
-            item.command = {
-                command: "ccStatusDot.fav.open",
-                title: "Focus CC Session",
-                arguments: [element],
-            };
-        }
+        // v0.5.11: BOTH open and closed session nodes bind the open command.
+        // Pre-0.5.11 only open nodes bound it, so clicking a closed (favorited
+        // but not currently open) session was a DEAD CLICK — no command fired
+        // at all (the favOpen "copy claude -r" hint below was unreachable).
+        // favOpen now routes closed sessions through CC's
+        // claude-vscode.editor.open(sid) to resume them into a panel.
+        item.command = {
+            command: "ccStatusDot.fav.open",
+            title: isOpen ? "Focus CC Session" : "Resume CC Session",
+            arguments: [element],
+        };
         return item;
     }
 
@@ -1325,6 +1340,11 @@ let favStatusBar: vscode.StatusBarItem | null = null;
  *  .text/.color (which flickers the item) when neither the active sid nor
  *  its favorited state changed. */
 let lastFavBarSig = "";
+/** v0.5.11: fast poll handle for the status-bar ★ button (FAV_BAR_POLL_MS).
+ *  Independent of favoritesWatcher (2s, tree) so the star tracks tab switches
+ *  at 500ms without speeding up the heavier tree refresh. .unref()'d + cleared
+ *  in deactivate(). */
+let favBarWatcher: NodeJS.Timeout | null = null;
 
 /** Toggle a file in/out of favorites. Adds with label=basename + optional
  *  line cursor; removes if already present (same fsPath). Idempotent. */
@@ -1779,10 +1799,23 @@ async function favOpen(node: FavNode): Promise<void> {
         return;
     }
     if (node.kind === "sessionClosed") {
-        void vscode.window.setStatusBarMessage(
-            `Session ${node.session.sid.slice(0, 8)} is not open in this window. Right-click → Copy 'claude -r <sid>' to resume in a terminal.`,
-            6000,
-        );
+        const closedSid = node.session.sid;
+        // v0.5.11: one-click resume into a CC panel. CC 2.1.x's
+        // `claude-vscode.editor.open(sid)` routes through createPanel(sid),
+        // which starts the CC CLI with `--session-id=<sid>` so the CLI loads
+        // that session's transcript = resume. (v0.4.0 degraded to a "copy
+        // claude -r" terminal hint because CC then had NO public sid-resume
+        // command; 2.1.x's createPanel closes that gap — see patch.ts bridge
+        // doc + CC extension.js createPanel.) The right-click Copy cmd
+        // remains as a terminal fallback for older CC or if this command
+        // is unavailable.
+        try {
+            await vscode.commands.executeCommand("claude-vscode.editor.open", closedSid, undefined);
+        } catch (e) {
+            void vscode.window.showErrorMessage(
+                `cc-status-dot: could not resume session ${closedSid.slice(0, 8)} (${(e as Error).message}). Right-click → Copy 'claude -r' for a terminal fallback.`,
+            );
+        }
         return;
     }
     // sessionOpen — reveal the panel.
@@ -1823,6 +1856,17 @@ async function favOpen(node: FavNode): Promise<void> {
         if (ok === true) return;
     } catch {
         /* command not registered yet — IIFE hasn't run; fall through */
+    }
+    // v0.5.11: final fallback — CC's own claude-vscode.editor.open(sid).
+    // createPanel reveals an already-open session via CC's sessionPanels map,
+    // so this works even when our IIFE bridge hasn't published the panel yet
+    // (patch still loading) or across an EH boundary. Same command the closed-
+    // session branch uses to resume; for an open session it just focuses.
+    try {
+        await vscode.commands.executeCommand("claude-vscode.editor.open", sid, undefined);
+        return;
+    } catch {
+        /* CC command unavailable — fall through to the hint */
     }
     void vscode.window.setStatusBarMessage(
         `cc-status-dot: session ${sid.slice(0, 8)} panel not available (CC patch may still be loading). Try again in a moment.`,
@@ -2161,17 +2205,33 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
     favoritesWatcher = setInterval(() => {
         try {
             favoritesProvider?.refresh();
-            // v0.5.10: also refresh the status-bar ★ button here — a tab
-            // switch rewrites globalThis.__ccsdActiveSid (IIFE panel-focus
-            // hook) WITHOUT touching disk, so without this the star would
-            // lag a tab switch until the next favorites.json write.
-            refreshFavStatusBar();
         } catch {
             /* best-effort — next tick retries */
         }
     }, FAV_POLL_MS);
     if (typeof (favoritesWatcher as NodeJS.Timeout).unref === "function") {
         (favoritesWatcher as NodeJS.Timeout).unref();
+    }
+
+    // v0.5.11: fast poll for the ★ button (FAV_BAR_POLL_MS=500). Independent
+    // of favoritesWatcher (2s, tree) so the star tracks tab switches at 500ms
+    // without speeding up the heavier tree refresh. onDidChangeTabs /
+    // onDidChangeTabGroups (registered above) are unreliable for webview-panel
+    // activation — they frequently do NOT fire on a plain active-tab click —
+    // so this poll is the dependable backstop; the tab events still fire FIRST
+    // when they do fire, giving sub-tick latency in the common case. Pre-0.5.11
+    // the star shared the 2s tree tick, so a tab switch could lag ~2s.
+    // refreshFavStatusBar dedupes on a (sid|favorited) signature → steady-state
+    // tick is a no-op.
+    favBarWatcher = setInterval(() => {
+        try {
+            refreshFavStatusBar();
+        } catch {
+            /* best-effort — next tick retries */
+        }
+    }, FAV_BAR_POLL_MS);
+    if (typeof (favBarWatcher as NodeJS.Timeout).unref === "function") {
+        (favBarWatcher as NodeJS.Timeout).unref();
     }
 
     // v0.4.0 round-3 (MEDIUM setContext spam fix): publish the initial empty/
@@ -2284,5 +2344,10 @@ export function deactivate(): void {
     if (favoritesWatcher) {
         clearInterval(favoritesWatcher);
         favoritesWatcher = null;
+    }
+    // v0.5.11: clear the fast ★-button poller.
+    if (favBarWatcher) {
+        clearInterval(favBarWatcher);
+        favBarWatcher = null;
     }
 }

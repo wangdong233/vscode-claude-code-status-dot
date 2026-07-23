@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.9";
+const MIN_PATCHER_VERSION = "0.5.10";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.9";
+    return effectiveConfig?.injectVersion ?? "v0.5.10";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1194,6 +1194,9 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
         this.lastSig = "";
         this.lastActiveSidForCtx = "";
         this.refresh();
+        // v0.5.10: keep the status-bar ★ button in lockstep with a fresh
+        // write — the star must flip the instant the user toggles.
+        refreshFavStatusBar();
     }
 
     getTreeItem(element: FavNode): vscode.TreeItem {
@@ -1307,6 +1310,21 @@ let favoritesProvider: FavoritesProvider | null = null;
  *  the registration site for why fs.watchFile alone is insufficient). Cleared
  *  in deactivate(). */
 let favoritesWatcher: NodeJS.Timeout | null = null;
+
+/** v0.5.10: Status bar ★ button — the one-click "star this session" entry
+ *  point. Lives in the VSCode status bar (NOT inside the CC webview, which is
+ *  write-once and cannot be injected without a destructive full-page reload —
+ *  see the v0.5.9 star-injection ruling). The button's `command` reuses the
+ *  existing `ccStatusDot.fav.toggleTab` handler, so sid resolution + atomic
+ *  write + tree refresh are shared verbatim with the command-palette / right-
+ *  click paths; only the visual entry differs. Disposed automatically via
+ *  ctx.subscriptions. */
+let favStatusBar: vscode.StatusBarItem | null = null;
+/** v0.5.10: dedupe token for refreshFavStatusBar() — mirrors the tree's
+ *  signature dedupe so the steady-state 2s tick does NOT re-assign
+ *  .text/.color (which flickers the item) when neither the active sid nor
+ *  its favorited state changed. */
+let lastFavBarSig = "";
 
 /** Toggle a file in/out of favorites. Adds with label=basename + optional
  *  line cursor; removes if already present (same fsPath). Idempotent. */
@@ -1629,6 +1647,50 @@ function favToggleTab(resourceUri?: unknown): void {
         );
     }
     favoritesProvider?.forceRefresh();
+}
+
+/** v0.5.10: Refresh the status-bar ★ button to reflect the CURRENT active
+ *  session's favorited state. Called from (a) forceRefresh (right after a
+ *  toggle writes — so the star flips to filled/empty the instant the user
+ *  clicks), (b) the 2s favoritesWatcher tick (catches active-sid changes
+ *  from tab switches that never touch disk), (c) tabGroups tab/group
+ *  activation events (immediate on tab switch), and (d) once at registration.
+ *  Dedupes on a `(sid|favorited)` signature so the steady-state tick is a
+ *  no-op — re-assigning .text/.color every 2s would flicker the item.
+ *
+ *  Hides the item entirely when there is no active CC session — avoids a
+ *  stray clickable star with no session to act on (and the toggleTab handler
+ *  would just toast "no active session" anyway).
+ *
+ *  Why this is NOT the same as the infeasible v0.5.8 webview star: the
+ *  status bar is VSCode chrome the companion fully owns — no html write-once
+ *  constraint, no React state to destroy, no #195960 right-click-identity
+ *  limit. It always acts on the authoritative active sid from
+ *  resolveActiveSid(), so it can never mis-target a session. */
+function refreshFavStatusBar(): void {
+    if (!favStatusBar) return;
+    const sid = resolveActiveSid();
+    if (!sid) {
+        if (lastFavBarSig !== "") {
+            favStatusBar.hide();
+            lastFavBarSig = "";
+        }
+        return;
+    }
+    const doc = readFavDoc();
+    const favorited = !!doc && doc.sessions.some((s) => s.sid === sid);
+    const sig = sid + "|" + (favorited ? "1" : "0");
+    if (sig === lastFavBarSig) return;
+    lastFavBarSig = sig;
+    // $(star-full) = solid (favorited → gold #F5A623, aligned with the -fav
+    // SVG gold underline), $(star-empty) = outline (not favorited → default
+    // theme color). .color tints the codicon glyph.
+    favStatusBar.text = favorited ? "$(star-full)" : "$(star-empty)";
+    favStatusBar.color = favorited ? "#F5A623" : undefined;
+    favStatusBar.tooltip = favorited
+        ? `CC Favorites — favorited ${sid.slice(0, 8)}. Click to unstar.`
+        : `CC Favorites — star this session (${sid.slice(0, 8)}).`;
+    favStatusBar.show();
 }
 
 /** v0.5.6 (Bug 4 dynamic add/remove text): explicit "Add" variant of
@@ -2040,6 +2102,43 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
         }),
     );
 
+    // v0.5.10: Status bar ★ button — one-click "star current session" entry.
+    // Reuses the existing toggleTab command for the actual toggle (sid
+    // resolution + atomic write + forceRefresh all shared), so this block
+    // owns ONLY the item lifecycle + icon-state refresh. Right-aligned,
+    // priority 100 places it to the LEFT of the patcher's token-SBI items
+    // (priority -9995/-9996, rightmost), so the star sits just inside the
+    // status bar's right edge, next to the token counter. Hidden until
+    // refreshFavStatusBar() finds an active CC session.
+    favStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    favStatusBar.command = "ccStatusDot.fav.toggleTab";
+    ctx.subscriptions.push(favStatusBar);
+    refreshFavStatusBar(); // initial paint
+
+    // v0.5.10: refresh the star the instant the active tab changes. The IIFE
+    // rewrites globalThis.__ccsdActiveSid on CC panel focus (no disk write),
+    // so without these listeners the star would lag a tab switch by up to the
+    // 2s polling tick. onDidChangeTabs fires when a tab's active flag flips
+    // (same-group tab click); onDidChangeTabGroups fires on split-pane focus
+    // moves. Best-effort try/catch mirrors the watcher tick — a stray throw
+    // here must not spam.
+    ctx.subscriptions.push(
+        vscode.window.tabGroups.onDidChangeTabs(() => {
+            try {
+                refreshFavStatusBar();
+            } catch {
+                /* best-effort — next watcher tick retries */
+            }
+        }),
+        vscode.window.tabGroups.onDidChangeTabGroups(() => {
+            try {
+                refreshFavStatusBar();
+            } catch {
+                /* best-effort */
+            }
+        }),
+    );
+
     // setInterval polling — refresh the tree every FAV_POLL_MS so it picks up
     // BOTH (a) external favorites.json mutations (hand-edit, multi-window
     // concurrent write, this window's own write — covered by re-reading the
@@ -2062,6 +2161,11 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
     favoritesWatcher = setInterval(() => {
         try {
             favoritesProvider?.refresh();
+            // v0.5.10: also refresh the status-bar ★ button here — a tab
+            // switch rewrites globalThis.__ccsdActiveSid (IIFE panel-focus
+            // hook) WITHOUT touching disk, so without this the star would
+            // lag a tab switch until the next favorites.json write.
+            refreshFavStatusBar();
         } catch {
             /* best-effort — next tick retries */
         }

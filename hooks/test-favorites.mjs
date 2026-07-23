@@ -949,6 +949,68 @@ check(
   'the QuickPick must enumerate every open CC session via the IIFE bridge so the user can star/unstar any one without guessing sids',
 );
 
+// ===========================================================================
+// v0.5.10: Status bar ★ button — the one-click "star current session" entry.
+// Pure static-contract checks (the runtime needs a live EH, but the wiring
+// is fully assertable from source). These lock in:
+//   (a) a status bar item IS created + bound to the toggleTab command
+//       (so the click reuses the proven toggle path, not a parallel one),
+//   (b) the icon reflects favorited state via $(star-full)/$(star-empty),
+//   (c) refresh is wired into forceRefresh + the 2s tick + tab activation,
+//   (d) it acts on resolveActiveSid (the authoritative active session) —
+//       the whole point of pivoting off the infeasible in-webview star.
+// ===========================================================================
+check(
+  'FAV.40a v0.5.10 creates a Right-aligned status bar item',
+  /createStatusBarItem\(\s*vscode\.StatusBarAlignment\.Right/.test(companionSrc),
+  'the star button must live in the status bar (VSCode chrome the companion owns — NOT the write-once CC webview)',
+);
+check(
+  'FAV.40b v0.5.10 status bar command reuses ccStatusDot.fav.toggleTab',
+  /favStatusBar\.command\s*=\s*["']ccStatusDot\.fav\.toggleTab["']/.test(companionSrc),
+  'the click must reuse the existing toggle handler (sid resolution + atomic write + forceRefresh), not duplicate it',
+);
+check(
+  'FAV.40c v0.5.10 refreshFavStatusBar defined',
+  /function\s+refreshFavStatusBar\s*\(\s*\)/.test(companionSrc),
+  'a single refresh function owns the icon-state transition',
+);
+check(
+  'FAV.40d v0.5.10 icon reflects favorited state via codicon star-full / star-empty',
+  /\$\(star-full\)/.test(companionSrc) && /\$\(star-empty\)/.test(companionSrc),
+  'solid star (favorited) vs outline star (not favorited) — the visual signal',
+);
+check(
+  'FAV.40e v0.5.10 favorited star uses gold #F5A623 (aligned with -fav SVG underline)',
+  /#F5A623/.test(companionSrc),
+  'the filled star tint must match the existing gold-line favorite marker for visual consistency',
+);
+check(
+  'FAV.40f v0.5.10 refreshFavStatusBar resolves the ACTIVE sid (acts on current session)',
+  /refreshFavStatusBar[\s\S]{0,200}?resolveActiveSid\(\)/.test(companionSrc),
+  'the button must target the authoritative active session — the reason it supersedes the #195960-limited tab right-click',
+);
+check(
+  'FAV.40g v0.5.10 forceRefresh also refreshes the status bar (instant flip on click)',
+  /forceRefresh\(\)\s*:\s*void\s*\{[\s\S]*?refreshFavStatusBar\(\)/.test(companionSrc),
+  'the star must flip the instant the user toggles — forceRefresh is the post-write hook',
+);
+check(
+  'FAV.40h v0.5.10 2s watcher tick also refreshes the status bar (catches tab-switch active-sid change)',
+  /favoritesWatcher\s*=\s*setInterval\([\s\S]*?refreshFavStatusBar\(\)/.test(companionSrc),
+  'a tab switch rewrites globalThis.__ccsdActiveSid without touching disk — the tick must catch it',
+);
+check(
+  'FAV.40i v0.5.10 tab activation listeners wired (immediate refresh on tab switch)',
+  /tabGroups\.onDidChangeTabs\(/.test(companionSrc) && /tabGroups\.onDidChangeTabGroups\(/.test(companionSrc),
+  'the star should refresh the instant the active tab changes, not lag up to 2s',
+);
+check(
+  'FAV.40j v0.5.10 status bar hidden when no active CC session',
+  /refreshFavStatusBar[\s\S]{0,400}?\.hide\(\)/.test(companionSrc),
+  'no stray clickable star when there is no session to act on (toggleTab would just toast anyway)',
+);
+
 // cleanup
 try {
   fs.rmSync(tmpDir, { recursive: true, force: true });

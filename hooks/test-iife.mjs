@@ -370,11 +370,15 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-// v0.5.6: stamp bumped for Favorites Bug 1/2/3/4 fixes (forceRefresh + dynamic
+// v0.5.6: stamp bumped for Favorites Bug 1/2/4 fixes (forceRefresh + dynamic
 // Add/Remove menu labels via setContext('ccStatusDot.fav.currentTabFavorited');
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
-check('IIFE.21c banner carries v0.5.9 stamp', /\/\*cc-status-dot-injected:v0.5.9:/.test(iife));
+// v0.5.10: stamp bumped again — IIFE body still unchanged (the status-bar ★
+// button is companion-only chrome, no IIFE touch), but the 5-way version pin
+// requires INJECT_VERSION to track package.json, so the banner stamp moves
+// with it and a one-time harmless re-patch + reload lands for upgraders.
+check('IIFE.21c banner carries v0.5.10 stamp', /\/\*cc-status-dot-injected:v0.5.10:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));

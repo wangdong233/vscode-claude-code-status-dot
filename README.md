@@ -211,6 +211,7 @@ VSCode 资源管理器侧边栏新增 **CC Favorites** 视图——把常用文�
 - **加 CC 会话**（三种入口）：
   - 命令面板搜 **CC Favorites: Star/Unstar Current CC Tab**——把当前活动会话加入/移出 Favorites。
   - 命令面板搜 **CC Favorites: Pick CC Session to Star/Unstar**（v0.5.9+）——QuickPick 列出所有打开的 CC 会话（已收藏的 ★ 在前），选一个即 toggle，**不依赖当前活动 tab**，是会话内收藏的可靠入口。
+  - **状态栏 ★ 按钮（v0.5.10+，最顺手）**——右下角状态栏（token 计数旁）一个 ★/☆ 按钮，**一键**收藏/取消当前活动 CC 会话：已收藏显实心金星 ★（金色，对齐金线），未收藏显空心 ☆。永远作用于当前活动会话（绕开 webview 只写一次 / 右键认错 tab 的平台限制），点击即翻；无活动 CC 会话时自动隐藏。
   - 在 Explorer 的 **Open Editors** 区右键 CC tab → **加入/退出 CC 收藏**（动态文案，设置项 `ccStatusDot.fav.includeInExplorerContextMenu`）。
 - **★ 标题前缀（v0.5.9+）**：收藏的 CC 会话，tab **标题**前自动加 `★ `（5 态点色/形不变，金线标记仍在）。IIFE 每 500ms tick 从 `favorites.json` 同步（mtime 缓存 → 收藏写入后 ≤1s 内显）。v0.5.8 的"webview 内可点击星标"经取证证明架构不可行（CC 只在创建 panel 时设一次 webview.html，任何重设触发整页重载摧毁会话）已废弃，标题前缀是其 reload-free 替代。
 - **跳转**：点文件节点 → 跳到该文件（带行号定位）；点已开会话节点 → 焦点切到那个 CC webview panel；右键已闭会话 → **Copy 'claude -r <sid>'** 复制 resume 命令到剪贴板。

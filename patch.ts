@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.4";
+const INJECT_VERSION = "v0.5.5";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -2190,6 +2190,7 @@ function buildIIFE(resDir: string): string {
         // Hook is NOT the writer (职责分离 — hook owns jsonl+offset, IIFE
         // owns rate); tmp+rename atomic mirrors cc-status.js writeJsonAtomic.
         `var RATE_BUF_CAP=16;var RATE_SPARK_BARS=8;var RATE_WINDOW_MS=5000;var RATE_FLUSH_MS=2000;var RATE_SPARK_CHARS="▁▂▃▄▅▆▇█";if(!globalThis.__ccsdRateBuf)globalThis.__ccsdRateBuf=Object.create(null);if(!globalThis.__ccsdRatePrev)globalThis.__ccsdRatePrev=Object.create(null);if(!globalThis.__ccsdRateMax)globalThis.__ccsdRateMax=Object.create(null);if(!globalThis.__ccsdRateFlush)globalThis.__ccsdRateFlush=Object.create(null);if(!globalThis.__ccsdRateLoaded)globalThis.__ccsdRateLoaded=Object.create(null);function __ccsdRateFromBuf(arr,nowMs){try{if(!arr||arr.length===0)return 0;var cutoff=nowMs-RATE_WINDOW_MS;var sumD=0,oldestTs=nowMs;for(var i=arr.length-1;i>=0;i--){if(arr[i].ts<cutoff)break;sumD+=arr[i].d;if(arr[i].ts<oldestTs)oldestTs=arr[i].ts;}var windowS=(nowMs-oldestTs)/1000;return windowS>0.1?sumD/windowS:0;}catch(_){return 0;}}function __ccsdRateSample(sid,realNow,totalNow,isRunning,nowMs){try{if(!sid)return null;var buf=globalThis.__ccsdRateBuf,prev=globalThis.__ccsdRatePrev,mx=globalThis.__ccsdRateMax;if(!buf[sid]){buf[sid]=[];}if(typeof prev[sid]!=="number")prev[sid]=-1;if(typeof mx[sid]!=="number")mx[sid]=0;var delta=0;if(isRunning&&prev[sid]>=0&&realNow>=prev[sid]){delta=realNow-prev[sid];}prev[sid]=isRunning?realNow:-1;var arr=buf[sid];arr.push({ts:nowMs,d:delta,total:totalNow});while(arr.length>RATE_BUF_CAP)arr.shift();if(delta>mx[sid]){mx[sid]=delta;}else{mx[sid]=mx[sid]*0.85+delta*0.15;}if(mx[sid]<1)mx[sid]=1;var rate=__ccsdRateFromBuf(arr,nowMs);return{rate:rate,max:mx[sid],buf:arr,delta:delta};}catch(_){return null;}}function __ccsdRateSpark(arr,peak){try{if(!arr||arr.length===0||peak<1)return"";var n=arr.length,start=Math.max(0,n-RATE_SPARK_BARS);var out="";for(var i=start;i<n;i++){var v=arr[i].d/peak;var idx=Math.max(0,Math.min(7,Math.floor(v*8)));out+=RATE_SPARK_CHARS.charAt(idx);}while(out.length<RATE_SPARK_BARS&&out.length>0){out=RATE_SPARK_CHARS.charAt(0)+out;}return out;}catch(_){return "";}}function __ccsdRateFlush(sid,arr,mx,nowMs){try{if(!sid||!arr||arr.length===0)return;var fm=globalThis.__ccsdRateFlush;if(!fm[sid])fm[sid]=0;if(nowMs-fm[sid]<RATE_FLUSH_MS)return;fm[sid]=nowMs;var payload={v:1,sid:sid,last_ts:nowMs,recent_max:mx,samples:arr.slice(-600).map(function(s){return{t:s.ts,d:s.d,total:s.total};})};var tmpPath=pth.join(DIR,sid+".rate.tmp");var finalPath=pth.join(DIR,sid+".rate");try{fs.writeFileSync(tmpPath,JSON.stringify(payload));try{fs.renameSync(tmpPath,finalPath);}catch(_){try{fs.unlinkSync(tmpPath);}catch(__){}}}catch(_){}}catch(_){}}function __ccsdRateLoad(sid){try{if(!sid)return null;var ld=globalThis.__ccsdRateLoaded;if(ld[sid])return null;ld[sid]=true;var p=pth.join(DIR,sid+".rate");var raw=fs.readFileSync(p,"utf8");var obj=JSON.parse(raw);if(!obj||obj.sid!==sid||!Array.isArray(obj.samples))return null;var buf=globalThis.__ccsdRateBuf,mx=globalThis.__ccsdRateMax,prev=globalThis.__ccsdRatePrev;buf[sid]=obj.samples.slice(-RATE_BUF_CAP).map(function(s){return{ts:s.t,d:s.d,total:s.total};});mx[sid]=Number(obj.recent_max)||1;if(mx[sid]<1)mx[sid]=1;prev[sid]=-1;return obj;}catch(_){return null;}}`,
+        ,
         // === §F Per-tick 4-light aggregation (the __ccsdSbiTimer body) ===
         // v0.5.2 (#4): shared transcript-activity gate used by BOTH the §F
         // aggregate decay and the §H per-tab decay. Keys the running→idle
@@ -2212,8 +2213,7 @@ function buildIIFE(resDir: string): string {
         // the per-tick cost is bounded by N running sessions past the
         // threshold. Any miss (no transcript_path, no cwd, jsonl absent,
         // statSync throw) → returns false → safe decay direction.
-        `function __ccsdTranscriptFresh(j,sid,staleMs){try{if(!j||!sid)return false;var jsonlPath=null;if(typeof j.transcript_path==="string"&&j.transcript_path){jsonlPath=j.transcript_path;}else if(typeof j.cwd==="string"&&j.cwd){var escaped=j.cwd.replace(/[^a-zA-Z0-9._-]/g,"-");jsonlPath=pth.join(os.homedir(),".claude","projects",escaped,sid+".jsonl");}if(!jsonlPath)return false;var stt=fs.statSync(jsonlPath);if(!stt||!stt.isFile())return false;return(Date.now()-stt.mtimeMs)<staleMs;}catch(_){return false;}}`,
-        `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
+        /*v0.5.5 cleanup: __ccsdTranscriptFresh removed (dead code — v0.5.4 removed the running→idle decay which was its only caller; proposal 2 state-machine makes it unnecessary).*/ `try{if(!globalThis.__ccsdSbiTimer){globalThis.__ccsdSbiTimer=setInterval(function(){`,
         `try{`,
         `var ag={running:0,done:0,interrupted:0,idle:0,pending:0};`,
         `try{`,

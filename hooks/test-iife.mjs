@@ -370,7 +370,7 @@ check(
 // + Q5 (IIFE body changed: Uri cache ccuri() for iconPath, token SBI text
 // dedup __ccsdTokSbiLastText, .offset sidecar mtime+size cache
 // __ccsdOffCache in computeLiveDelta).
-check('IIFE.21c banner carries v0.5.3 stamp', /\/\*cc-status-dot-injected:v0.5.4:/.test(iife));
+check('IIFE.21c banner carries v0.5.3 stamp', /\/\*cc-status-dot-injected:v0.5.5:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -1207,11 +1207,11 @@ check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*
     !/SINCE_STALE_MS/.test(iife),
     'SINCE_STALE_MS survived — the per-tab/SBI decay divergence must stay collapsed',
   );
-  // __ccsdTranscriptFresh helper must be defined once and consumed by BOTH ticks.
+  // v0.5.5: __ccsdTranscriptFresh removed (dead after v0.5.4 running-decay removal).
   check(
-    'IIFE.46a __ccsdTranscriptFresh activity-gate helper defined in IIFE (v0.5.2 #4 root-cause fix)',
-    /function\s+__ccsdTranscriptFresh\s*\(\s*j\s*,\s*sid\s*,\s*staleMs\s*\)/.test(iife),
-    'the transcript-mtime activity gate is the root-cause fix for stale-`since` false-decay',
+    'IIFE.46a v0.5.5: __ccsdTranscriptFresh REMOVED (dead code — v0.5.4 removed running decay which was its only caller)',
+    !/function\s+__ccsdTranscriptFresh/.test(iife),
+    'the function must NOT be present (it was the transcript-mtime gate for running decay, now removed by proposal 2)',
   );
   // Split the IIFE at the per-tab tick to isolate the two decay sites.
   const perTabAnchor = 'var timer=setInterval(function(){';

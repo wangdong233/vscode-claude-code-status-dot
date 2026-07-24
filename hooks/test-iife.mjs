@@ -279,32 +279,36 @@ check(
   //       permission blue, and the decay runs only for the file-pending path).
   const yieldIdx = iife.indexOf('t.__ccsdPending');
   const pendIdx = iife.indexOf('pend && st!=="idle"');
-  const perTabDecayDoneIdx = iife.indexOf('if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS){st="idle";}');
-  const perTabDecayRunningIdx = iife.indexOf(
-    'else if(st==="running"&&since&&(now-since)>SBI_RUNNING_STALE_MS&&since<now){if(!__ccsdTranscriptFresh(j,sid,SBI_RUNNING_STALE_MS)){st="idle";}}',
-  );
   const perTabNowIdx = iife.indexOf('var now=Date.now();');
+  // v0.5.24 (debt #1): §F/§H inline decay chains unified into the
+  // __ccsdDecayState predicate; the per-tab tick now CALLS it
+  // (decayInterrupted=false). Position locks anchor on the call site
+  // instead of the retired inline done-decay string.
+  const perTabDecayCallIdx = iife.indexOf('st=__ccsdDecayState(st,since,j,now,false)');
   check(
     'IIFE.12d per-tab tick applies decay BEFORE pending check (HIGH round-2: done>5min→idle)',
-    perTabDecayDoneIdx >= 0 && pendIdx >= 0 && perTabDecayDoneIdx < pendIdx,
-    'decayDone=' + perTabDecayDoneIdx + ' pend=' + pendIdx,
+    perTabDecayCallIdx >= 0 && pendIdx >= 0 && perTabDecayCallIdx < pendIdx,
+    'decayCall=' + perTabDecayCallIdx + ' pend=' + pendIdx,
   );
   check(
-    'IIFE.12e v0.5.13: per-tab running→idle decay RESTORED, gated on tokens.last_ts (replaces v0.5.4 removal)',
-    /else if\(st==="running"&&since&&!\(j\.activeSubagents>0\)&&\(now-since\)>SBI_RUNNING_STALE_MS&&j\.tokens&&j\.tokens\.last_ts&&\(now-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)\{st="idle";\}/.test(
-      iife,
-    ),
-    'v0.5.13: stale running decays to idle when tokens.last_ts > 30min (real model output, aggregates subagent tokens — kills zombie running like 90cc10fb without false-graying active workflows). Replaces v0.5.4 removal.',
+    'IIFE.12e v0.5.24: __ccsdDecayState unified predicate (done/interrupted/running) — replaces inline §F/§H decay chains',
+    /function __ccsdDecayState\(st,since,j,now,decayInterrupted\)/.test(iife) &&
+      /st==="done"&&since&&\(now-since\)>DONE_TO_IDLE_MS\)return "idle"/.test(iife) &&
+      /decayInterrupted&&st==="interrupted"&&since&&\(now-since\)>INTERRUPTED_RETENTION_MS\)return "idle"/.test(iife) &&
+      /st==="running"&&since&&!\(j\.activeSubagents>0\)&&\(now-since\)>SBI_RUNNING_STALE_MS&&j\.tokens&&j\.tokens\.last_ts&&\(now-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)return "idle"/.test(
+        iife,
+      ),
+    'v0.5.24 debt #1: §F/§H decay unified into one predicate. running decay gated on since AND tokens.last_ts AND !activeSubagents (v0.5.13/14/16 rationale preserved in the declaration comment).',
   );
   check(
-    'IIFE.12f per-tab decay chain sits AFTER __ccsdPending yield (yield still wins for CC-native blue)',
-    yieldIdx >= 0 && perTabDecayDoneIdx >= 0 && yieldIdx < perTabDecayDoneIdx,
-    'yield=' + yieldIdx + ' decayDone=' + perTabDecayDoneIdx,
+    'IIFE.12f per-tab decay call sits AFTER __ccsdPending yield (yield still wins for CC-native blue)',
+    yieldIdx >= 0 && perTabDecayCallIdx >= 0 && yieldIdx < perTabDecayCallIdx,
+    'yield=' + yieldIdx + ' decayCall=' + perTabDecayCallIdx,
   );
   check(
-    'IIFE.12g per-tab `var now=Date.now()` hoisted BEFORE decay chain (decay reads `now`)',
-    perTabNowIdx >= 0 && perTabDecayDoneIdx >= 0 && perTabNowIdx < perTabDecayDoneIdx,
-    'now=' + perTabNowIdx + ' decayDone=' + perTabDecayDoneIdx,
+    'IIFE.12g per-tab `var now=Date.now()` hoisted BEFORE decay call (decay reads `now`)',
+    perTabNowIdx >= 0 && perTabDecayCallIdx >= 0 && perTabNowIdx < perTabDecayCallIdx,
+    'now=' + perTabNowIdx + ' decayCall=' + perTabDecayCallIdx,
   );
 }
 
@@ -377,7 +381,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.24 stamp', /\/\*cc-status-dot-injected:v0.5.24:/.test(iife));
+check('IIFE.21c banner carries v0.5.25 stamp', /\/\*cc-status-dot-injected:v0.5.25:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -564,28 +568,24 @@ check(
   'v0.5.13: pending is priority-overlay + exclusive with state (blue wins; running+pending = +1 blue only). Pre-0.5.13 counted pending INDEPENDENTLY (running+pending → +1 yellow AND +1 blue) — the cause of "two-yellow one-blue".',
 );
 check(
-  'IIFE.29a v0.5.13: §F aggregation running→idle decay gated on tokens.last_ts (symmetric with §H)',
-  /else if\(st==="running"&&since&&!\(j\.activeSubagents>0\)&&\(Date\.now\(\)-since\)>SBI_RUNNING_STALE_MS&&j\.tokens&&j\.tokens\.last_ts&&\(Date\.now\(\)-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)\{st="idle";\}/.test(
-    iife,
-  ),
-  '§F four-light aggregation must apply the SAME stale-running decay as §H (tokens.last_ts > 30min → idle) so the tab color and the bottom count NEVER disagree',
+  'IIFE.29a v0.5.24: §F aggregation decay via __ccsdDecayState (decayInterrupted=true, shares the predicate with §H)',
+  /st=__ccsdDecayState\(st,since,j,Date\.now\(\),true\)/.test(iife),
+  '§F four-light aggregation calls __ccsdDecayState with decayInterrupted=true (done/interrupted/running all decay) so the tab color and the bottom count NEVER disagree; the predicate is shared with §H (only the read source + decayInterrupted flag differ).',
 );
 {
-  // Position lock: pending check must come AFTER all three decay branches.
-  // Anchor on the interrupted-decay block's closing form (the LAST decay
-  // branch before the pending check); if the pending check appears earlier
-  // in the IIFE source than that close, the ordering regressed.
-  // v0.2.5: pendingToken widened to match the new OR form's literal
-  // (the `__ps[files[i].slice(0,-5)]===true` fragment is unique to the
-  // OR'd second branch).
-  const decayCloseToken = 'INTERRUPTED_RETENTION_MS){st="idle";}';
+  // Position lock: pending check must come AFTER the §F decay call.
+  // v0.5.24 (debt #1): the inline interrupted-decay block is gone (unified
+  // into __ccsdDecayState); anchor on the §F decay CALL SITE instead.
+  // v0.2.5: pendingToken matches the OR form literal
+  // (`__ps[files[i].slice(0,-5)]===true` is unique to the OR'd second branch).
+  const decayCallToken = 'st=__ccsdDecayState(st,since,j,Date.now(),true)';
   const pendingToken = '__ps[files[i].slice(0,-5)]===true';
-  const decayIdx = iife.indexOf(decayCloseToken);
+  const decayIdx = iife.indexOf(decayCallToken);
   const pendingIdx = iife.indexOf(pendingToken);
   check(
-    'IIFE.29b pending check positioned AFTER decay branches (ordering lock)',
+    'IIFE.29b pending check positioned AFTER §F decay call (ordering lock)',
     decayIdx >= 0 && pendingIdx >= 0 && pendingIdx > decayIdx,
-    'decayClose=' + decayIdx + ' pending=' + pendingIdx,
+    'decayCall=' + decayIdx + ' pending=' + pendingIdx,
   );
 }
 // v0.2.5 (problem 1 fix): the per-panel __ccsdPending flag set by Anchor B
@@ -946,11 +946,12 @@ check(
 // Reader-rule parity: aggregation applies §4 done>5min→idle so IDLE sessions
 // are NOT counted toward the green light (only ACTIVE done is). A regression
 // that dropped this clause would make the 🟢 light over-count stale done.
+// v0.5.24 (debt #1): §F done>5min decay moved into __ccsdDecayState. Assert
+// the predicate carries the done branch (IIFE.12e pins the full predicate;
+// IIFE.29a pins that §F calls it, wiring done decay into aggregation).
 check(
-  'IIFE.37 SBI applies §4 done>5min→idle rule in aggregation',
-  /if\s*\(\s*st\s*===\s*"done"\s*&&\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*DONE_TO_IDLE_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}/.test(
-    iife,
-  ),
+  'IIFE.37 SBI applies §4 done>5min→idle rule via __ccsdDecayState (aggregation)',
+  /st==="done"&&since&&\(now-since\)>DONE_TO_IDLE_MS\)return "idle"/.test(iife),
 );
 // §7.2 stale-running heuristic — v0.2.6 round-1 fix: switched from mtime
 // (__mt>SBI_RUNNING_STALE_MS) to since-based decay (since>SBI_RUNNING_STALE_MS).
@@ -1017,11 +1018,12 @@ check(
 // `since` (the terminal timestamp set by StopFailure), mirroring the
 // done>5min branch one block up. Lock the since-based form so a regression
 // reverting to mtime (and the silent 🔴-grows-forever bug) would surface.
+// v0.5.24 (debt #1): interrupted decay moved into __ccsdDecayState, gated by
+// decayInterrupted (§F passes true). Assert the predicate carries the
+// interrupted branch with the gate + since-based form.
 check(
-  'IIFE.37d SBI interrupted>retention since decay →idle (bounds 🔴 growth, orphan-write-proof)',
-  /else if\s*\(\s*st\s*===\s*"interrupted"\s*&&\s*since\s*&&\s*\(\s*Date\.now\s*\(\s*\)\s*-\s*since\s*\)\s*>\s*INTERRUPTED_RETENTION_MS\s*\)\s*\{\s*st\s*=\s*"idle"\s*;\s*\}/.test(
-    iife,
-  ),
+  'IIFE.37d SBI interrupted>retention since decay →idle via __ccsdDecayState (bounds 🔴 growth, orphan-write-proof)',
+  /decayInterrupted&&st==="interrupted"&&since&&\(now-since\)>INTERRUPTED_RETENTION_MS\)return "idle"/.test(iife),
 );
 
 // --- 14. v0.1.17 per-tick concat render (single SBI, compact text) ----------
@@ -1258,17 +1260,15 @@ check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*
     /SBI_RUNNING_STALE_MS/.test(sbiPart) && /INTERRUPTED_RETENTION_MS/.test(sbiPart),
     'SBI tick should apply running-stale + interrupted-retention decay',
   );
-  // v0.5.2 INVERTS the old IIFE.46b: per-tab now DOES reference
-  // SBI_RUNNING_STALE_MS (unified threshold). It still does NOT reference
-  // INTERRUPTED_RETENTION_MS — interrupted per-tab decay is the only remaining
-  // divergence (F5, deferred as LOW; abandoned interrupted+pending is a 7d
-  // edge case, not the user's running-decay report).
+  // v0.5.24 (debt #1): per-tab decay unified into __ccsdDecayState. The
+  // per-tab tick CALLS the predicate with decayInterrupted=false — only
+  // done/running decay on the tab; interrupted stays red for diagnostics
+  // (STATES.md §7.4). Thresholds (SBI_RUNNING_STALE_MS etc.) now live in
+  // the shared declaration, not the per-tab body.
   check(
-    'IIFE.46b2 v0.5.2: per-tab tick references SBI_RUNNING_STALE_MS (unified with §F) + __ccsdTranscriptFresh, still NOT INTERRUPTED_RETENTION_MS',
-    /SBI_RUNNING_STALE_MS/.test(perTabPart) &&
-      /__ccsdTranscriptFresh/.test(perTabPart) &&
-      !/INTERRUPTED_RETENTION_MS/.test(perTabPart),
-    'per-tab running decay must share the §F threshold + transcript gate; interrupted per-tab decay stays deferred',
+    'IIFE.46b2 v0.5.24: per-tab tick decays via __ccsdDecayState(decayInterrupted=false) — interrupted stays red on tab',
+    /st=__ccsdDecayState\(st,since,j,now,false\)/.test(perTabPart),
+    'per-tab tick calls __ccsdDecayState with decayInterrupted=false (done/running decay only; interrupted stays red on tab per STATES.md §7.4). Predicate + thresholds live in the shared declaration.',
   );
   // v0.5.2 (F4): the per-tab SVG-selection running/done decay ternaries are
   // REMOVED as dead code (decay now happens once, BEFORE the pending check).

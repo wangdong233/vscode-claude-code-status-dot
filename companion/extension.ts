@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.16";
+const MIN_PATCHER_VERSION = "0.5.17";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.16";
+    return effectiveConfig?.injectVersion ?? "v0.5.17";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1729,9 +1729,21 @@ function activeCcSidOrLoading(): { sid: string; loading: boolean; isCc: boolean 
     const inp = activeTab.input as { viewType?: string } | undefined;
     const isCc = !!inp && typeof inp.viewType === "string" && /claudeVSCodePanel/i.test(inp.viewType);
     if (!isCc) return { sid: "", loading: false, isCc: false };
-    // Strict sid from the active tab's label via the IIFE title bridge (no
-    // __ccsdLastActiveSid fallback — that's the stale-previous-session trap).
     const g = globalThis as Record<string, unknown>;
+    // v0.5.17: 优先用 panelTab.active 实时找活动 panel 的 sid。VSCode WebviewPanel.active
+    // 切 tab 瞬间变(不等 IIFE per-panel 500ms tick 写 __ccsdActiveSid),消除切 tab 后 ★
+    // 短暂显旧会话状态的瞬态 + 同 title label 歧义。复现场景:A(已收藏)加载中时
+    // __ccsdActiveSid=A,切到已打开的 B(未收藏)→ B.panelTab.active===true 直接命中 B,
+    // 不再误读 A。panelTab 由 IIFE §A 发布(__ccsdSidToPanel)。
+    const panelMap = g.__ccsdSidToPanel as Record<string, { active?: boolean }> | undefined;
+    if (panelMap) {
+        const activePanelSid = Object.keys(panelMap).find((sid) => {
+            const p = panelMap[sid];
+            return p && p.active === true;
+        });
+        if (activePanelSid) return { sid: activePanelSid, loading: false, isCc: true };
+    }
+    // Fallback: label 匹配(panelTab.active 不可用或 panel 未注册时)。
     const titleMap = g.__ccsdSidToTitle as Record<string, string> | undefined;
     const label = (typeof activeTab.label === "string" ? activeTab.label : "").replace(/^★\s/, "");
     if (label && titleMap) {

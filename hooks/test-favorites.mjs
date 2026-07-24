@@ -1118,7 +1118,7 @@ check(
 );
 check(
   'FAV.45a v0.5.16 activeCcSidOrLoading prefers __ccsdActiveSid to disambiguate same-title sessions',
-  /function\s+activeCcSidOrLoading[\s\S]{0,1500}?g\.__ccsdActiveSid/.test(companionSrc),
+  /function\s+activeCcSidOrLoading[\s\S]{0,2500}?g\.__ccsdActiveSid/.test(companionSrc),
   'same-title sessions (same cwd): the authoritative __ccsdActiveSid is checked before Object.keys().find() — otherwise display sid (this path) splits from write sid (resolveActiveSid), un-starring the wrong one',
 );
 check(
@@ -1126,6 +1126,11 @@ check(
   /function\s+favAddTab[\s\S]{0,400}?activeCcSidOrLoading\(\)\.loading/.test(companionSrc) &&
     /function\s+favRemoveTab[\s\S]{0,400}?activeCcSidOrLoading\(\)\.loading/.test(companionSrc),
   'all three write paths (toggle/add/remove) refuse during the loading window — no wrong-session mutation via any path',
+);
+check(
+  'FAV.46 v0.5.17 activeCcSidOrLoading prefers panelTab.active (realtime) over label/__ccsdActiveSid',
+  /__ccsdSidToPanel as Record[\s\S]{0,300}?\.active === true/.test(companionSrc),
+  'switch-tab 瞬态根因:__ccsdActiveSid 由 IIFE 500ms tick 更新(延迟),切到已打开 B 时还指 A(已收藏)→ ★ 误显 A;panelTab.active 是 VSCode 实时,B 激活即 true → 直接命中 B',
 );
 
 // cleanup

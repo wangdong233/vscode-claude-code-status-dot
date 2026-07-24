@@ -1007,7 +1007,7 @@ check(
 );
 check(
   'FAV.40j v0.5.10 status bar hidden when no active CC session',
-  /refreshFavStatusBar[\s\S]{0,1200}?\.hide\(\)/.test(companionSrc),
+  /refreshFavStatusBar[\s\S]{0,2000}?\.hide\(\)/.test(companionSrc),
   'no stray clickable star when there is no session to act on (toggleTab would just toast anyway)',
 );
 
@@ -1131,6 +1131,12 @@ check(
   'FAV.46 v0.5.17 activeCcSidOrLoading prefers panelTab.active (realtime) over label/__ccsdActiveSid',
   /__ccsdSidToPanel as Record[\s\S]{0,300}?\.active === true/.test(companionSrc),
   'switch-tab 瞬态根因:__ccsdActiveSid 由 IIFE 500ms tick 更新(延迟),切到已打开 B 时还指 A(已收藏)→ ★ 误显 A;panelTab.active 是 VSCode 实时,B 激活即 true → 直接命中 B',
+);
+check(
+  'FAV.47 v0.5.21 ★ status bar NON-interactive while loading (command=undefined), restored to toggleTab on sid resolve',
+  /ui\.loading[\s\S]{0,1500}?favStatusBar\.command = undefined/.test(companionSrc) &&
+    /favStatusBar\.command = "ccStatusDot\.fav\.toggleTab"/.test(companionSrc),
+  'loading 是 500ms tick 快照,用户点击时 loading 可能已过→toggleTab 误 toggle 新解析 sid(常是上个会话 B,取消其收藏);command=undefined 让 spinner 纯显示不可点击,根治误操作',
 );
 
 // cleanup

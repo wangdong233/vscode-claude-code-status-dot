@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.1:efeba149*/
+/*cc-status-dot-hook:v0.2.1:ee85674f*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -502,9 +502,8 @@ function inflightFromPayload(payload) {
  *   - null                                      -> ignore this event (don't write)
  *   - DELETE                                    -> remove the session's status file
  */
-function deriveStatus(payload, cur) {
+function deriveStatus(payload, cur, now) {
   const event = payload.hook_event_name;
-  const now = Date.now();
   const inflight = inflightFromPayload(payload);
   // Clamp non-finite AND negative to 0 — a corrupt/hand-edited file must not
   // propagate a negative counter (SubagentStart would then write a+1 = -N+1,
@@ -2422,7 +2421,7 @@ async function main() {
   }
 
   // --- Map event -> status action ---
-  const status = deriveStatus(payload, cur);
+  const status = deriveStatus(payload, cur, Date.now());
   if (status === null) process.exit(0); // event we don't track / not writing
 
   if (status === DELETE) {

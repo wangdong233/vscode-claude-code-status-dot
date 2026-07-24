@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.14";
+const MIN_PATCHER_VERSION = "0.5.15";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.14";
+    return effectiveConfig?.injectVersion ?? "v0.5.15";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1656,6 +1656,15 @@ function buildFavSessionRow(sid: string): FavSession | null {
  *  dynamic labels) but toggleTab remains useful as a single-verb macro. */
 function favToggleTab(resourceUri?: unknown): void {
     void resourceUri; // accepted for the editor/title/context + explorer/context menu contract; CC webview synthetic URIs carry no sid, so resolveActiveSid takes no arg (deepfix round-1 — see its JSDoc for why the v0.5.8 webviewContext/star path was removed).
+    // v0.5.15: if the active CC tab is still loading (sid not yet registered in
+    // the IIFE bridge), REFUSE to toggle — resolveActiveSid would fall back to
+    // __ccsdLastActiveSid (the PREVIOUS session) and the click would silently
+    // un-star the wrong session. Show a hint instead; the spinner on the ★
+    // button already signals the loading state.
+    if (activeCcSidOrLoading().loading) {
+        void vscode.window.showInformationMessage("cc-status-dot: 当前会话仍在加载,请稍候再点收藏。");
+        return;
+    }
     const sid = resolveActiveSid();
     if (!sid) {
         void vscode.window.showInformationMessage(
@@ -1704,16 +1713,59 @@ function favToggleTab(resourceUri?: unknown): void {
  *  constraint, no React state to destroy, no #195960 right-click-identity
  *  limit. It always acts on the authoritative active sid from
  *  resolveActiveSid(), so it can never mis-target a session. */
+/** v0.5.15: resolve the active CC session's sid STRICTLY from the focused
+ *  tab, with a loading signal. Unlike resolveActiveSid (which falls back to
+ *  __ccsdLastActiveSid), this returns {loading:true} when the active tab IS a
+ *  CC webview panel but its sid isn't in the IIFE bridge yet — the just-resumed
+ *  case where __ccsdActiveSid still points at the PREVIOUS session. Drives the
+ *  ★ button so it shows a spinner (not the stale previous-session star) and
+ *  toggleTab so a loading-state click REFUSES instead of toggling the wrong sid. */
+function activeCcSidOrLoading(): { sid: string; loading: boolean; isCc: boolean } {
+    const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
+    if (!activeTab) return { sid: "", loading: false, isCc: false };
+    // CC webview panels carry a viewType containing "claudeVSCodePanel".
+    const inp = activeTab.input as { viewType?: string } | undefined;
+    const isCc = !!inp && typeof inp.viewType === "string" && /claudeVSCodePanel/i.test(inp.viewType);
+    if (!isCc) return { sid: "", loading: false, isCc: false };
+    // Strict sid from the active tab's label via the IIFE title bridge (no
+    // __ccsdLastActiveSid fallback — that's the stale-previous-session trap).
+    const g = globalThis as Record<string, unknown>;
+    const titleMap = g.__ccsdSidToTitle as Record<string, string> | undefined;
+    const label = (typeof activeTab.label === "string" ? activeTab.label : "").replace(/^★\s/, "");
+    if (label && titleMap) {
+        const matched = Object.keys(titleMap).find((k) => titleMap[k] === label);
+        if (matched) return { sid: matched, loading: false, isCc: true };
+    }
+    // CC panel but label not in bridge → session still loading (just resumed,
+    // IIFE hasn't registered it via the first update_session_state/rename_tab).
+    return { sid: "", loading: true, isCc: true };
+}
+
 function refreshFavStatusBar(): void {
     if (!favStatusBar) return;
-    const sid = resolveActiveSid();
-    if (!sid) {
+    const ui = activeCcSidOrLoading();
+    if (ui.loading) {
+        // CC tab still loading (just resumed, IIFE hasn't registered its sid) →
+        // spinner instead of the stale previous-session star (prevents
+        // misclicking the WRONG session's favorite on click).
+        if (lastFavBarSig !== "loading") {
+            lastFavBarSig = "loading";
+            favStatusBar.text = "$(loading~spin)";
+            favStatusBar.color = undefined;
+            favStatusBar.tooltip = "CC Favorites — session loading…";
+            favStatusBar.show();
+        }
+        return;
+    }
+    if (!ui.isCc || !ui.sid) {
+        // Non-CC tab (editor/terminal) or no resolvable sid → hide the star.
         if (lastFavBarSig !== "") {
             favStatusBar.hide();
             lastFavBarSig = "";
         }
         return;
     }
+    const sid = ui.sid;
     const doc = readFavDoc();
     const favorited = !!doc && doc.sessions.some((s) => s.sid === sid);
     const sig = sid + "|" + (favorited ? "1" : "0");

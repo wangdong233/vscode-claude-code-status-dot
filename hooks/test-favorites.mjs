@@ -986,8 +986,8 @@ check(
   'the filled star tint must match the existing gold-line favorite marker for visual consistency',
 );
 check(
-  'FAV.40f v0.5.10 refreshFavStatusBar resolves the ACTIVE sid (acts on current session)',
-  /refreshFavStatusBar[\s\S]{0,200}?resolveActiveSid\(\)/.test(companionSrc),
+  'FAV.40f v0.5.15 refreshFavStatusBar resolves the ACTIVE sid via activeCcSidOrLoading (strict, no lastActive fallback)',
+  /refreshFavStatusBar[\s\S]{0,200}?activeCcSidOrLoading\(\)/.test(companionSrc),
   'the button must target the authoritative active session — the reason it supersedes the #195960-limited tab right-click',
 );
 check(
@@ -1007,7 +1007,7 @@ check(
 );
 check(
   'FAV.40j v0.5.10 status bar hidden when no active CC session',
-  /refreshFavStatusBar[\s\S]{0,400}?\.hide\(\)/.test(companionSrc),
+  /refreshFavStatusBar[\s\S]{0,1200}?\.hide\(\)/.test(companionSrc),
   'no stray clickable star when there is no session to act on (toggleTab would just toast anyway)',
 );
 
@@ -1092,6 +1092,29 @@ check(
   /setImmediate\(\s*\(\s*\)\s*=>\s*refreshFavStatusBar\(\)\s*\)/.test(companionSrc) &&
     /setImmediate\(\s*\(\s*\)\s*=>\s*\{[\s\S]{0,150}?favoritesProvider\?\.refresh\(\)/.test(companionSrc),
   'the ★ button initial paint + tree initial refresh are deferred one tick so registerFavorites returns sooner (imperceptible — view not revealed until sidebar opened)',
+);
+
+// ===========================================================================
+// v0.5.15: ★ button loading state. When switching to a CC tab whose session
+// is still resuming (sid not yet in the IIFE bridge), the ★ must show a
+// spinner instead of the stale PREVIOUS session's star (which would un-star
+// the wrong session on click). activeCcSidOrLoading drives both the display
+// (refreshFavStatusBar → spinner) and the click guard (toggleTab → refuse).
+// ===========================================================================
+check(
+  'FAV.44a v0.5.15 activeCcSidOrLoading helper detects CC tab + loading (strict sid, no lastActive fallback)',
+  /function\s+activeCcSidOrLoading\s*\(\s*\)/.test(companionSrc) && /claudeVSCodePanel/i.test(companionSrc),
+  'detects whether the focused tab is a CC webview panel (viewType claudeVSCodePanel) and whether its sid is in the IIFE title bridge — the loading signal for a just-resumed session',
+);
+check(
+  'FAV.44b v0.5.15 refreshFavStatusBar shows spinner ($(loading~spin)) when active CC tab is loading',
+  /ui\.loading[\s\S]{0,500}?\$\(loading~spin\)/.test(companionSrc),
+  'a loading CC tab (sid not yet registered) shows a spinner, NOT the stale previous-session star — fixes the "star shows A while B loads" inconsistency',
+);
+check(
+  'FAV.44c v0.5.15 favToggleTab REFUSES to toggle while active CC tab is loading (no wrong-session un-star)',
+  /function\s+favToggleTab[\s\S]{0,900}?activeCcSidOrLoading\(\)\.loading/.test(companionSrc),
+  'a ★ click during the loading window must NOT fall back to __ccsdLastActiveSid and un-star the previous session — refuse with a hint instead',
 );
 
 // cleanup

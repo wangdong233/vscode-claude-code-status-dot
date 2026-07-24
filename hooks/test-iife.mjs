@@ -376,8 +376,8 @@ check(
 // Add/Remove menu labels via setContext('ccStatusDot.fav.currentTabFavorited');
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
-// v0.5.14: decay hotfix — running→idle decay 改 AND 形式 (since>30min AND last_ts>30min),修 v0.5.13 sole(last_ts)在新轮对话误灰活跃会话的 false-gray 回归。
-check('IIFE.21c banner carries v0.5.14 stamp', /\/\*cc-status-dot-injected:v0.5.14:/.test(iife));
+// v0.5.15: ★ button loading state (companion-only — activeCcSidOrLoading + spinner + toggleTab refuse). IIFE body unchanged (same v0.5.14 decay-AND); stamp moves with the 5-way pin.
+check('IIFE.21c banner carries v0.5.15 stamp', /\/\*cc-status-dot-injected:v0.5.15:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));

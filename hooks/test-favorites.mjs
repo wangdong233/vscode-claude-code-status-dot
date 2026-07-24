@@ -1116,6 +1116,17 @@ check(
   /function\s+favToggleTab[\s\S]{0,900}?activeCcSidOrLoading\(\)\.loading/.test(companionSrc),
   'a ★ click during the loading window must NOT fall back to __ccsdLastActiveSid and un-star the previous session — refuse with a hint instead',
 );
+check(
+  'FAV.45a v0.5.16 activeCcSidOrLoading prefers __ccsdActiveSid to disambiguate same-title sessions',
+  /function\s+activeCcSidOrLoading[\s\S]{0,1500}?g\.__ccsdActiveSid/.test(companionSrc),
+  'same-title sessions (same cwd): the authoritative __ccsdActiveSid is checked before Object.keys().find() — otherwise display sid (this path) splits from write sid (resolveActiveSid), un-starring the wrong one',
+);
+check(
+  'FAV.45b v0.5.16 favAddTab + favRemoveTab ALSO refuse during loading (not just toggleTab)',
+  /function\s+favAddTab[\s\S]{0,400}?activeCcSidOrLoading\(\)\.loading/.test(companionSrc) &&
+    /function\s+favRemoveTab[\s\S]{0,400}?activeCcSidOrLoading\(\)\.loading/.test(companionSrc),
+  'all three write paths (toggle/add/remove) refuse during the loading window — no wrong-session mutation via any path',
+);
 
 // cleanup
 try {

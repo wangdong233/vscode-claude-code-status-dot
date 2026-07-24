@@ -291,7 +291,7 @@ check(
   );
   check(
     'IIFE.12e v0.5.13: per-tab running→idle decay RESTORED, gated on tokens.last_ts (replaces v0.5.4 removal)',
-    /else if\(st==="running"&&since&&\(now-since\)>SBI_RUNNING_STALE_MS&&j\.tokens&&j\.tokens\.last_ts&&\(now-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)\{st="idle";\}/.test(
+    /else if\(st==="running"&&since&&!\(j\.activeSubagents>0\)&&\(now-since\)>SBI_RUNNING_STALE_MS&&j\.tokens&&j\.tokens\.last_ts&&\(now-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)\{st="idle";\}/.test(
       iife,
     ),
     'v0.5.13: stale running decays to idle when tokens.last_ts > 30min (real model output, aggregates subagent tokens — kills zombie running like 90cc10fb without false-graying active workflows). Replaces v0.5.4 removal.',
@@ -376,8 +376,8 @@ check(
 // Add/Remove menu labels via setContext('ccStatusDot.fav.currentTabFavorited');
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
-// v0.5.15: ★ button loading state (companion-only — activeCcSidOrLoading + spinner + toggleTab refuse). IIFE body unchanged (same v0.5.14 decay-AND); stamp moves with the 5-way pin.
-check('IIFE.21c banner carries v0.5.15 stamp', /\/\*cc-status-dot-injected:v0.5.15:/.test(iife));
+// v0.5.16: review fixes — decay activeSubagents gate (workflow active→no decay, rank1 HIGH mustFix) + activeCcSidOrLoading __ccsdActiveSid gate + loading guard on add/remove + 注释同步 + 中文 toast→英.
+check('IIFE.21c banner carries v0.5.16 stamp', /\/\*cc-status-dot-injected:v0.5.16:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -564,7 +564,7 @@ check(
 );
 check(
   'IIFE.29a v0.5.13: §F aggregation running→idle decay gated on tokens.last_ts (symmetric with §H)',
-  /else if\(st==="running"&&since&&\(Date\.now\(\)-since\)>SBI_RUNNING_STALE_MS&&j\.tokens&&j\.tokens\.last_ts&&\(Date\.now\(\)-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)\{st="idle";\}/.test(
+  /else if\(st==="running"&&since&&!\(j\.activeSubagents>0\)&&\(Date\.now\(\)-since\)>SBI_RUNNING_STALE_MS&&j\.tokens&&j\.tokens\.last_ts&&\(Date\.now\(\)-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)\{st="idle";\}/.test(
     iife,
   ),
   '§F four-light aggregation must apply the SAME stale-running decay as §H (tokens.last_ts > 30min → idle) so the tab color and the bottom count NEVER disagree',

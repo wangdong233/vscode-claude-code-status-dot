@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.15";
+const MIN_PATCHER_VERSION = "0.5.16";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.15";
+    return effectiveConfig?.injectVersion ?? "v0.5.16";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1662,7 +1662,9 @@ function favToggleTab(resourceUri?: unknown): void {
     // un-star the wrong session. Show a hint instead; the spinner on the ★
     // button already signals the loading state.
     if (activeCcSidOrLoading().loading) {
-        void vscode.window.showInformationMessage("cc-status-dot: 当前会话仍在加载,请稍候再点收藏。");
+        void vscode.window.showInformationMessage(
+            "cc-status-dot: session still loading, try again in a moment to favorite.",
+        );
         return;
     }
     const sid = resolveActiveSid();
@@ -1733,6 +1735,15 @@ function activeCcSidOrLoading(): { sid: string; loading: boolean; isCc: boolean 
     const titleMap = g.__ccsdSidToTitle as Record<string, string> | undefined;
     const label = (typeof activeTab.label === "string" ? activeTab.label : "").replace(/^★\s/, "");
     if (label && titleMap) {
+        // v0.5.16 (review rank 2): prefer the authoritative __ccsdActiveSid to
+        // disambiguate when two CC sessions share the same title (same cwd →
+        // same derived title). Object.keys().find() would hit the first-
+        // inserted one, splitting the DISPLAY sid (this path) from the WRITE
+        // sid (resolveActiveSid, which already gates on __ccsdActiveSid). Only
+        // fall through to find() when active is missing or its title disagrees
+        // with the focused tab's label (stale active window).
+        const active = typeof g.__ccsdActiveSid === "string" ? g.__ccsdActiveSid : "";
+        if (active && titleMap[active] === label) return { sid: active, loading: false, isCc: true };
         const matched = Object.keys(titleMap).find((k) => titleMap[k] === label);
         if (matched) return { sid: matched, loading: false, isCc: true };
     }
@@ -1794,6 +1805,15 @@ function refreshFavStatusBar(): void {
  *  add-attempt on an already-favorited sid, which no-ops. */
 function favAddTab(resourceUri?: unknown): void {
     void resourceUri; // accepted for menu contract; CC webview synthetic URIs carry no sid (deepfix round-1).
+    // v0.5.16 (review rank 3): loading guard (same as favToggleTab) — refuse
+    // while the active CC tab's sid isn't registered yet, so the add doesn't
+    // fall back to __ccsdLastActiveSid and target the PREVIOUS session.
+    if (activeCcSidOrLoading().loading) {
+        void vscode.window.showInformationMessage(
+            "cc-status-dot: session still loading, try again in a moment to favorite.",
+        );
+        return;
+    }
     const sid = resolveActiveSid();
     if (!sid) {
         void vscode.window.showInformationMessage(
@@ -1824,6 +1844,13 @@ function favAddTab(resourceUri?: unknown): void {
  *  hand-edit), this no-ops instead of accidentally adding it. */
 function favRemoveTab(resourceUri?: unknown): void {
     void resourceUri; // accepted for menu contract; CC webview synthetic URIs carry no sid (deepfix round-1).
+    // v0.5.16 (review rank 3): loading guard (same as favToggleTab/favAddTab).
+    if (activeCcSidOrLoading().loading) {
+        void vscode.window.showInformationMessage(
+            "cc-status-dot: session still loading, try again in a moment to favorite.",
+        );
+        return;
+    }
     const sid = resolveActiveSid();
     if (!sid) {
         void vscode.window.showInformationMessage(

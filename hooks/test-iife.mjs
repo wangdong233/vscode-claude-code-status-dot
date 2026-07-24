@@ -376,8 +376,8 @@ check(
 // Add/Remove menu labels via setContext('ccStatusDot.fav.currentTabFavorited');
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
-// v0.5.17: ★ 切 tab 瞬态修复 — activeCcSidOrLoading 优先 panelTab.active(实时)而非 label/__ccsdActiveSid(500ms tick 延迟)。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.17 stamp', /\/\*cc-status-dot-injected:v0.5.17:/.test(iife));
+// v0.5.19: revert v0.5.18 回 v0.5.17 基线 — v0.5.18 的 onDidChangeViewState+panelMap.active 多处+onDidChangeTabs refresh 引入耦合(token 归零/★ 超高延迟/状态乱)。回 v0.5.17(切 tab 瞬态自愈,可用)。
+check('IIFE.21c banner carries v0.5.19 stamp', /\/\*cc-status-dot-injected:v0.5.19:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));

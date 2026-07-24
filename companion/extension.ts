@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.21";
+const MIN_PATCHER_VERSION = "0.5.22";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.21";
+    return effectiveConfig?.injectVersion ?? "v0.5.22";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1357,6 +1357,14 @@ let favStatusBar: vscode.StatusBarItem | null = null;
  *  .text/.color (which flickers the item) when neither the active sid nor
  *  its favorited state changed. */
 let lastFavBarSig = "";
+/** v0.5.22 mitigation C: track the last successfully-resolved sid + timestamp.
+ *  When a sid switch happens (new sid ≠ last) and the new sid is NOT favorited
+ *  but the switch is recent (<600ms), we show a spinner instead of ☆ — because
+ *  the sid inference (panelMap.active find) may transiently hit a stale panel
+ *  (VSCode WebviewPanel.active IPC lag). This degrades "wrong ☆ flash" to
+ *  "harmless spinner that self-heals ≤500ms". Pure display, no state/write impact. */
+let lastResolvedSid = "";
+let lastResolvedTs = 0;
 /** v0.5.11: fast poll handle for the status-bar ★ button (FAV_BAR_POLL_MS).
  *  Independent of favoritesWatcher (2s, tree) so the star tracks tab switches
  *  at 500ms without speeding up the heavier tree refresh. .unref()'d + cleared
@@ -1798,6 +1806,27 @@ function refreshFavStatusBar(): void {
     const sid = ui.sid;
     const doc = readFavDoc();
     const favorited = !!doc && doc.sessions.some((s) => s.sid === sid);
+    // v0.5.22 mitigation C: if sid just switched (≠ last resolved) and new sid
+    // is NOT favorited but switch is recent (<600ms), show spinner instead of ☆.
+    // Root cause: panelMap[sid].active (EH cached, async IPC) may transiently
+    // hit a stale panel on tab switch → wrong sid → wrong ☆. Degrade to harmless
+    // spinner (self-heals ≤500ms when IPC arrives). Pure display, no write impact.
+    const nowMs = Date.now();
+    const sidChanged = lastResolvedSid && lastResolvedSid !== sid;
+    const recentSwitch = nowMs - lastResolvedTs < 600;
+    if (!favorited && sidChanged && recentSwitch) {
+        if (lastFavBarSig !== "loading") {
+            lastFavBarSig = "loading";
+            favStatusBar.text = "$(loading~spin)";
+            favStatusBar.color = undefined;
+            favStatusBar.tooltip = "CC Favorites — verifying…";
+            favStatusBar.command = undefined;
+            favStatusBar.show();
+        }
+        return; // don't update lastResolvedSid — next tick retries
+    }
+    lastResolvedSid = sid;
+    lastResolvedTs = nowMs;
     const sig = sid + "|" + (favorited ? "1" : "0");
     if (sig === lastFavBarSig) return;
     lastFavBarSig = sig;

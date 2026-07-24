@@ -377,7 +377,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.22 stamp', /\/\*cc-status-dot-injected:v0.5.22:/.test(iife));
+check('IIFE.21c banner carries v0.5.23 stamp', /\/\*cc-status-dot-injected:v0.5.23:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -494,9 +494,10 @@ check(
   'v0.5.12 perf: guard prevents duplicate timers; tick extracted to named __ccsdSbiTick + invoked once immediately after setInterval registration (four-light first paint without waiting 500ms)',
 );
 check(
-  'IIFE.25b v0.5.12 §H per-panel tick reuses __ccsdAgCache (no redundant read+parse)',
-  /ajf\s*=\s*sid\s*\+\s*".json"[\s\S]{0,250}?globalThis\.__ccsdAgCache[\s\S]{0,250}?__ch\.j/.test(iife),
-  'v0.5.12 perf: §H reads sid.json via the §F-populated __ccsdAgCache (mtime+size check) before falling back to readFileSync — eliminates a redundant read+parse every 500ms per panel',
+  'IIFE.25b v0.5.23 §H per-panel tick reads sid.json DIRECTLY (no __ccsdAgCache — fixes §H/§F decay divergence)',
+  /st=j\.state;since=j\.since;err=j\.error\|\|"";pend=\(j\.pending===true\)\}catch\(e\)\{\}/.test(iife) &&
+    !/__ccsdAgCache[\s\S]{0,100}?__ch\.j/.test(iife),
+  'v0.5.23: §H reads sid.json directly (JSON.parse(readFileSync)), NOT via §F cache. QW4 (v0.5.12 cache reuse) caused §H/§F tick desync — §H read stale cache (running, since=old) while §F read fresh (done, since=Stop) → §H decayed to idle (gray) while §F stayed done (green). Direct read ensures §H always reads latest, same as §F.',
 );
 check(
   'IIFE.25c v0.5.12 I18N dictionary guarded by globalThis.__ccsdI18N (no per-panel 19KB re-alloc)',

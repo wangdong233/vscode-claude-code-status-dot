@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.22";
+const INJECT_VERSION = "v0.5.23";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -2428,7 +2428,7 @@ function buildIIFE(resDir: string): string {
         // would otherwise re-render the tab label 2×/sec for no visible change).
         `try{var __fset=readFavSet();var __isFav=!(!__fset||!__fset[sid]);var __base=t.__ccsdTitle||"";if(__base){var __want=__isFav?("\\u2605 "+__base):__base;if(t.panelTab.title!==__want)t.panelTab.title=__want;}}catch(_){}`,
         `var st=null,since=null,err="",pend=false;`,
-        `try{var ajf=sid+".json";var ag=globalThis.__ccsdAgCache;var __ch=ag&&ag[ajf];var j=null;if(__ch){var __st=0,__sz=0;try{var __s=fs.statSync(pth.join(DIR,ajf));__st=__s.mtimeMs;__sz=__s.size;}catch(_){}if(__st===__ch.mt&&__sz===__ch.sz)j=__ch.j}if(!j){j=JSON.parse(fs.readFileSync(pth.join(DIR,ajf),"utf8"))}st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)}catch(e){}`,
+        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
         `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){`,
         ,

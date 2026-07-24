@@ -55,7 +55,7 @@
 npx -y vscode-claude-code-status-dot@latest
 ```
 
-`-y` 跳过 npx 首次安装确认，全程零交互（patcher 本身无任何提示）。首次安装也可不带 `-y`：`npx vscode-claude-code-status-dot`。
+`-y` 跳过 npx 首次安装确认，全程零交互（patcher 本身无任何提示）。**位置:必须在 `npx` 之后、包名之前** —— `npx -y <pkg>`；放包名后（`npx <pkg> -y`）不生效。首次安装也可不带 `-y`：`npx vscode-claude-code-status-dot`。
 
 `Cmd+Shift+P`（Mac）/ `Ctrl+Shift+P`（Win/Linux）→ 输入 `Developer: Reload Window` → 在 CC 里发一条 prompt。
 

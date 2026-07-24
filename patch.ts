@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.23";
+const INJECT_VERSION = "v0.5.24";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -1959,6 +1959,12 @@ function buildIIFE(resDir: string): string {
          hooks/test-contract-sync.mjs can pin writer/reader equality via the
          named const on both sides.*/
         `var INTERRUPTED_RETENTION_MS=${INTERRUPTED_RETENTION_MS};`,
+        ,
+        /*v0.5.24 refactor (debt #1 fix): unified decay predicate shared by §F (four-light,
+         * decayInterrupted=true) and §H (per-tab, decayInterrupted=false — interrupted stays
+         * red on tab for diagnostics, see STATES.md §7.4). Eliminates byte-identical decay
+         * chain duplication. Each consumer reads sid.json INDEPENDENTLY (§F readdirSync /
+         * §H readFileSync — see rejected-by-design). Only the predicate is shared, not read.*/ `function __ccsdDecayState(st,since,j,now,decayInterrupted){if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS)return "idle";if(decayInterrupted&&st==="interrupted"&&since&&(now-since)>INTERRUPTED_RETENTION_MS)return "idle";if(st==="running"&&since&&!(j.activeSubagents>0)&&(now-since)>SBI_RUNNING_STALE_MS&&j.tokens&&j.tokens.last_ts&&(now-j.tokens.last_ts)>SBI_RUNNING_STALE_MS)return "idle";return st;}`,
         // v0.2.5 round-3 (MEDIUM): rolling-window spans in ms. Used by
         // computeLiveDelta to filter transcript rows by timestamp so the
         // IIFE's live-delta dSum only counts rows INSIDE the rolling window
@@ -2428,6 +2434,14 @@ function buildIIFE(resDir: string): string {
         // would otherwise re-render the tab label 2×/sec for no visible change).
         `try{var __fset=readFavSet();var __isFav=!(!__fset||!__fset[sid]);var __base=t.__ccsdTitle||"";if(__base){var __want=__isFav?("\\u2605 "+__base):__base;if(t.panelTab.title!==__want)t.panelTab.title=__want;}}catch(_){}`,
         `var st=null,since=null,err="",pend=false;`,
+        /* rejected-by-design (R-CI-06): §H reads sid.json DIRECTLY (NOT via §F's
+         * __ccsdAgCache). Intentional: §H = per-tab active display (latency-
+         * sensitive, active tab must read latest); §F = four-light aggregation
+         * batch scan (perf-bounded, mtime+size cache ok). v0.5.12 unified them
+         * (QW4) → §H/§F tick desync → decay divergence (tab gray / lights green)
+         * → v0.5.23 reverted. DO NOT re-unify — re-unifying = re-arming the
+         * decay-desync bug. This is the 3rd flip (v0.5.11 direct → v0.5.12 cache
+         * → v0.5.23 direct); the split is the stable decision. */
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
         `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){`,

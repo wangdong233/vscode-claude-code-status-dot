@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.18";
+const MIN_PATCHER_VERSION = "0.5.17";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.18";
+    return effectiveConfig?.injectVersion ?? "v0.5.17";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1543,20 +1543,6 @@ function deriveLabelFromTranscript(transcriptPath: string): string | null {
  *  title-bridge path still nails a favorited active tab. */
 function resolveActiveSid(): string {
     const g = globalThis as Record<string, unknown>;
-    // v0.5.18 (race rank 1): REALTIME sid from panelTab.active FIRST. __ccsdActiveSid
-    // is published by the IIFE per-panel 500ms tick (L2391) — it lags ≤500ms on a
-    // plain tab switch, so the WRITE paths (toggleTab/favAddTab/favRemoveTab that
-    // call this) would mutate the PREVIOUS session (display showed B via
-    // activeCcSidOrLoading.panelMap.active, write hit A — "display B write A").
-    // panelTab.active is VSCode-realtime (flips the instant you switch tabs).
-    const panelMapW = g.__ccsdSidToPanel as Record<string, { active?: boolean }> | undefined;
-    if (panelMapW) {
-        const activePanelSid = Object.keys(panelMapW).find((s) => {
-            const p = panelMapW[s];
-            return p && p.active === true;
-        });
-        if (activePanelSid) return activePanelSid;
-    }
     let sid =
         (typeof g.__ccsdActiveSid === "string" && g.__ccsdActiveSid) ||
         (typeof g.__ccsdLastActiveSid === "string" && g.__ccsdLastActiveSid) ||
@@ -1816,12 +1802,6 @@ function refreshFavStatusBar(): void {
     favStatusBar.tooltip = favorited
         ? `CC Favorites — favorited ${sid.slice(0, 8)}. Click to unstar.`
         : `CC Favorites — star this session (${sid.slice(0, 8)}).`;
-    // v0.5.18 (race rank 6): dynamic idempotent command — bind favAddTab when NOT
-    // favorited, favRemoveTab when favorited. Pre-0.5.18 bound toggleTab (non-
-    // idempotent): a fast double-click = add→remove = net no-change, but the user
-    // thought the first click missed and kept clicking. add/remove are idempotent
-    // (double-click = add→add no-op, or remove→remove no-op) — no surprise removal.
-    favStatusBar.command = favorited ? "ccStatusDot.fav.removeTab" : "ccStatusDot.fav.addTab";
     favStatusBar.show();
 }
 
@@ -2298,21 +2278,9 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
     // moves. Best-effort try/catch mirrors the watcher tick — a stray throw
     // here must not spam.
     ctx.subscriptions.push(
-        vscode.window.tabGroups.onDidChangeTabs((e) => {
+        vscode.window.tabGroups.onDidChangeTabs(() => {
             try {
                 refreshFavStatusBar();
-                // v0.5.18 (race rank 5): refresh the tree too so the right-click
-                // menu label (setContext currentTabFavorited) tracks the tab switch
-                // in real time, not 2.5s later (avoids cascading into rank1's
-                // wrong-session mutation via a stale menu label).
-                favoritesProvider?.refresh();
-                // v0.5.18 (race rank 7): a tab open/close (structural change) flips
-                // a session's open/closed state in the tree — forceRefresh so the
-                // node icon updates immediately (avoids clicking a "looks-open"
-                // node that's actually closed → resume/reopen side effect).
-                if (e && ((e.opened && e.opened.length > 0) || (e.closed && e.closed.length > 0))) {
-                    favoritesProvider?.forceRefresh();
-                }
             } catch {
                 /* best-effort — next watcher tick retries */
             }
@@ -2320,7 +2288,6 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
         vscode.window.tabGroups.onDidChangeTabGroups(() => {
             try {
                 refreshFavStatusBar();
-                favoritesProvider?.refresh();
             } catch {
                 /* best-effort */
             }

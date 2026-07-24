@@ -376,23 +376,8 @@ check(
 // Add/Remove menu labels via setContext('ccStatusDot.fav.currentTabFavorited');
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
-// v0.5.18: 500ms tick 竞态修复(rank1-7)— IIFE §A 注册 onDidChangeViewState(焦点翻转同步发 __ccsdActiveSid,源头)+ §G activeSid panelMap.active-first + §Z 清 __ccsdLastActiveSid + companion resolveActiveSid/onDidChangeTabs/★command 同源/实时/幂等。
-check('IIFE.21c banner carries v0.5.18 stamp', /\/\*cc-status-dot-injected:v0.5.18:/.test(iife));
-check(
-  'IIFE.30 v0.5.18 §A registers panelTab.onDidChangeViewState (sync __ccsdActiveSid on focus flip — root-cause fix)',
-  /t\.panelTab\.onDidChangeViewState\(/.test(iife) && /e\.webviewPanel&&e\.webviewPanel\.active===true/.test(iife),
-  'rank3: pre-0.5.18 IIFE never registered onDidChangeViewState → 纯切 tab 只靠 §H 500ms tick 更新 __ccsdActiveSid(≤500ms 延迟);现在焦点翻转同步发布,所有读 __ccsdActiveSid 的消费者实时',
-);
-check(
-  'IIFE.30b v0.5.18 §G token SBI activeSid uses panelMap.active-first (no stale sid on tab switch)',
-  /var activeSid="";try\{var __pm=globalThis\.__ccsdSidToPanel/.test(iife),
-  'rank2: §G 切 tab 后读旧 __ccsdActiveSid 显旧会话 token/cost(同 v0.5.17 ★ 问题,token 维度);改 panelMap.active-first 实时',
-);
-check(
-  'IIFE.30c v0.5.18 §Z onDidDispose clears __ccsdLastActiveSid pointing at closed session (no frozen dead token)',
-  /__ccsdLastActiveSid===t\.__ccsdSid\)\{globalThis\.__ccsdLastActiveSid=""/.test(iife),
-  'rank4: 关活动 panel 后 __ccsdLastActiveSid 残留 → §G fallback 显冻结死会话 token;清掉',
-);
+// v0.5.17: ★ 切 tab 瞬态修复 — activeCcSidOrLoading 优先 panelTab.active(实时)而非 label/__ccsdActiveSid(500ms tick 延迟)。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
+check('IIFE.21c banner carries v0.5.17 stamp', /\/\*cc-status-dot-injected:v0.5.17:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));

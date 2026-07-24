@@ -1132,23 +1132,6 @@ check(
   /__ccsdSidToPanel as Record[\s\S]{0,300}?\.active === true/.test(companionSrc),
   'switch-tab 瞬态根因:__ccsdActiveSid 由 IIFE 500ms tick 更新(延迟),切到已打开 B 时还指 A(已收藏)→ ★ 误显 A;panelTab.active 是 VSCode 实时,B 激活即 true → 直接命中 B',
 );
-check(
-  'FAV.47a v0.5.18 resolveActiveSid (WRITE path) also uses panelMap.active-first (display/write same source)',
-  /function\s+resolveActiveSid[\s\S]{0,2000}?__ccsdSidToPanel[\s\S]{0,600}?\.active === true/.test(companionSrc),
-  'rank1: WRITE paths (toggle/add/remove) must use the same realtime sid source as DISPLAY (activeCcSidOrLoading) — else 切 tab 后点 ★ 显 B 写 A(误收藏错会话)',
-);
-check(
-  'FAV.47b v0.5.18 onDidChangeTabs callback also refreshes tree (setContext) + forceRefresh on open/close',
-  /onDidChangeTabs\([\s\S]{0,600}?favoritesProvider\?\.refresh\(\)[\s\S]{0,800}?forceRefresh/.test(companionSrc),
-  'rank5+7: tab switch refreshes tree setContext (right-click label realtime); tab open/close forceRefresh (node open/closed icon realtime, avoid clicking dead "open" node)',
-);
-check(
-  'FAV.47c v0.5.18 ★ status bar command dynamically binds add/remove (idempotent, no double-click surprise)',
-  /favStatusBar\.command\s*=\s*favorited\s*\?\s*["']ccStatusDot\.fav\.removeTab["']\s*:\s*["']ccStatusDot\.fav\.addTab["']/.test(
-    companionSrc,
-  ),
-  'rank6: pre-0.5.18 bound toggleTab (non-idempotent): double-click=add→remove=net no-change, user re-clicked; add/remove idempotent (double-click=no-op)',
-);
 
 // cleanup
 try {

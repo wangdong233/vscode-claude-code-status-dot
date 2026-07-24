@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.25";
+const MIN_PATCHER_VERSION = "0.5.26";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.25";
+    return effectiveConfig?.injectVersion ?? "v0.5.26";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1783,7 +1783,7 @@ function refreshFavStatusBar(): void {
             lastFavBarSig = "loading";
             favStatusBar.text = "$(loading~spin)";
             favStatusBar.color = undefined;
-            favStatusBar.tooltip = "CC Favorites — session loading…";
+            favStatusBar.tooltip = "CC Favorites — loading…";
             // v0.5.21: disable click while loading. The spinner is a 500ms-tick
             // snapshot; by the time the user reacts & clicks, loading may have
             // cleared (sid resolved) — a fixed toggleTab command would then run
@@ -1819,7 +1819,7 @@ function refreshFavStatusBar(): void {
             lastFavBarSig = "loading";
             favStatusBar.text = "$(loading~spin)";
             favStatusBar.color = undefined;
-            favStatusBar.tooltip = "CC Favorites — verifying…";
+            favStatusBar.tooltip = "CC Favorites — loading…";
             favStatusBar.command = undefined;
             favStatusBar.show();
         }

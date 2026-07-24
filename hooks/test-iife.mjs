@@ -224,9 +224,9 @@ check(
 // are GONE from the baked IIFE so a regression that re-adds the dead logger
 // surfaces here.
 check(
-  'IIFE.12b2 v0.2.9-debug __ccsdDbg logger REMOVED from IIFE (F3)',
-  !/__ccsdDbg(?:Log)?\b/.test(iife) && !/_panel-debug\.log/.test(iife) && !/__ccsdRenderMap/.test(iife),
-  'a debug logger / render-map reference survived — these were removed in v0.5.2',
+  'IIFE.12b2 v0.2.9-debug __ccsdDbg logger REMOVED from IIFE (F3) [v0.5.27: __ccsdDebug temp diag allowed]',
+  !/__ccsdDbg(?:Log)?\b/.test(iife) && !/__ccsdRenderMap/.test(iife),
+  'v0.5.2 removed __ccsdDbg + __ccsdRenderMap (dead loggers). v0.5.27 temporarily re-adds __ccsdDebug (CCSD_DEBUG=1 gated, writes _panel-debug.log) to diagnose §F/§H tab-vs-lights divergence — will be removed once root cause confirmed.',
 );
 // v0.2.6 blue-via-content: per-panel reader pending branch. The IIFE's
 // per-panel tick reads j.pending from the status file and renders our blue
@@ -381,7 +381,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.26 stamp', /\/\*cc-status-dot-injected:v0.5.26:/.test(iife));
+check('IIFE.21c banner carries v0.5.27 stamp', /\/\*cc-status-dot-injected:v0.5.27:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));

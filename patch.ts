@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.26";
+const INJECT_VERSION = "v0.5.27";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -2491,6 +2491,7 @@ function buildIIFE(resDir: string): string {
         // 7d, the only remaining per-tab-vs-SBI divergence — see STATES.md §7.4).
         `var now=Date.now();`,
         /*§H per-tab decay (done>5min / running-stale) — BEFORE the pending check so a decayed session with j.pending=true does not false-stick 🔵. Unified predicate __ccsdDecayState (decayInterrupted=false — interrupted stays red on tab for diagnostics, STATES.md §7.4); see its declaration for the full running-decay rationale.*/ `st=__ccsdDecayState(st,since,j,now,false);`,
+        /*v0.5.27 diag (TEMPORARY): §H sid-read + decay decision log. Gated by CCSD_DEBUG=1 (default off). Writes _panel-debug.log (2MB capped). Purpose: confirm why hi#1 tab goes gray while §F four-light stays blue. Removed once root cause confirmed.*/ `if(globalThis.__ccsdDebug===undefined){try{globalThis.__ccsdDebug=(process&&process.env&&process.env.CCSD_DEBUG==="1")||false}catch(_){globalThis.__ccsdDebug=false}}if(globalThis.__ccsdDebug){try{var _dag=since?Math.round((now-since)/1000)+"s":"-";var _dlt=(j&&j.tokens&&j.tokens.last_ts)?Math.round((now-j.tokens.last_ts)/1000)+"s":"-";fs.appendFileSync(pth.join(DIR,"_panel-debug.log"),new Date().toISOString().slice(11,23)+" H sid="+(sid||"UNSET")+" read="+(j?"ok":"FAIL")+" st0="+(j?j.state:"-")+" since="+_dag+" lt="+_dlt+" pend="+pend+" sub="+(j&&j.activeSubagents||0)+" -> "+st+String.fromCharCode(10))}catch(_){}}`,
         `/*reader pending (Notification OR Stop last-message semantic match): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
         `if(pend && st!=="idle"){try{p.iconPath=ccuri(favOf(pth.join(RES,"claude-logo-pending.svg"),sid))}catch(e){}return}`,
         `var svg;`,

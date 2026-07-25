@@ -3321,32 +3321,20 @@ function listAllJsonUnder(home) {
 
 // --- summary --------------------------------------------------------------
 
-// --- §AA v0.2.6 blue-via-content: Stop last_assistant_message → pending ---
-// The Stop case now reads payload.last_assistant_message and, if it clearly
-// awaits user input/decision/feedback (AWAIT_USER_RE match or short
-// standalone question to user), writes pending:true instead of the
-// historical pending:false. This extends the existing permission-blue
-// (Notification → pending:true) to cover "Claude replied and is waiting on
-// you" — the reader's per-tab tick renders blue (pending.svg) over green
-// (done.svg) and the bottom SBI 🔵 counts it. Done/green logic is untouched
-// when the message is neutral.
-//
-// Key invariants under test:
-//  1. ZH idiom "等你测试反馈" → pending:true (user's primary luceo scenario)
-//  2. ZH decision "你决定" / "你来选" → pending:true
-//  3. EN idiom "let me know" / "please confirm" / "your call" → pending:true
-//  4. Short standalone question "Should I proceed with the migration?"
-//     → pending:true (fallback rule, <=60 chars + ?)
-//  5. Neutral completion "已完成所有改动" / "Done. Shipped." → pending:false
-//  6. Technical "等待加载完成" (no 你) → pending:false (specificity win)
-//  7. LLM self-narration "我不确定该怎么做" → pending:false (no idiom match)
-//  8. Missing field (old CC) → pending:false (typeof === 'string' guard)
-//  9. stop_hook_active=true → pending:false (CC anti-loop gate, even with
-//     keyword in message)
-// 10. Code block stripped: ```letMeKnow``` inside fenced code → pending:false
-// 11. Stuck-running (luceo): background_tasks drift + "等你测试反馈" →
-//     state='running' AND pending=true (the bug-fix scenario)
-// 12. stop_hook_active missing/false + keyword → pending:true (default path)
+// --- §AA v0.5.29: Stop ALWAYS clears pending (text-heuristic REMOVED) -----
+// v0.5.29 removed the v0.2.6 "blue-via-content" awaitsUser text-heuristic
+// (lastMessageRequestsUserInput / AWAIT_USER_RE) that inferred "pending" from
+// Claude's last_assistant_message. It over-fired on conversational greetings
+// ending in a question ("有什么可以帮你的吗？" / "How can I help you?") because it
+// could not distinguish a polite question from a blocking decision — the root
+// cause of the reported "hi tab goes blue" bug. Stop now returns pending:false
+// unconditionally; blue is driven by the Notification hook (a real permission
+// prompt CC is presenting) + the in-window __ps IPC set (rename_tab
+// hasPendingPermissions / update_session_state waiting_input — both derive
+// from permissionRequests.length>0, a genuine open dialog), read by §H/§F.
+// These tests lock the new contract: regardless of last_assistant_message
+// content, Stop -> pending===false. (The old §AA/§AB/§AC idiom-precision
+// suites are deleted with the heuristic — they tested dead behavior.)
 
 function checkPending(name, got, expectedPending, expectedState) {
   if (got === undefined) return;
@@ -3373,139 +3361,73 @@ function checkPending(name, got, expectedPending, expectedState) {
   }
 }
 
-// §AA.1 ZH "等你测试反馈" → pending:true + state=done (user's luceo scenario)
+// Representative messages the OLD heuristic flagged (or was tempted to flag) —
+// ALL must now yield pending:false.
 checkPending(
-  '§AA.1 Stop last_message contains "等你测试反馈" -> pending=true, state=done',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '已完成实现，等你测试反馈' }),
-  true,
+  '§AA.1 Stop greeting "你好！有什么我可以帮你的吗？" -> pending=false (the reported hi-blue bug)',
+  fire(newTempHome(), 'Stop', { last_assistant_message: '你好！有什么我可以帮你的吗？' }),
+  false,
   'done',
 );
-
-// §AA.2 ZH decision "你决定" → pending:true
 checkPending(
-  '§AA.2 Stop last_message contains "下一步你决定" -> pending=true',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '改完了，下一步你决定' }),
-  true,
+  '§AA.2 Stop greeting "How can I help you?" -> pending=false',
+  fire(newTempHome(), 'Stop', { last_assistant_message: 'Hi! How can I help you today?' }),
+  false,
+  'done',
 );
-
-// §AA.3 ZH "请确认" / "你来选" → pending:true
 checkPending(
-  '§AA.3 Stop last_message contains "请确认是否继续" -> pending=true',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '代码已改完，请确认是否继续' }),
-  true,
-);
-
-// §AA.4 EN "let me know" → pending:true
-checkPending(
-  '§AA.4 Stop last_message contains "let me know" -> pending=true',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'Done. Let me know if you want tests added.' }),
-  true,
-);
-
-// §AA.5 EN "please confirm" → pending:true
-checkPending(
-  '§AA.5 Stop last_message contains "please confirm" -> pending=true',
+  '§AA.3 Stop HARD idiom "Please confirm" -> pending=false (heuristic removed)',
   fire(newTempHome(), 'Stop', { last_assistant_message: 'Rebased onto main. Please confirm the branch.' }),
-  true,
+  false,
 );
-
-// §AA.6 EN "your call" → pending:true
 checkPending(
-  '§AA.6 Stop last_message contains "your call" -> pending=true',
-  fire(newTempHome(), 'Stop', { last_assistant_message: "It's your call — ship now or wait for QA." }),
-  true,
+  '§AA.4 Stop short question "需要继续吗？" -> pending=false',
+  fire(newTempHome(), 'Stop', { last_assistant_message: '需要继续吗？' }),
+  false,
 );
-
-// §AA.7 short standalone question fallback → pending:true
 checkPending(
-  '§AA.7 Stop last_message short "?" ending -> pending=true (fallback)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'Should I proceed with the migration?' }),
-  true,
+  '§AA.5 Stop SOFT idiom "let me know" -> pending=false',
+  fire(newTempHome(), 'Stop', { last_assistant_message: 'Done. Let me know if you want tests added.' }),
+  false,
 );
-
-// §AA.8 ZH short standalone "？" ending → pending:true
 checkPending(
-  '§AA.8 Stop last_message short "？" ending -> pending=true (fallback)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '需要现在执行吗？' }),
-  true,
+  '§AA.6 Stop decision idiom "你来定吧" -> pending=false',
+  fire(newTempHome(), 'Stop', { last_assistant_message: '这事你来定吧' }),
+  false,
 );
-
-// §AA.9 NEUTRAL completion → pending:false (green logic untouched)
 checkPending(
-  '§AA.9 Stop neutral completion "已完成所有改动" -> pending=false',
+  '§AA.7 Stop ZH "等你测试反馈" (luceo scenario) -> pending=false',
+  fire(newTempHome(), 'Stop', { last_assistant_message: '已完成实现，等你测试反馈' }),
+  false,
+);
+checkPending(
+  '§AA.8 Stop neutral "已完成所有改动" -> pending=false',
   fire(newTempHome(), 'Stop', { last_assistant_message: '已完成所有改动并跑了测试，全绿。' }),
   false,
 );
-
-// §AA.10 EN neutral "Done. Shipped." → pending:false
 checkPending(
-  '§AA.10 Stop neutral "Done. Shipped." -> pending=false',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'Done. Shipped in commit abc123.' }),
+  '§AA.9 Stop rhetorical "Why?" -> pending=false',
+  fire(newTempHome(), 'Stop', { last_assistant_message: 'Why?' }),
   false,
 );
-
-// §AA.11 technical "等待加载完成" (no "你") → pending:false (specificity win)
+// Defensive: missing / non-string last_assistant_message (old CC versions).
 checkPending(
-  '§AA.11 Stop technical "等待加载完成" -> pending=false (no 你 marker)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '等待加载完成，然后退出。' }),
-  false,
-);
-
-// §AA.12 LLM self-narration "我不确定该怎么做" → pending:false
-checkPending(
-  '§AA.12 Stop "我不确定该怎么做" -> pending=false (LLM self-narration)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '我不确定该怎么做，需要查文档。' }),
-  false,
-);
-
-// §AA.13 missing last_assistant_message field (old CC) → pending:false
-checkPending(
-  '§AA.13 Stop with no last_assistant_message field -> pending=false (backward-compat)',
+  '§AA.10 Stop with no last_assistant_message field -> pending=false (backward-compat)',
   fire(newTempHome(), 'Stop', {}),
   false,
 );
-
-// §AA.14 non-string last_assistant_message (defensive) → pending:false
 checkPending(
-  '§AA.14 Stop non-string last_assistant_message (12345) -> pending=false',
+  '§AA.11 Stop non-string last_assistant_message (12345) -> pending=false',
   fire(newTempHome(), 'Stop', { last_assistant_message: 12345 }),
   false,
 );
-
-// §AA.15 stop_hook_active=true → pending:false (CC anti-loop gate)
-{
-  const home = newTempHome();
-  const final = fire(home, 'Stop', {
-    stop_hook_active: true,
-    last_assistant_message: '等你反馈再继续',
-  });
-  // Even with "等你" keyword, stop_hook_active=true MUST skip the pending
-  // decision (CC's anti-loop gate: Stop hook firing on its own continuation
-  // leaves an empty/stale message).
-  checkPending('§AA.15 Stop stop_hook_active=true + keyword -> pending=false (anti-loop gate)', final, false);
-}
-
-// §AA.16 code block stripped: ```letMeKnow``` inside fenced code → pending:false
+// stop_hook_active no longer matters (no heuristic to gate) — still false.
 checkPending(
-  '§AA.16 Stop fenced-code-block "letMeKnow" identifier stripped -> pending=false',
-  fire(newTempHome(), 'Stop', {
-    last_assistant_message: 'Example:\n```js\nconst letMeKnow = () => {};\n```\n完成。',
-  }),
+  '§AA.12 Stop stop_hook_active=true + keyword -> pending=false',
+  fire(newTempHome(), 'Stop', { stop_hook_active: true, last_assistant_message: '等你反馈再继续' }),
   false,
 );
-
-// §AA.17 inline code stripped: `letMeKnow` → pending:false
-checkPending(
-  '§AA.17 Stop inline-code `letMeKnow` stripped -> pending=false',
-  fire(newTempHome(), 'Stop', {
-    last_assistant_message: 'Use the `letMeKnow` helper. Done.',
-  }),
-  false,
-);
-
-// §AA.18 STUCK-RUNNING scenario (luceo): inflight>0 + "等你测试反馈" →
-// state=running AND pending=true (the bug-fix scenario — pending overrides
-// running-yellow at the reader).
+// Stuck-running: inflight>0 keeps state=running, but pending is STILL cleared.
 {
   const home = newTempHome();
   const final = fire(home, 'Stop', {
@@ -3513,421 +3435,50 @@ checkPending(
     last_assistant_message: '实现完成，等你测试反馈。',
   });
   checkPending(
-    '§AA.18 Stop stuck-running + last_message 等你 -> state=running AND pending=true (luceo)',
+    '§AA.13 Stop stuck-running + awaits-message -> state=running AND pending=false',
     final,
-    true,
+    false,
     'running',
   );
 }
-
-// §AA.19 cross-event: Stop writes pending:true, next UserPromptSubmit clears it
-// (verifies pending is cleared when user actually replies — blue light turns
-// green/yellow on the new turn, doesn't false-stick).
+// Cross-event: Stop clears pending; a subsequent UserPromptSubmit keeps it
+// cleared (does not re-arm). Guards against a regression that re-introduces
+// sticky pending.
 {
   const home = newTempHome();
   fire(home, 'Stop', { last_assistant_message: '等你测试反馈' });
-  const before = readState(home);
-  const beforePending = before && before.pending;
-  const after = fire(home, 'UserPromptSubmit');
-  const afterPending = after && after.pending;
-  const ok = beforePending === true && afterPending === false;
+  const afterStop = readState(home);
+  const afterPrompt = fire(home, 'UserPromptSubmit');
+  const ok = afterStop && afterStop.pending === false && afterPrompt && afterPrompt.pending === false;
   if (ok) {
     pass++;
-    console.log('  PASS  §AA.19 Stop pending=true cleared by next UserPromptSubmit');
+    console.log('  PASS  §AA.14 Stop clears pending; UserPromptSubmit keeps it cleared');
   } else {
     fail++;
     console.log(
-      '  FAIL  §AA.19 expected pending true->false across Stop->UserPromptSubmit, got before=' +
-        beforePending +
-        ' after=' +
-        afterPending,
+      '  FAIL  §AA.14 expected pending false after Stop AND after UserPromptSubmit, got afterStop=' +
+        (afterStop && afterStop.pending) +
+        ' afterPrompt=' +
+        (afterPrompt && afterPrompt.pending),
     );
   }
 }
-
-// §AA.20 Notification still writes pending:true (regression — blue-via-content
-// must not break the existing permission path).
+// Notification STILL writes pending:true (unchanged) — regression guard that
+// the permission-blue source was NOT accidentally neutered.
 checkPending(
-  '§AA.20 Notification still writes pending=true (permission regression)',
+  '§AA.15 Notification still writes pending=true (permission regression)',
   fire(newTempHome(), 'Notification'),
   true,
 );
-
-// §AA.21 StopFailure with last_message (error string) → pending:false (does
-// NOT walk the Stop pending path; interrupted state preserved, error kept).
-// Guards against a future refactor merging the StopFailure case into Stop.
+// StopFailure still -> interrupted + pending:false.
 checkPending(
-  '§AA.21 StopFailure carries error string but -> pending=false, state=interrupted',
+  '§AA.16 StopFailure -> pending=false, state=interrupted',
   fire(newTempHome(), 'StopFailure', {
     error: 'rate_limit',
     last_assistant_message: 'API Error: Rate limit reached',
   }),
   false,
   'interrupted',
-);
-
-// --- §AA.22 v0.5.2 (#1 blue→yellow flash): report-closer exclusion -----------
-// The user's flash: a long RESEARCH/PROGRESS report whose trailing line is a
-// soft-continuer question ("要不要继续？" / "是否继续？" / "want to continue?")
-// was treated as a blocking wait → pending=true → tab flashed blue, then CC
-// auto-continued (PreToolUse) → cleared pending → yellow. The fix splits the
-// fallback markers into HARD (你/您/you/确认/决定/选/should I/shall I/can you/
-// could you/may I — win regardless of body length) vs SOFT continuers (继续/
-// 需要/想要/proceed/continue/need/want — suppressed when the prose BEFORE the
-// trailing question line exceeds REPORT_CLOSER_BODY_CHARS=120). These pin BOTH
-// the suppression (report closer → false) and the HARD/short-body survivors.
-// The idiom list (AWAIT_USER_RE) is untouched — only the fallback path the
-// user's case hits (the list contains NO 要不要/是否继续 entry).
-const LONG_REPORT_ZH =
-  '调研完成。本轮审查覆盖三个模块的代码结构、依赖关系与近期变更历史。模块 A 耦合度最高，存在 12 处直接依赖，重构风险大；模块 B 通过接口隔离，中等风险；模块 C 独立性最好，建议优先从这里动手。整体改动预计 3-5 个 PR，每个独立可回滚，可在下周开始。';
-// §AA.22a: the user's EXACT case — long report + "要不要继续？" → false
-checkPending(
-  '§AA.22a Stop long ZH report + "要不要继续？" -> pending=false (v0.5.2 report-closer SOFT-continuer suppression)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_ZH + '\n要不要继续？' }),
-  false,
-);
-// §AA.22b: HARD idiom "请确认" wins via AWAIT_USER_RE regardless of body length
-checkPending(
-  '§AA.22b Stop long ZH report + "请确认是否继续" -> pending=true (HARD idiom 请确认 wins over report length)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_ZH + '\n请确认是否继续？' }),
-  true,
-);
-// §AA.22c: SOFT continuer 继续 on a long report → false
-checkPending(
-  '§AA.22c Stop long ZH report + "是否继续？" -> pending=false (SOFT 继续 suppressed by long body)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_ZH + '\n是否继续？' }),
-  false,
-);
-// §AA.22d: standalone short soft-continuer question (body 0) → true (design intent)
-checkPending(
-  '§AA.22d Stop standalone "需要继续吗？" -> pending=true (SOFT 需要, short body — design intent preserved)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '需要继续吗？' }),
-  true,
-);
-// §AA.22e: EN long report + "want to continue?" → false (SOFT want/continue; no
-// idiom match — "want me to" is the idiom, not bare "want")
-const LONG_REPORT_EN =
-  'Research complete. I audited the three modules for coupling, dependency direction, and recent change history. Module A is the most coupled with 12 direct edges and high refactor risk; Module B is interface-isolated (medium risk); Module C is the most independent and the recommended starting point. The work splits into 3-5 independent, individually-revertible PRs.';
-checkPending(
-  '§AA.22e Stop long EN report + "want to continue?" -> pending=false (SOFT want/continue suppressed)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nwant to continue?' }),
-  false,
-);
-// §AA.22f: medium body (<120 chars) + soft continuer → true (below threshold)
-checkPending(
-  '§AA.22f Stop medium body + "需要继续吗？" -> pending=true (body < REPORT_CLOSER_BODY_CHARS threshold)',
-  fire(newTempHome(), 'Stop', {
-    last_assistant_message: '我已修复登录页的两个 bug，并补了单元测试，全绿。\n需要继续吗？',
-  }),
-  true,
-);
-// §AA.22g: long report + "Should I continue?" → true (HARD "should i" wins)
-checkPending(
-  '§AA.22g Stop long EN report + "Should I continue?" -> pending=true (HARD should-i wins over report length)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nShould I continue?' }),
-  true,
-);
-// §AA.22h-n: v0.5.2 round-2 — the report-closer gate now covers the IDIOM
-// path, not only the fallback. The v0.5.2 round-1 fix (§AA.22a-g) gated ONLY
-// the fallback SOFT continuer (bare want/continue/need) because the user's ZH
-// case ("要不要继续?") has NO idiom-list entry and falls through to the
-// fallback. But the EN equivalents of that exact case hit the IDIOM list
-// instead: "want me to continue?" matches the 'want me to' idiom (L314) and
-// "let me know." matches 'let me know' (L304) — both returned true
-// UNCONDITIONALLY at the old `if (AWAIT_USER_RE.test(s)) return true;` line,
-// flashing blue on a long report. These pin the closed gap on the idiom path.
-// §AA.22h: long EN report + "want me to continue?" → false (SOFT idiom 'want
-// me to' gated by long body — the precise EN equivalent of the user's ZH case)
-checkPending(
-  '§AA.22h Stop long EN report + "want me to continue?" -> pending=false (SOFT idiom want-me-to gated by long body)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nwant me to continue?' }),
-  false,
-);
-// §AA.22i: long EN report + "let me know." → false (SOFT idiom 'let me know'
-// gated by long body; no trailing '?' required — the idiom itself is the signal)
-checkPending(
-  '§AA.22i Stop long EN report + "let me know." -> pending=false (SOFT idiom let-me-know gated by long body)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nlet me know.' }),
-  false,
-);
-// §AA.22j: standalone short "want me to continue?" → true (SOFT idiom, short
-// body — design intent preserved, mirrors §AA.22d for the fallback path)
-checkPending(
-  '§AA.22j Stop standalone "want me to continue?" -> pending=true (SOFT idiom, short body — design intent preserved)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'want me to continue?' }),
-  true,
-);
-// §AA.22k: long report + SOFT and HARD idioms co-occurring → true (HARD
-// 'please confirm' wins over the SOFT 'let me know' — guards the both-present
-// case so a genuine blocking confirmation never gets suppressed)
-checkPending(
-  '§AA.22k Stop long EN report + "Please confirm. Let me know." -> pending=true (HARD please-confirm wins over co-occurring SOFT)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: LONG_REPORT_EN + '\nPlease confirm. Let me know.' }),
-  true,
-);
-
-// --- §AB v0.2.6 round-2: keyword-accuracy regression locks (HIGH/MEDIUM) ---
-// The v0.2.6 round-1 list had three HIGH-severity ZH false-positive vectors
-// and three MEDIUM EN/fallback vectors. Round-2 tightened the list (removed
-// bare '你定' / '看你的' / '告诉我' / 'wait for you' / 'your input'; added
-// user-direct forms like '你来定' / '听你的' / '告诉我你的'; added semantic
-// anchor to the '?' fallback rule). These tests pin BOTH directions:
-//   (a) the previously-firing false-positive strings now return pending:false;
-//   (b) the new precision entries still return pending:true (no over-tighten).
-// A future edit that re-added a bare 2-char "你X" form or dropped the
-// fallback semantic anchor would fail one of these.
-
-// §AB.1 HIGH: '你定' substring matched "你定义/你定制/你定位/你定期"
-checkPending(
-  '§AB.1 Stop "你定义的函数有问题" -> pending=false (你定 false+)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '你定义的函数有问题' }),
-  false,
-);
-checkPending(
-  '§AB.1b Stop "你定制了 UI 组件" -> pending=false (你定 false+)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '你定制了 UI 组件' }),
-  false,
-);
-checkPending(
-  '§AB.1c Stop "你定位到了问题" -> pending=false (你定 false+)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '你定位到了问题' }),
-  false,
-);
-
-// §AB.2 HIGH: '看你的' substring matched "我看你的代码" (CC code-review)
-checkPending(
-  '§AB.2 Stop "我看你的代码发现 bug" -> pending=false (看你的 false+)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '我看你的代码发现 bug' }),
-  false,
-);
-checkPending(
-  '§AB.2b Stop "我看了你的 PR" -> pending=false (看你的 false+)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '我看了你的 PR，有几处建议' }),
-  false,
-);
-
-// §AB.3 HIGH: '告诉我' substring matched past-tense/3rd-person
-checkPending(
-  '§AB.3 Stop "你昨天告诉我的接口名" -> pending=false (告诉我 past-tense)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '你昨天告诉我的接口名我用了' }),
-  false,
-);
-checkPending(
-  '§AB.3b Stop "文档告诉我" -> pending=false (告诉我 3rd-person)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '文档告诉我这个参数是可选的' }),
-  false,
-);
-checkPending(
-  '§AB.3c Stop "日志告诉我" -> pending=false (告诉我 3rd-person log)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '日志告诉我服务已启动' }),
-  false,
-);
-
-// §AB.4 MEDIUM: 'wait for you' substring matched "wait for your input file"
-checkPending(
-  '§AB.4 Stop "wait for your input file" -> pending=false (wait for your X)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'I will wait for your input file to parse it.' }),
-  false,
-);
-
-// §AB.5 MEDIUM: 'your input' substring matched "your input handler/validation"
-checkPending(
-  '§AB.5 Stop "updated your input handler" -> pending=false (your input + technical)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'I updated your input handler to validate the form.' }),
-  false,
-);
-checkPending(
-  '§AB.5b Stop "your input is invalid" -> pending=false (your input + technical)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'your input is invalid; please retry.' }),
-  false,
-);
-
-// §AB.6 MEDIUM: fallback '?' rule matched rhetorical/informational questions
-checkPending(
-  '§AB.6 Stop "Why?" -> pending=false (rhetorical, no user anchor)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'Why?' }),
-  false,
-);
-checkPending(
-  '§AB.6b Stop "什么意思?" -> pending=false (info question, no user anchor)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '什么意思?' }),
-  false,
-);
-checkPending(
-  '§AB.6c Stop "效果如何?" -> pending=false (info question, no user anchor)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '效果如何?' }),
-  false,
-);
-checkPending(
-  '§AB.6d Stop "How does this work?" -> pending=false (info question, no user anchor)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'How does this work?' }),
-  false,
-);
-checkPending(
-  '§AB.6e Stop "What did the refactor break?" -> pending=false (info question, no user anchor)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'What did the refactor break?' }),
-  false,
-);
-checkPending(
-  '§AB.6f Stop "为什么这样设计?" -> pending_false (rhetorical, no user anchor)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '为什么这样设计?' }),
-  false,
-);
-
-// §AB.7 VALID precision entries STILL fire (no over-tighten regression)
-checkPending(
-  '§AB.7 Stop "你来定吧" -> pending=true (你来定 — v0.2.6 round-2 added)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '这事你来定吧' }),
-  true,
-);
-checkPending(
-  '§AB.7b Stop "听你的" -> pending=true (听你的 — v0.2.6 round-2 added)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '都行，听你的' }),
-  true,
-);
-checkPending(
-  '§AB.7c Stop "你说呢" -> pending=true (你说呢 — v0.2.6 round-2 added)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '你说呢' }),
-  true,
-);
-checkPending(
-  '§AB.7d Stop "告诉我你的决定" -> pending=true (告诉我你的 — suffix-anchored)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '告诉我你的决定，我继续推进' }),
-  true,
-);
-checkPending(
-  '§AB.7e Stop "What do you think?" -> pending=true (EN round-2 added)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'What do you think?' }),
-  true,
-);
-checkPending(
-  '§AB.7f Stop "Over to you." -> pending=true (EN round-2 added)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'Over to you.' }),
-  true,
-);
-checkPending(
-  '§AB.7g Stop "wait for you to respond" -> pending=true (wait for you to — suffix-anchored)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'I will wait for you to respond before continuing.' }),
-  true,
-);
-
-// --- §AC v0.2.6 round-3: EN substring-FP + ZH 您 + code-strip locks --------
-// Round-2 closed the ZH substring-FP family (你定/看你的/告诉我) but the SAME
-// FP class survived on the EN side: 'your call'→callback, 'waiting for
-// you'→waiting for your X, 'over to you'→over to your team, 'you pick'→
-// you picked, 'you decide'→you decided. Polite 您 form was also missing
-// (false-negative for formal register). Code-strip missed CommonMark
-// indented blocks and leaked nested-fence inner content.
-// All entries migrated to AWAIT_USER_PHRASES_RE with \b / (?!X) anchors;
-// escapeRe() helper now wraps AWAIT_USER_PHRASES so future phrases can
-// safely include regex metachars ('?', '.') without silent corruption.
-
-// §AC.1 HIGH: 'your call' substring matched 'your callback' / 'your callable'
-checkPending(
-  '§AC.1 Stop "updated your callback" -> pending=false (your call → callback HIGH)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'I updated your callback to handle the error.' }),
-  false,
-);
-checkPending(
-  '§AC.1b Stop "your callable interface" -> pending=false (your call → callable HIGH)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'The your callable interface needs an explicit thisArg.' }),
-  false,
-);
-// §AC.2 HIGH: 'waiting for you' substring matched 'waiting for your X'
-checkPending(
-  '§AC.2 Stop "waiting for your input file" -> pending=false (waiting for you → your X HIGH)',
-  fire(newTempHome(), 'Stop', {
-    last_assistant_message: 'I am waiting for your input file to parse before proceeding.',
-  }),
-  false,
-);
-checkPending(
-  '§AC.2b Stop "waiting for your review" -> pending=false (waiting for you → your X HIGH)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: "I'm waiting for your review on the PR." }),
-  false,
-);
-// §AC.3 HIGH: 'over to you' substring matched 'over to your X'
-checkPending(
-  '§AC.3 Stop "hand this over to your team" -> pending=false (over to you → your X HIGH)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'I will hand this over to your team for review.' }),
-  false,
-);
-checkPending(
-  '§AC.3b Stop "pass over to your reviewer" -> pending=false (over to you → your X HIGH)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'I will pass over to your reviewer now.' }),
-  false,
-);
-// §AC.4 MEDIUM: 'you pick' / 'you decide' matched past-tense 'picked' / 'decided'
-checkPending(
-  '§AC.4 Stop "option you picked earlier" -> pending=false (you pick → picked MEDIUM)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'I used the option you picked earlier.' }),
-  false,
-);
-checkPending(
-  '§AC.4b Stop "approach you decided on" -> pending=false (you decide → decided MEDIUM)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'The approach you decided on is shipped.' }),
-  false,
-);
-// §AC.5 MEDIUM: polite 您 form absent from ZH list (false-negative for formal register)
-checkPending(
-  '§AC.5 Stop "等您决定" -> pending=true (等您 form MEDIUM)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '下一步等您决定。' }),
-  true,
-);
-checkPending(
-  '§AC.5b Stop "您来选吧" -> pending=true (您来选 MEDIUM)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '方案 A 和 B,您来选吧。' }),
-  true,
-);
-checkPending(
-  '§AC.5c Stop "您确认一下" -> pending=true (您确认 MEDIUM)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: '请您确认一下是否继续。' }),
-  true,
-);
-// §AC.6 MEDIUM: CommonMark indented code block exposes // / # line-comment prose
-checkPending(
-  '§AC.6 Stop indented // let me know -> pending=false (indented block MEDIUM)',
-  fire(newTempHome(), 'Stop', {
-    last_assistant_message: 'Done.\n\n    // let me know if you want me to extend\n    return x;',
-  }),
-  false,
-);
-checkPending(
-  '§AC.6b Stop tab-indented # please confirm -> pending=false (indented block MEDIUM)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'Done.\n\n\t# please confirm the deploy' }),
-  false,
-);
-// §AC.7 MEDIUM: nested-fence (4-backtick outer wrapping 3-backtick inner)
-checkPending(
-  '§AC.7 Stop nested-fence 4-outer/3-inner -> pending=false (nested fence MEDIUM)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'Done.\n````md\nExample:\n```js\nplease confirm\n```\n````' }),
-  false,
-);
-// §AC.8 VALID precision entries STILL fire (no over-tighten regression on round-3)
-checkPending(
-  '§AC.8 Stop "your call —" -> pending=true (valid your call HIGH)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: "It's your call — ship now or wait for QA." }),
-  true,
-);
-checkPending(
-  '§AC.8b Stop "waiting for you to respond" -> pending=true (valid waiting for you to HIGH)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'I am waiting for you to respond before continuing.' }),
-  true,
-);
-checkPending(
-  '§AC.8c Stop "Over to you." -> pending=true (valid over to you HIGH — pin no over-tighten)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'Over to you.' }),
-  true,
-);
-checkPending(
-  '§AC.8d Stop "You pick the option." -> pending=true (valid you pick MEDIUM)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'You pick the option, I will code it.' }),
-  true,
-);
-checkPending(
-  '§AC.8e Stop "You decide the next step." -> pending=true (valid you decide MEDIUM)',
-  fire(newTempHome(), 'Stop', { last_assistant_message: 'You decide the next step.' }),
-  true,
 );
 
 // --- §AD v0.2.7 Q1: tokens persist across SessionEnd -----------------------

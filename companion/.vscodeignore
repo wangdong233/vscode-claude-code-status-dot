@@ -14,3 +14,6 @@ package-lock.json
 yarn.lock
 npm-shrinkwrap.json
 .npmrc
+
+# v0.5.29: exclude local DevTeam runtime DB (not part of the extension)
+.devteam/**

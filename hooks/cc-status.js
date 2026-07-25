@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.1:ee85674f*/
+/*cc-status-dot-hook:v0.2.1:5dcab6fd*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -40,18 +40,24 @@
  *
  * States written:  running | done | interrupted  (+ optional `pending:true` flag)
  *   (idle is inferred by the reader when no file exists / done > 5 min;
- *    `pending:true` is written by (a) the Notification event — permission /
- *    question / elicit prompt — or (b) v0.2.6 the Stop event when Claude's
- *    last_assistant_message clearly awaits user input/decision/feedback
- *    ("等你测试反馈" / "let me know" / "please confirm" / short standalone
- *    question to user — see AWAIT_USER_RE / lastMessageRequestsUserInput).
+ *    `pending:true` is written ONLY by the Notification event — a real
+ *    permission/choice prompt CC is presenting to the user. v0.5.29 REMOVED
+ *    the v0.2.6 Stop text-heuristic (lastMessageRequestsUserInput /
+ *    AWAIT_USER_RE) that inferred "awaits user" from Claude's reply text —
+ *    it over-fired on conversational greetings ending in a question
+ *    ("有什么可以帮你的吗？" / "How can I help you?") because it could not
+ *    distinguish a polite question from a blocking decision. Stop now always
+ *    clears pending → a normal turn-end renders green uniformly.
  *    It is cleared by every user/turn-driven event (UserPromptSubmit /
- *    Pre/PostToolUse / Stop[no-match] / StopFailure). SubagentStart /
- *    SubagentStop PRESERVE cur.pending instead: they are background events
- *    with no signal about whether the parent's prompt is still open. The
- *    reader counts pending INDEPENDENTLY of state so a session can be both
- *    running AND pending, which is the typical case: a running turn paused
- *    on a permission prompt, or a finished turn whose reply awaits reply.)
+ *    Pre/PostToolUse / Stop / StopFailure). SubagentStart / SubagentStop
+ *    PRESERVE cur.pending instead: they are background events with no signal
+ *    about whether the parent's prompt is still open. The reader counts
+ *    pending INDEPENDENTLY of state so a session can be both running AND
+ *    pending, which is the typical case: a running turn paused on a
+ *    permission prompt. The per-tab §H reader additionally ORs the in-window
+ *    IPC set __ps (rename_tab hasPendingPermissions / update_session_state
+ *    waiting_input) so the tab icon paints blue the moment a real permission
+ *    dialog opens — see patch.ts §H.)
  *
  * Event mapping (MUST equal HOOK_EVENTS in patch.ts; see docs/STATES.md §2):
  *   UserPromptSubmit          -> running (activeSubagents: prefer payload
@@ -75,14 +81,13 @@
  *                                 no matching SubagentStop) and false-stick at
  *                                 running. When the payload omits
  *                                 background_tasks we read done + clear the
- *                                 residual counter. Also CLEAR pending, EXCEPT
- *                                 v0.2.6: if last_assistant_message clearly
- *                                 awaits user input (AWAIT_USER_RE match or
- *                                 short standalone question), write pending:true
- *                                 instead — the reader's per-tab tick renders
- *                                 blue (pending) over green (done) and the 🔵
- *                                 SBI counts it. Skip when stop_hook_active=true
- *                                 (CC anti-loop gate).
+ *                                 residual counter. CLEAR pending (a finished
+ *                                 turn is not awaiting user input). [v0.5.29:
+ *                                 the v0.2.6 awaitsUser text-heuristic that
+ *                                 conditionally wrote pending:true here was
+ *                                 REMOVED — it over-fired on greetings;
+ *                                 pending is now driven by Notification + the
+ *                                 in-window __ps IPC signal, not reply text.]
  *   StopFailure               -> interrupted (records the error enum)
  *                                 + CLEAR pending
  *   SessionEnd                -> delete the session's status file
@@ -202,268 +207,6 @@ const INTERRUPTED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 // (isJson parse → sinceMs check). The §C.11 test pins the fresh-mtime +
 // old-since case so the phantom cannot return silently.
 const GC_DRIFT_SINCE_MS = 7 * 24 * 60 * 60 * 1000;
-
-// v0.2.6 — blue-via-content: phrases signaling Claude's final Stop reply
-// awaits explicit user input/decision/feedback/confirmation. When the Stop
-// payload's last_assistant_message matches, the writer sets pending:true so
-// the reader's per-tab tick renders the blue pending dot (and the bottom SBI
-// 🔵 counts it) — extending the existing permission-blue (Notification →
-// pending:true) to also cover "Claude replied and is clearly waiting on you".
-// Done/green logic is untouched: pending=false fallback remains, so a neutral
-// completion ("Done. All tests pass.") stays green.
-//
-// Design philosophy — SPECIFICITY > RECALL. A false blue (wrongly lit 🔵 on
-// a finished turn) is more jarring than a false green (a missed 🔵 the user
-// reads as "done" and moves on). So we list only unambiguous idioms:
-//   - ZH uses "你" as a user-marker anchor BUT bare 2-char "你X" substrings
-//     are NOT precise enough — v0.2.6 round-2 round of fixes removed
-//     "你定" (matched "你定义的函数" / "你定制" / "你定位" / "你定期"),
-//     "看你的" (matched "我看你的代码" — extremely high-frequency in CC
-//     code-review replies), and bare "告诉我" (matched "文档告诉我 X" /
-//     "你昨天告诉我的 Y"). The remaining ZH entries are either >=3 chars
-//     OR carry a decision/feedback suffix that anchors the user-directed
-//     intent ("你决定" / "请你授权" / "告诉我你的" + object).
-//   - EN uses multi-word idioms ("let me know", "your call") so a bare
-//     "decided" inside LLM self-narration ("I decided to use approach B")
-//     cannot match (only "you decide" is listed). v0.2.6 round-2 also
-//     removed "wait for you" (substring of "waiting for you" — redundant)
-//     and tightened "your input" to "your input on" (bare "your input"
-//     matched "your input handler" / "your input validation" — frequent
-//     in CC code-edit replies).
-//   - Fallback: a short (<=60 chars) standalone question to the user, e.g.
-//     "需要继续吗？" / "Should I proceed?" — catches idioms not enumerated.
-//     v0.2.6 round-2 added a semantic-anchor gate (must contain a user
-//     pronoun 你/您/you OR an action verb 继续/确认/选/决定/proceed/confirm/
-//     choose/need/want) so rhetorical questions ("Why?", "什么意思?",
-//     "效果如何?", "How does this work?") — common inside LLM design
-//     exposition — don't false-trigger.
-// Code blocks (```fenced``` and `inline`) are stripped before matching so
-// identifiers like `letMeKnow()` inside samples don't false-trigger.
-// stop_hook_active=true MUST skip (CC's anti-loop gate: Stop hook firing on
-// its own continuation leaves an empty/stale last_assistant_message).
-const AWAIT_USER_PHRASES = [
-  // ZH: user-directed wait (你 = user marker, vs 技术 "等待加载")
-  '等你',
-  // v0.2.6 round-3 MEDIUM: polite 您 form — when the LLM mirrors a polite/
-  // enterprise register it produces "等您决定" / "您来选吧" which the 你-only
-  // list missed (false negative). The fallback USER_DIRECTED_RE has 您 but
-  // only fires for SHORT standalone questions ending in ?; declarative
-  // "等您决定" → no match. Mirrors of the highest-value user-directed 你
-  // entries; the rest of the 你 entries below cover their 您 forms implicitly
-  // only when a substring also matches (e.g. '请确认' covers '请确认您要').
-  '等您',
-  // ZH: explicit decision / delegation (>=3 chars OR suffix-anchored —
-  // v0.2.6 round-2: bare "你定" removed, matched "你定义/你定制/你定位/
-  // 你定期"; bare "看你的" removed, matched "我看你的代码" in CC reviews;
-  // bare "告诉我" removed, matched "文档告诉我" / "你昨天告诉我").
-  '你决定',
-  '您决定',
-  '你来决定',
-  '您来决定',
-  '由你决定',
-  '由你来决定',
-  '你来定',
-  '由你定',
-  '你定夺',
-  '你定一下',
-  '你来选',
-  '您来选',
-  '你选',
-  '由你来选',
-  '你确认',
-  '您确认',
-  '请确认',
-  '告诉我你的',
-  '告诉我你决定',
-  '告诉我你选',
-  '请告诉',
-  '给我反馈',
-  '提供反馈',
-  '看你怎么办',
-  '你看呢',
-  '你看咋办',
-  '你说呢',
-  '你说吧',
-  '听你的',
-  '需要你授权',
-  '请你授权',
-  '等你授权',
-  '选哪个',
-  '选哪一项',
-  '选哪一个',
-  // EN: idiomatic feedback asks (multi-word so bare "decided" cannot match).
-  // v0.2.6 round-2: bare "wait for you" removed (substring of "waiting for
-  // you" — pure redundancy, and also matched "wait for your input file");
-  // "your input" tightened to "your input on" (bare form matched "your
-  // input handler" / "your input validation" in CC code-edit replies).
-  // v0.2.6 round-3 HIGH/MEDIUM: bare 'your call' / 'waiting for you' /
-  // 'over to you' / 'you pick' / 'you decide' migrated to AWAIT_USER_PHRASES_RE
-  // with word-boundary / negative-lookahead anchors (see comment there) —
-  // bare forms matched 'your callback' / 'waiting for your input file' /
-  // 'hand over to your team' / 'you picked' / 'you decided' in CC replies.
-  'let me know',
-  'your decision',
-  'your choice',
-  'your pick',
-  'your take',
-  'your move',
-  'you choose',
-  'what do you think',
-  'what you think',
-  'would you like',
-  'want me to',
-  'wait for you to',
-  'your feedback',
-  'your input on',
-  'your thoughts',
-  'please confirm',
-  'please approve',
-  'please authorize',
-  'could you confirm',
-  'can you confirm',
-];
-// Regex-ready phrases — joined VERBATIM into the regex source (NOT escaped).
-// Used for entries needing word-boundary anchors or negative lookaheads to
-// avoid substring-false-positives. Author MUST escape any regex metachars
-// here (the escapeRe helper is applied only to AWAIT_USER_PHRASES, not here).
-//   - '\\byour call\\b(?!back|able)' — HIGH: 'your call' matched 'your
-//     callback' / 'your callable' (both common in JS/TS code-edit replies).
-//   - 'waiting for you(?!r)' — HIGH: 'waiting for you' matched 'waiting for
-//     your X' (because 'your' = 'you'+'r'). SAME FP class round-2 removed
-//     on the bare-verb 'wait for you' side; the participle was missed.
-//   - 'over to you(?!r)' — HIGH: 'over to you' matched 'hand over to your
-//     team' / 'pass over to your reviewer' / 'forward over to your CI'.
-//   - 'you pick(?!ed)' — MEDIUM: 'you pick' matched past-tense 'you picked'.
-//   - 'you decide(?!d)' — MEDIUM: 'you decide' matched past-tense
-//     'you decided' in CC code-review references to earlier user decisions.
-// v0.2.6 round-3 LOW (escaping helper): escapeRe unlocks safe use of \b
-// and lets future phrases include literal '?', '.', '+', etc. without
-// silent regex corruption (a maintainer adding 'ok?' / 'config.json'
-// would otherwise brick the joined regex).
-const AWAIT_USER_PHRASES_RE = [
-  '\\byour call\\b(?!back|able)',
-  'waiting for you(?!r)',
-  'over to you(?!r)',
-  'you pick(?!ed)',
-  'you decide(?!d)',
-];
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const AWAIT_USER_RE = new RegExp(AWAIT_USER_PHRASES.map(escapeRe).concat(AWAIT_USER_PHRASES_RE).join('|'), 'i');
-
-/**
- * v0.2.6 — Does Claude's final Stop-turn reply (last_assistant_message)
- * clearly await user input/decision/feedback? Used by the Stop case to
- * decide whether to set pending:true (reader renders blue dot + 🔵 counts).
- *
- * Strip fenced + inline code first (identifiers like `letMeKnow()` inside
- * samples must not false-trigger). Markdown bold/italic markers (* _) pass
- * through harmlessly (substring match). Empty/non-string → false (old CC
- * versions without the field simply skip this path → pending=false, the
- * historical Stop behavior).
- *
- * Returns true ONLY when the message clearly asks the user to act; a neutral
- * completion ("Done. Shipped in abc123.") returns false so the dot stays green.
- */
-function lastMessageRequestsUserInput(msg) {
-  if (typeof msg !== 'string' || !msg.trim()) return false;
-  // Strip fenced code blocks (```...``` and ~~~...~~~), CommonMark indented
-  // code blocks (4+ space / tab indent), and inline code (`...`) so code
-  // samples containing identifiers like letMeKnow() cannot match.
-  // v0.2.6 round-2: also strip ~~~ CommonMark alt-fence for completeness
-  // (``` dominates CC output but the alternative is valid CommonMark).
-  // v0.2.6 round-3 MEDIUM (indented blocks): a // or # line-comment inside
-  // an indented block exposes its prose to AWAIT_USER_RE — strip those lines
-  // first. Strips nested-list prose too, which is fine — user-directed
-  // idioms are unlikely inside list items.
-  // v0.2.6 round-3 MEDIUM (nested fences): backreference (`{3,})\1 handles
-  // the legitimate nested-fence case where the outer fence is longer than
-  // the inner (e.g. 4-backtick outer wrapping a 3-backtick demonstration).
-  // The old /```[\s\S]*?```/ closed at the FIRST ``` (the inner fence's
-  // opening), leaking the inner content into the prose pass. CommonMark
-  // forbids same-length nested fences, so the backreference is correct.
-  // v0.5.2 (#1 blue→yellow flash, round-2): the report-closer body-length
-  // gate now covers the IDIOM path too, not only the fallback. A long
-  // research/progress report whose trailing line is a SOFT feedback-ask /
-  // continuer idiom ("want me to continue?" / "let me know." / "your
-  // thoughts?") must NOT light blue — those close reports just as well as
-  // they ask a blocking question. HARD decision/confirmation idioms (please
-  // confirm / could you confirm / you choose / your decision / … and ALL ZH
-  // idioms, which never match the EN-only SOFT regex below) still win
-  // regardless of body length. The threshold is shared with the fallback.
-  const REPORT_CLOSER_BODY_CHARS = 120;
-  // EN SOFT feedback-ask / continuer idioms — subject to the report-closer
-  // body gate when NO HARD idiom co-occurs. ZH idioms never match here so
-  // they always win (the report-closer FP class is EN-only in practice; ZH
-  // 决定/确认/选 markers are high-precision per v0.2.6 round-2/3).
-  const SOFT_IDIOM_RE =
-    /(want me to|let me know|your thoughts|your feedback|your input on|what do you think|what you think|would you like|your take|your move|wait for you to)/i;
-  // EN HARD decision / confirmation idioms — always a blocking wait. When a
-  // HARD idiom co-occurs with a SOFT one in the same message, HARD wins.
-  const HARD_IDIOM_RE =
-    /(please confirm|please approve|please authorize|could you confirm|can you confirm|you choose|your decision|your choice|your pick|your call|you pick|you decide)/i;
-  const s = msg
-    .replace(/^(?: {4}|\t).*$/gm, ' ')
-    .replace(/(`{3,})[\s\S]*?\1/g, ' ')
-    .replace(/(~{3,})[\s\S]*?\1/g, ' ')
-    .replace(/`[^`\n]*`/g, ' ');
-  if (AWAIT_USER_RE.test(s)) {
-    // SOFT-only (a soft idiom AND no hard idiom) → apply the same report-
-    // closer body-length gate as the fallback below. Anything else (hard
-    // idiom, ZH idiom, or a soft+hard co-occurrence) wins unconditionally.
-    if (SOFT_IDIOM_RE.test(s) && !HARD_IDIOM_RE.test(s)) {
-      const lastIdiom = s.trim().split(/\n+/).pop() || '';
-      const bodyBeforeIdiom = s.trim().length - lastIdiom.length;
-      if (bodyBeforeIdiom > REPORT_CLOSER_BODY_CHARS) return false;
-    }
-    return true;
-  }
-  // Fallback: short standalone question to the user (ZH/EN). Catches
-  // "需要继续吗？" / "Should I proceed?" not covered by an idiom above.
-  // Length gate (<=60 chars) avoids rhetorical Qs inside long expositions.
-  // v0.2.6 round-2 semantic-anchor gate: require a user pronoun (你/您/you)
-  // OR an action verb (继续/确认/选/决定/proceed/confirm/choose/need/want/
-  // should I) so rhetorical/informational questions common in LLM design
-  // exposition ("Why?", "什么意思?", "效果如何?", "How does this work?",
-  // "What did the refactor break?") don't false-trigger. A bare "?" ending
-  // is no longer sufficient — the question must clearly direct the user
-  // to act/answer.
-  //
-  // v0.5.2 (#1 blue→yellow flash): split the markers into HARD (user-
-  // directed / decision / confirmation — high precision, win REGARDLESS of
-  // preceding body length) vs SOFT continuers (bare 继续/需要/想要/proceed/
-  // continue/need/want — low precision: "要不要继续？" / "需要继续吗？" /
-  // "是否继续？" match a long RESEARCH-REPORT closer just as well as a
-  // genuine blocking question). When the prose BEFORE the trailing question
-  // line exceeds REPORT_CLOSER_BODY_CHARS AND only a SOFT continuer matched,
-  // treat the question as a report closer → false (no pending, no blue-dot
-  // flash on the tab). HARD markers (你/您/you/确认/决定/选/should I/shall I/
-  // can you/could you/may I) win regardless of body length, preserving
-  // §AA.3/§AA.7/§AA.8 + the standalone "需要继续吗？" short-body design intent.
-  // The idiom list (AWAIT_USER_RE above) is UNTOUCHED — this scopes ONLY the
-  // fallback path the user's "调研报告 + 要不要继续" case actually hits (the
-  // idiom list contains NO 要不要/是否继续 entry, so that case falls through
-  // to here). bare confirm/choose are dropped from the fallback because their
-  // common forms (please confirm / could you confirm / you choose) are already
-  // covered by AWAIT_USER_PHRASES — keeping them here would only re-expose the
-  // report-closer class the SOFT gate now suppresses.
-  const last = s.trim().split(/\n+/).pop() || '';
-  if (last.length > 60 || !/[？?]\s*$/.test(last)) return false;
-  const HARD_DIRECTED_RE = /(你|您|you|确认|决定|选|should i|shall i|can you|could you|may i)/i;
-  if (HARD_DIRECTED_RE.test(last)) return true;
-  const SOFT_CONTINUE_RE = /(继续|需要|想要|proceed|continue|need|want)/i;
-  if (!SOFT_CONTINUE_RE.test(last)) return false;
-  // Report-closer exclusion: a long body preceding the trailing question is
-  // strong evidence the question is a polite "要不要继续?" appended to a
-  // research/progress report, not a blocking wait. bodyBefore is the byte
-  // length of all prose before the last newline-separated line (includes the
-  // newlines themselves — slightly over-estimates, which is conservative in
-  // the right direction: more likely to classify as report → false).
-  // REPORT_CLOSER_BODY_CHARS is hoisted to the top of this function (shared
-  // with the idiom-path gate above).
-  const bodyBefore = s.trim().length - last.length;
-  if (bodyBefore > REPORT_CLOSER_BODY_CHARS) return false;
-  return true;
-}
 
 /**
  * Count of in-flight background tasks carried by the payload (CC v2.1.145+:
@@ -718,24 +461,19 @@ function deriveStatus(payload, cur, now) {
       // preserve cur.error to surface the specific failure reason in §4b
       // (mirrors SubagentStop preserveError cc-status.js:541).
       const preserveInterrupted = curState === 'interrupted' && !stayRunning;
-      // v0.2.6 blue-via-content: if Claude's final reply clearly awaits user
-      // input/decision/feedback ("等你测试反馈" / "let me know" / "please
-      // confirm" / short standalone question to user), write pending:true so
-      // the reader's per-tab tick renders the blue pending dot AND the bottom
-      // SBI 🔵 counts it. Done/green logic untouched when the message is
-      // neutral ("Done. All tests pass.") → pending:false (the historical
-      // behavior). Skip when stop_hook_active=true (CC's anti-loop gate: Stop
-      // hook firing on its own continuation leaves an empty/stale message).
-      // Stuck-running scenario (luceo): stayRunning=true (background_tasks
-      // drift) + message "等你测试反馈" → state='running' AND pending=true →
-      // reader tick renders blue (pending branch wins over running yellow).
-      // v0.2.7: pending is suppressed on preserveInterrupted — interrupted
-      // already dominates pending for SBI counting (§7 aggregation decays
-      // interrupted→idle but does NOT promote interrupted→pending), so a blue
-      // dot on top of a red one would mislead. Keep the red sticky.
-      const lam = typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : '';
-      const awaitsUser =
-        !preserveInterrupted && !payload.stop_hook_active && !!lam && lastMessageRequestsUserInput(lam);
+      // v0.5.29: Stop ALWAYS clears pending. The v0.2.6 awaitsUser text-heuristic
+      // (lastMessageRequestsUserInput / AWAIT_USER_RE) that conditionally wrote
+      // pending:true here was REMOVED — it could not tell a polite conversational
+      // question ("有什么可以帮你的吗？" / "How can I help you?") from a blocking
+      // decision and over-fired on greeting replies (the reported "hi tab goes
+      // blue" bug: one atomic write running→done+pend=false→pend=true). A
+      // finished turn is not awaiting user input → uniform green. pending is now
+      // driven solely by (a) the Notification hook (a real permission prompt CC
+      // is presenting) and (b) the in-window __ps IPC set (rename_tab
+      // hasPendingPermissions / update_session_state waiting_input — both derive
+      // from permissionRequests.length>0, a genuine open dialog), which the
+      // reader's §H/§F OR into their pending check. preserveInterrupted still
+      // wins for state (interrupted dominates blue in the SBI aggregation).
       return {
         state: preserveInterrupted ? 'interrupted' : stayRunning ? 'running' : 'done',
         since:
@@ -746,7 +484,7 @@ function deriveStatus(payload, cur, now) {
               : now,
         ...(preserveInterrupted && cur && typeof cur.error === 'string' && cur.error ? { error: cur.error } : {}),
         activeSubagents: inflight != null ? inflight : 0,
-        pending: awaitsUser,
+        pending: false,
       };
     }
 

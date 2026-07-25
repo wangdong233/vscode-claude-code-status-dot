@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.27";
+const INJECT_VERSION = "v0.5.29";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -2436,7 +2436,7 @@ function buildIIFE(resDir: string): string {
          * → v0.5.23 reverted. DO NOT re-unify — re-unifying = re-arming the
          * decay-desync bug. This is the 3rd flip (v0.5.11 direct → v0.5.12 cache
          * → v0.5.23 direct); the split is the stable decision. */
-        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)}catch(e){}`,
+        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)||(globalThis.__ccsdPendingSet&&globalThis.__ccsdPendingSet[sid]===true)}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
         `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){`,
         ,
@@ -2454,20 +2454,22 @@ function buildIIFE(resDir: string): string {
         `else{globalThis.__ccsdLastNotifyKey=__nkey;lastTermSince=since;try{notify(st,err)}catch(e){}}`,
         `}`,
         `/*v0.2.9.1 Q7 fix: REMOVED the if(t.__ccsdPending)return yield. It left the tab on CC's NATIVE ORANGE logo whenever rename_tab carried hasPendingPermissions=true, and CC 2.1.216 fires that during workflow tool-use (not just real permission prompts) — so background workflow tabs went orange while the sid-independent aggregation correctly showed yellow. Permission prompts still surface as our blue via the FILE pending field (Notification hook -> j.pending -> the pend render branch at IIFE.12a). The tab now ALWAYS renders our icon (file state, or idle fallback at the no-sid/else paths), never native orange. t.__ccsdPending is still SET (rename_tab) + feeds the bottom 🔵 via __ccsdPendingSet (aggregation, separate dimension).*/`,
-        // v0.2.6 blue-via-content: reader-side pending branch. The writer's
-        // Stop case now sets pending:true when Claude's last_assistant_message
-        // clearly awaits user input/decision/feedback (AWAIT_USER_RE match in
-        // cc-status.js). The reader renders our blue claude-logo-pending.svg
-        // when j.pending===true and the state was not decayed to idle. Yields
-        // to t.__ccsdPending above so CC's native permission blue dot wins
-        // when both flags are active (Notification fires for permission →
-        // both flags true → yield first; in practice they are mutually
-        // exclusive in time: last-message-pending fires only at Stop with no
-        // Notification, and Notification's permission path yields first).
-        // Stuck-running scenario (luceo): state='running' (background_tasks
-        // drift) + j.pending=true (last_message "等你测试反馈") → this branch
-        // renders blue, overriding the running-yellow branch below. Green
-        // done logic is untouched: pending=false falls through to done→green.
+        // v0.5.29 reader-side pending branch. The tab renders our blue
+        // claude-logo-pending.svg when EITHER (a) the on-disk file flag
+        // j.pending===true (written by the Notification hook — a real
+        // permission/choice prompt CC is presenting; cross-window via disk)
+        // OR (b) the in-window IPC set globalThis.__ccsdPendingSet[sid]
+        // (fed by rename_tab hasPendingPermissions / update_session_state
+        // waiting_input — both derive from permissionRequests.length>0, a
+        // genuine open permission dialog in THIS session's webview), AND the
+        // state was not decayed to idle. This mirrors §F's two-source OR
+        // (R-INT-07 not_a_symptom ③: file flag is the independent cross-window
+        // fallback, __ps the low-latency per-window authority; both readers
+        // read fresh each tick, no shared EH-cached sink). v0.5.29 REMOVED
+        // the v0.2.6 "blue-via-content" path that inferred pending from
+        // Claude's last_assistant_message text (AWAIT_USER_RE) — it over-
+        // fired on greeting replies. Normal turn-end → j.pending=false (Stop
+        // clears) + __ps empty → falls through to done→green.
         //
         // v0.2.6 round-2 (HIGH reader-logic fix): apply state decay BEFORE
         // the pending check. Round-1 placed the done>5min / running-stale
@@ -2491,8 +2493,7 @@ function buildIIFE(resDir: string): string {
         // 7d, the only remaining per-tab-vs-SBI divergence — see STATES.md §7.4).
         `var now=Date.now();`,
         /*§H per-tab decay (done>5min / running-stale) — BEFORE the pending check so a decayed session with j.pending=true does not false-stick 🔵. Unified predicate __ccsdDecayState (decayInterrupted=false — interrupted stays red on tab for diagnostics, STATES.md §7.4); see its declaration for the full running-decay rationale.*/ `st=__ccsdDecayState(st,since,j,now,false);`,
-        /*v0.5.27 diag (TEMPORARY): §H sid-read + decay decision log. Gated by CCSD_DEBUG=1 (default off). Writes _panel-debug.log (2MB capped). Purpose: confirm why hi#1 tab goes gray while §F four-light stays blue. Removed once root cause confirmed.*/ `if(globalThis.__ccsdDebug===undefined){try{globalThis.__ccsdDebug=(process&&process.env&&process.env.CCSD_DEBUG==="1")||false}catch(_){globalThis.__ccsdDebug=false}}if(globalThis.__ccsdDebug){try{var _dag=since?Math.round((now-since)/1000)+"s":"-";var _dlt=(j&&j.tokens&&j.tokens.last_ts)?Math.round((now-j.tokens.last_ts)/1000)+"s":"-";fs.appendFileSync(pth.join(DIR,"_panel-debug.log"),new Date().toISOString().slice(11,23)+" H sid="+(sid||"UNSET")+" read="+(j?"ok":"FAIL")+" st0="+(j?j.state:"-")+" since="+_dag+" lt="+_dlt+" pend="+pend+" sub="+(j&&j.activeSubagents||0)+" -> "+st+String.fromCharCode(10))}catch(_){}}`,
-        `/*reader pending (Notification OR Stop last-message semantic match): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
+        `/*reader pending (Notification file-flag OR __ps IPC permission set): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
         `if(pend && st!=="idle"){try{p.iconPath=ccuri(favOf(pth.join(RES,"claude-logo-pending.svg"),sid))}catch(e){}return}`,
         `var svg;`,
         `if(st==="interrupted"){svg=(flashSeq%2===0)?favOf(pth.join(RES,"claude-logo-error.svg"),sid):CC_DEFAULT}`,

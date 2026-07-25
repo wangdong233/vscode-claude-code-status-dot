@@ -1,0 +1,13 @@
+# v0.5.29/v0.5.29: companion has its own package.json, so npm treats it as a
+# nested package and the ROOT .npmignore does not apply here. This file
+# restores the root's intended companion/ excludes (node_modules/, dist/, src/)
+# plus the local .devteam runtime-data exclusion. Without it, npm publish ships
+# 120MB+ of companion/node_modules.
+node_modules/
+dist/
+src/
+*.ts
+tsconfig.json
+package-lock.json
+.devteam/
+*.db

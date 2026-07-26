@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.30";
+const INJECT_VERSION = "v0.5.31";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -1444,7 +1444,7 @@ const ANCHOR_B = "this.panelTab.title=e.request.title;let r;if(e.request.hasPend
  * declined upstream by spawnClaude passing NO onElicitation, so it never
  * reaches requestUserDialog at all). Exact, must match 0 or 1 times.
  *
- * v0.5.30 ANCHOR_C / __ccsdUserDialogSet — covers consent/refusal dialogs CC
+ * v0.5.31 ANCHOR_C / __ccsdUserDialogSet — covers consent/refusal dialogs CC
  * routes via request_user_dialog (fable_overage_consent_prompt,
  * refusal_fallback_prompt), which the Notification hook CANNOT see
  * (notification_type enum excludes them) and which do NOT set rename_tab
@@ -2407,7 +2407,7 @@ function buildIIFE(resDir: string): string {
         // === §H Per-panel tick (state-machine + notify dedup + svg switch) ===
         `var timer=setInterval(function(){`,
         `var p=t.panelTab;if(!p)return;`,
-        `var sid=t.__ccsdSid;if(!sid){try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return;}`,
+        `var sid=t.__ccsdSid;if(!sid){try{p.iconPath=ccuri(favOf(pth.join(RES,"claude-logo-done.svg"),sid))}catch(e){}return;}`,
         // v0.2.4: keep globalThis.__ccsdActiveSid fresh for the token SBI tick.
         // Each CC panel runs its own per-panel tick (this setInterval) — the
         // ACTIVE panel's tick fires here every 500ms and updates the global so
@@ -2477,7 +2477,7 @@ function buildIIFE(resDir: string): string {
          * → v0.5.23 reverted. DO NOT re-unify — re-unifying = re-arming the
          * decay-desync bug. This is the 3rd flip (v0.5.11 direct → v0.5.12 cache
          * → v0.5.23 direct); the split is the stable decision. */
-        // v0.5.30 SENTINEL — three independent OR sources for `pend`, mirroring
+        // v0.5.31 SENTINEL — three independent OR sources for `pend`, mirroring
         // §F. (1) j.pending via the Notification hook (cross-window file flag;
         // askUserQuestion NOT covered here — see Fact 1). (2) __ps via rename_tab
         // hasPendingPermissions (per-window IPC; askUserQuestion IS covered here
@@ -2508,7 +2508,7 @@ function buildIIFE(resDir: string): string {
         `if(globalThis.__ccsdLastNotifyKey===__nkey){lastTermSince=since;}`,
         `else{globalThis.__ccsdLastNotifyKey=__nkey;lastTermSince=since;try{notify(st,err)}catch(e){}}`,
         `}`,
-        `/*v0.2.9.1 Q7 fix: REMOVED the if(t.__ccsdPending)return yield. It left the tab on CC's NATIVE ORANGE logo whenever rename_tab carried hasPendingPermissions=true, and CC 2.1.216 fires that during workflow tool-use (not just real permission prompts) — so background workflow tabs went orange while the sid-independent aggregation correctly showed yellow. Permission prompts still surface as our blue via the FILE pending field (Notification hook -> j.pending -> the pend render branch at IIFE.12a). The tab now ALWAYS renders our icon (file state, or idle fallback at the no-sid/else paths), never native orange. t.__ccsdPending is still SET (rename_tab) + feeds the bottom 🔵 via __ccsdPendingSet (aggregation, separate dimension).*/`,
+        `/*v0.2.9.1 Q7 fix: REMOVED the if(t.__ccsdPending)return yield. It left the tab on CC's NATIVE ORANGE logo whenever rename_tab carried hasPendingPermissions=true, and CC 2.1.216 fires that during workflow tool-use (not just real permission prompts) — so background workflow tabs went orange while the sid-independent aggregation correctly showed yellow. Permission prompts still surface as our blue via the FILE pending field (Notification hook -> j.pending -> the pend render branch at IIFE.12a). The tab now ALWAYS renders our icon (file state, or done-green fallback at the no-sid/else paths — v0.5.31: unknown sid / read-fail renders done-green, NOT misleading grey; grey is reserved EXCLUSIVELY for the legitimate done>5min decay at the st===\"idle\" branch above), never native orange. t.__ccsdPending is still SET (rename_tab) + feeds the bottom 🔵 via __ccsdPendingSet (aggregation, separate dimension).*/`,
         // v0.5.29 reader-side pending branch. The tab renders our blue
         // claude-logo-pending.svg when EITHER (a) the on-disk file flag
         // j.pending===true (written by the Notification hook — a real
@@ -2556,13 +2556,13 @@ function buildIIFE(resDir: string): string {
         `else if(st==="running"){svg=favOf(pth.join(RES,"claude-logo-running.svg"),sid)}`,
         `else if(st==="done"){svg=favOf(pth.join(RES,"claude-logo-done.svg"),sid)}`,
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
-        `else{try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return}`,
+        `else{try{p.iconPath=ccuri(favOf(pth.join(RES,"claude-logo-done.svg"),sid))}catch(e){}return}`,
         `flashSeq++;`,
         `try{p.iconPath=ccuri(favOf(svg,sid))}catch(e){}`,
         `},${TICK_MS});`,
         // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}/*v0.5.30 ANCHOR_C teardown: release this panel's entry in the user-dialog set so a panel closed mid-consent/refusal dialog cannot false-stick the tab blue. Mirrors the __ps release above (single-writer __ccsdUserDialogSet is set in ANCHOR_C's try and deleted in its finally for normal exits; this is the safety-net for panel-close mid-dialog). Uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[t.__ccsdSid]}catch(_){}/*v0.4.0 FAV BRIDGE §Z: release this panel's entry in the sid→panel map so the companion's Favorites tree sees the session as closed (node grayed out, click degrades to Copy resume cmd). Symmetric to the §A preamble publish; uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdSidToPanel&&t.__ccsdSid)delete globalThis.__ccsdSidToPanel[t.__ccsdSid]}catch(_){}/*v0.5.3 FAV BRIDGE §Z: release this panel's entry in the sid→title map (symmetric to the sid→panel delete above + the §A title init).*/try{if(globalThis.__ccsdSidToTitle&&t.__ccsdSid)delete globalThis.__ccsdSidToTitle[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid=""}})}catch(e){}`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}/*v0.5.31 ANCHOR_C teardown: release this panel's entry in the user-dialog set so a panel closed mid-consent/refusal dialog cannot false-stick the tab blue. Mirrors the __ps release above (single-writer __ccsdUserDialogSet is set in ANCHOR_C's try and deleted in its finally for normal exits; this is the safety-net for panel-close mid-dialog). Uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[t.__ccsdSid]}catch(_){}/*v0.4.0 FAV BRIDGE §Z: release this panel's entry in the sid→panel map so the companion's Favorites tree sees the session as closed (node grayed out, click degrades to Copy resume cmd). Symmetric to the §A preamble publish; uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdSidToPanel&&t.__ccsdSid)delete globalThis.__ccsdSidToPanel[t.__ccsdSid]}catch(_){}/*v0.5.3 FAV BRIDGE §Z: release this panel's entry in the sid→title map (symmetric to the sid→panel delete above + the §A title init).*/try{if(globalThis.__ccsdSidToTitle&&t.__ccsdSid)delete globalThis.__ccsdSidToTitle[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid=""}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -2802,7 +2802,7 @@ function injectFresh(extJs: string, src: string): void {
         }
     }
 
-    // Anchor C (optional v0.5.30): wrap requestUserDialog's outgoing
+    // Anchor C (optional v0.5.31): wrap requestUserDialog's outgoing
     // sendRequest(user_dialog_request) in try/finally so consent/refusal
     // dialogs (fable_overage_consent_prompt, refusal_fallback_prompt) turn
     // the tab blue while the dialog is open. Mirrors the optional-Anchor-B

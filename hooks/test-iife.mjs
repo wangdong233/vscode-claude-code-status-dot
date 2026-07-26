@@ -204,18 +204,20 @@ check(
 // hasPendingPermissions=true (CC 2.1.216 fires this during workflow tool-use).
 // Permission prompts now surface via the FILE pending field (Notification hook →
 // j.pending → the IIFE.12a blue-render branch). The per-panel tick must NEVER
-// leave native orange: the no-sid + read-fail (else) paths now render idle fallback.
+// leave native orange: the no-sid + read-fail (else) paths now render done-green
+// fallback (v0.5.31: unknown sid / read-fail → done-green, NOT misleading grey —
+// grey is reserved EXCLUSIVELY for the legitimate done>5min decay at st==="idle").
 check(
   'IIFE.12 __ccsdPending yield REMOVED (Q7) — no code-path return-without-render',
   !/if\s*\(\s*t\.__ccsdPending\s*\)\s*\{[^}]*return/.test(iife),
 );
 check(
-  'IIFE.12b no-sid path renders idle fallback (Q7, never native orange)',
-  /if\(!sid\)\{try\{p\.iconPath=ccuri[^}]*claude-logo-idle\.svg/.test(iife),
+  'IIFE.12b no-sid path renders done-green fallback (v0.5.31, never native orange)',
+  /if\(!sid\)\{try\{p\.iconPath=ccuri[^}]*claude-logo-done\.svg/.test(iife),
 );
 check(
-  'IIFE.12c else read-fail path renders idle fallback (Q7)',
-  /else\{try\{p\.iconPath=ccuri[^}]*claude-logo-idle\.svg/.test(iife),
+  'IIFE.12c else read-fail path renders done-green fallback (v0.5.31)',
+  /else\{try\{p\.iconPath=ccuri[^}]*claude-logo-done\.svg/.test(iife),
 );
 // v0.5.2 (#3/F3): the v0.2.9-debug __ccsdDbg anomaly logger + _panel-debug.log
 // + __ccsdRenderMap were removed (their own comment said to remove after the
@@ -241,7 +243,7 @@ check(
   /if\s*\(\s*pend\s*&&\s*st\s*!==\s*"idle"\s*\)\s*\{[^}]*claude-logo-pending\.svg/.test(iife),
 );
 check(
-  'IIFE.12b per-panel tick reads (j.pending===true) OR (__ccsdPendingSet[sid]===true) OR (__ccsdUserDialogSet[sid]===true) into pend (v0.5.30 three-source OR mirroring §F)',
+  'IIFE.12b per-panel tick reads (j.pending===true) OR (__ccsdPendingSet[sid]===true) OR (__ccsdUserDialogSet[sid]===true) into pend (v0.5.31 three-source OR mirroring §F)',
   /pend\s*=\s*\(\s*j\.pending\s*===\s*true\s*\)\s*\|\|\s*\(\s*globalThis\.__ccsdPendingSet\s*&&\s*globalThis\.__ccsdPendingSet\[sid\]\s*===\s*true\s*\)\s*\|\|\s*\(\s*globalThis\.__ccsdUserDialogSet\s*&&\s*globalThis\.__ccsdUserDialogSet\[sid\]\s*===\s*true\s*\)/.test(
     iife,
   ),
@@ -383,7 +385,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.30 stamp', /\/\*cc-status-dot-injected:v0.5.30:/.test(iife));
+check('IIFE.21c banner carries v0.5.31 stamp', /\/\*cc-status-dot-injected:v0.5.31:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -500,11 +502,11 @@ check(
   'v0.5.12 perf: guard prevents duplicate timers; tick extracted to named __ccsdSbiTick + invoked once immediately after setInterval registration (four-light first paint without waiting 500ms)',
 );
 check(
-  'IIFE.25b v0.5.23 §H per-panel tick reads sid.json DIRECTLY (no __ccsdAgCache — fixes §H/§F decay divergence; v0.5.30: pend carries the third __ccsdUserDialogSet OR term)',
+  'IIFE.25b v0.5.23 §H per-panel tick reads sid.json DIRECTLY (no __ccsdAgCache — fixes §H/§F decay divergence; v0.5.31: pend carries the third __ccsdUserDialogSet OR term)',
   /st=j\.state;since=j\.since;err=j\.error\|\|"";pend=\(j\.pending===true\)\|\|\(globalThis\.__ccsdPendingSet&&globalThis\.__ccsdPendingSet\[sid\]===true\)\|\|\(globalThis\.__ccsdUserDialogSet&&globalThis\.__ccsdUserDialogSet\[sid\]===true\)\}catch\(e\)\{\}/.test(
     iife,
   ) && !/__ccsdAgCache[\s\S]{0,100}?__ch\.j/.test(iife),
-  'v0.5.23: §H reads sid.json directly (JSON.parse(readFileSync)), NOT via §F cache. QW4 (v0.5.12 cache reuse) caused §H/§F tick desync — §H read stale cache (running, since=old) while §F read fresh (done, since=Stop) → §H decayed to idle (gray) while §F stayed done (green). Direct read ensures §H always reads latest, same as §F. v0.5.30: pend OR-chain extended with __ccsdUserDialogSet (consent/refusal coverage) mirroring §F.',
+  'v0.5.23: §H reads sid.json directly (JSON.parse(readFileSync)), NOT via §F cache. QW4 (v0.5.12 cache reuse) caused §H/§F tick desync — §H read stale cache (running, since=old) while §F read fresh (done, since=Stop) → §H decayed to idle (gray) while §F stayed done (green). Direct read ensures §H always reads latest, same as §F. v0.5.31: pend OR-chain extended with __ccsdUserDialogSet (consent/refusal coverage) mirroring §F.',
 );
 check(
   'IIFE.25c v0.5.12 I18N dictionary guarded by globalThis.__ccsdI18N (no per-panel 19KB re-alloc)',
@@ -570,13 +572,13 @@ check(
     /else if\(st==="running"\)\{ag\.running\+\+;\}/.test(iife),
   'v0.5.13: pending is priority-overlay + exclusive with state (blue wins; running+pending = +1 blue only). Pre-0.5.13 counted pending INDEPENDENTLY (running+pending → +1 yellow AND +1 blue) — the cause of "two-yellow one-blue".',
 );
-// v0.5.30 ANCHOR_C sibling assertion: §F isPend must include the third OR term
+// v0.5.31 ANCHOR_C sibling assertion: §F isPend must include the third OR term
 // __ccsdUserDialogSet[files[i].slice(0,-5)]===true (consent/refusal coverage),
 // mirroring the IIFE.12b three-source OR for §H. askUserQuestion is implicitly
 // covered via __ps (Fact 1: can_use_tool → tool_permission_request → rename_tab
 // hasPendingPermissions → __ps); consent/refusal via __ccsdUserDialogSet.
 check(
-  'IIFE.29b2 v0.5.30: §F isPend includes __ccsdUserDialogSet third OR term (consent/refusal coverage mirroring §H)',
+  'IIFE.29b2 v0.5.31: §F isPend includes __ccsdUserDialogSet third OR term (consent/refusal coverage mirroring §H)',
   /globalThis\.__ccsdUserDialogSet\s*&&\s*globalThis\.__ccsdUserDialogSet\[files\[i\]\.slice\(0,-5\)\]\s*===\s*true/.test(
     iife,
   ),
@@ -655,7 +657,7 @@ check(
       !patchSrc.includes('try{var __ps=globalThis.__ccsdPendingSet'),
     'round-2 LOW: var hoists __ps to the rename_tab handler function top, leaking the binding past the try block; let keeps it local',
   );
-  // v0.5.30 ANCHOR_C sentinel: askUserQuestion regression sentinel. The patch.ts
+  // v0.5.31 ANCHOR_C sentinel: askUserQuestion regression sentinel. The patch.ts
   // ANCHOR_C const + replC must co-exist (the splice wraps requestUserDialog's
   // sendRequest(user_dialog_request) in try/finally). The patched extension.js
   // (built by buildIIFE -> injectFresh) gets verified end-to-end by test-
@@ -665,7 +667,7 @@ check(
   // IMPLICIT askUserQuestion dependency (Fact 1: covered via __ps, NOT __ccsd
   // UserDialogSet — re-audit if a future CC reroutes askUserQuestion).
   check(
-    'IIFE.29h v0.5.30 ANCHOR_C: patch.ts injects __ccsdUserDialogSet try/finally into requestUserDialog (consent/refusal sentinel; askUserQuestion implicitly via __ps)',
+    'IIFE.29h v0.5.31 ANCHOR_C: patch.ts injects __ccsdUserDialogSet try/finally into requestUserDialog (consent/refusal sentinel; askUserQuestion implicitly via __ps)',
     patchSrc.includes('const ANCHOR_C =') &&
       patchSrc.includes('user_dialog_request",dialogKind:t.dialogKind,payload:t.payload,toolUseID:t.toolUseID') &&
       patchSrc.includes(
@@ -675,10 +677,10 @@ check(
         'finally{try{if(this.__ccsdSid&&globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[this.__ccsdSid]}catch(_){}}',
       ) &&
       patchSrc.includes('if(globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[t.__ccsdSid]'),
-    'v0.5.30 ANCHOR_C / __ccsdUserDialogSet: three independent OR sources for pend (j.pending / __ps / __ccsdUserDialogSet) per R-INT-07. askUserQuestion is covered via __ps (Fact 1) — re-audit if CC reroutes it.',
+    'v0.5.31 ANCHOR_C / __ccsdUserDialogSet: three independent OR sources for pend (j.pending / __ps / __ccsdUserDialogSet) per R-INT-07. askUserQuestion is covered via __ps (Fact 1) — re-audit if CC reroutes it.',
   );
   check(
-    'IIFE.29i v0.5.30 ANCHOR_C replC keyed by this.__ccsdSid (NOT the channelId first arg e)',
+    'IIFE.29i v0.5.31 ANCHOR_C replC keyed by this.__ccsdSid (NOT the channelId first arg e)',
     patchSrc.includes('__ud[this.__ccsdSid]=true') && !/__ud\[e\]=true/.test(patchSrc),
     'channelId != sessionId (webview launchClaude: channelId=Math.random()...; sessionId is the second arg). Keying by `e` would false-key on a random webview string.',
   );

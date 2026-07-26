@@ -87,7 +87,7 @@
 > **reader 只读 `state`（仍四态）+ `since` + `error` + `pending`（v0.2.6 新增）**；`activeSubagents` 是 writer 内部记账字段，reader 不读、不渲染。workflow 跑期间保持 running 完全由 writer 在 `Stop`/`SubagentStop` 时改写 `state` 实现。v0.1.4 起 running 渲染为**静态黄点** `#CCA700`（v0.1.3 的 8 帧正弦呼吸因 `iconPath` 切帧本质离散、帧间不连续，肉眼读作闪烁而非渐变，故回归静态；和 idle/done/error 一样无动画）。500ms 定时器仍在跑——interrupted 的 `flashSeq%2` 快闪需要它，静态态每 tick 重新赋同一个路径（廉价 no-op）。
 
 ```
-读 <sid>.json → state, since, error, pend(v0.2.6=j.pending===true)
+读 <sid>.json → state, since, error, pend(v0.5.30 = j.pending OR __ps[sid] OR __ccsdUserDialogSet[sid])
 # notify 去重（v0.1.5+：以终态 since 时间戳为键，旧的 prevSt 转换检查已废弃）：
 if !seeded:
   seeded = true
@@ -99,6 +99,32 @@ if __ccsdPending (rename_tab hasPendingPermissions=true):  return（不覆盖，
 # hook 写（真实权限/选择 prompt）；Stop 已不再写 pending（移除 v0.2.6 AWAIT_USER_RE 文本启发式——
 # 它对问候回复过度触发，是"hi tab 变蓝"bug 根因）。__ps 由 rename_tab hasPendingPermissions /
 # update_session_state waiting_input 喂入（源自 permissionRequests.length>0 真实对话框）：
+#
+# v0.5.30: 三个独立 OR 源（R-INT-07: 三个 single-writer，每个 reader 每 tick fresh 读）。
+#   (1) j.pending —— Notification hook 写（cross-window 文件标志；覆盖真实权限/选择 prompt
+#       与 askUserQuestion 路径的 can_use_tool 部分；**不**覆盖 consent/refusal——Notification
+#       notification_type 枚举排除它们）。
+#   (2) __ps（__ccsdPendingSet）—— rename_tab hasPendingPermissions / update_session_state
+#       waiting_input 喂入（per-window IPC；**隐式覆盖 askUserQuestion**——CC 2.1.220 把
+#       askUserQuestion 走 can_use_tool → tool_permission_request → permissionRequests →
+#       rename_tab hasPendingPermissions → __ps；这是 Fact-1 路径）。
+#   (3) __ccsdUserDialogSet（v0.5.30 ANCHOR_C）—— requestUserDialog 的 user_dialog_request
+#       IPC 喂入（per-window IPC；覆盖 Notification hook **看不到**的 consent/refusal 对话框——
+#       fable_overage_consent_prompt、refusal_fallback_prompt）。try/finally wrap：sendRequest
+#       前置 set，finally 删除（覆盖所有出口：用户响应 / abort / 通道关闭）。onDidDispose 兜底
+#       删除防止面板关闭中失序。
+# 三个源都按 SAME sid（真实 session UUID）keying；__ccsdUserDialogSet 用 this.__ccsdSid
+# （== replA/replB 写入的 sid），**不是** requestUserDialog 首参 e（channelId，随机串）。
+#
+# MCP elicitation（2.1.220）**不被覆盖**：spawnClaude 不传 onElicitation → SDK 自动
+# decline → 不发任何 IPC 到 webview → 没东西能变蓝。预期行为：elicitation 永远不会
+# 阻塞用户。**未来 CC 若 wire onElicitation，需重新审计**（elicitation 会走 user_dialog_
+# request 还是其它 IPC？若是前者，自动被 __ccsdUserDialogSet 覆盖）。
+#
+# askUserQuestion **隐式**覆盖（经 __ps，见 Fact 1）。**未来 CC 若把 askUserQuestion 从
+# can_use_tool 改路由到 user_dialog_request，覆盖会从 __ps 转到 __ccsdUserDialogSet
+# （仍变蓝，但走新 term）—— 上述三个源都被本注记 + test-iife.mjs 的 IIFE.12b/IIFE.29b2
+# 锁定，shift 会被检测到（一个 term 失去 justification），而非静默。
 if pend && st !== "idle":  视为 pending                       # 蓝点优先于 state（优先级在 __ccsdPending yield 之后、state if-chain 之前）
   RES/claude-logo-pending.svg  # 静态蓝 #58A6FF（无动画）；return
 if state == "done" and now - since > 5min:  视为 idle

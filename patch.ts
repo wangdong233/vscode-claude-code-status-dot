@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.29";
+const INJECT_VERSION = "v0.5.30";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -1436,6 +1436,47 @@ const ANCHOR_A =
  */
 const ANCHOR_B = "this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)";
 
+/**
+ * Anchor C — INSIDE `uq.prototype.requestUserDialog` (inherited by each `go`
+ * panel instance), the tail of the method after the
+ * `if(!eve.includes(t.dialogKind))return{behavior:"cancelled"}` gate. Only
+ * real consent/refusal/choice dialogs reach here (MCP elicitation is auto-
+ * declined upstream by spawnClaude passing NO onElicitation, so it never
+ * reaches requestUserDialog at all). Exact, must match 0 or 1 times.
+ *
+ * v0.5.30 ANCHOR_C / __ccsdUserDialogSet — covers consent/refusal dialogs CC
+ * routes via request_user_dialog (fable_overage_consent_prompt,
+ * refusal_fallback_prompt), which the Notification hook CANNOT see
+ * (notification_type enum excludes them) and which do NOT set rename_tab
+ * hasPendingPermissions.
+ *
+ * IMPLICIT DEPENDENCY: askUserQuestion blue is NOT covered by this anchor —
+ * it relies on CC 2.1.220 routing askUserQuestion through can_use_tool ->
+ * tool_permission_request -> permissionRequests -> rename_tab
+ * hasPendingPermissions -> __ps (the Fact-1 path). A future CC refactor that
+ * reroutes askUserQuestion to request_user_dialog would move coverage from
+ * __ps to __ccsdUserDialogSet (still blue, but via the new term).
+ *
+ * RE-AUDIT TRIGGER: any CC update that (a) drifts ANCHOR_C's exact bytes,
+ * (b) changes the can_use_tool routing for askUserQuestion, or (c) adds
+ * notification_type coverage for consent — re-audit which term covers which
+ * dialog. Three independent OR sources keyed by the SAME sid (real session
+ * UUID), each read fresh per tick (R-INT-07: single-writer __ps via
+ * rename_tab / single-writer __ccsdUserDialogSet via user_dialog_request /
+ * single-writer j.pending via Notification hook — OR-ed at FRESH per-tick
+ * consumer reads, the structural inverse of the v0.5.18 shared-sink trap).
+ *
+ * SID KEY: `this.__ccsdSid` (NOT the first arg `e`, which is the channelId
+ * — a random webview string, NOT the session UUID). this.__ccsdSid is
+ * written by replA/replB from update_session_state/rename_tab and is the
+ * same key the §H/§F consumers use. The `if(this.__ccsdSid)` guard lets a
+ * not-yet-set or pure-uq (non-panel) instance no-op harmlessly (consent at
+ * session start before rename_tab: acceptable degradation, same class as
+ * v0.5.22 sid-inference uncertainty).
+ */
+const ANCHOR_C =
+    'return(await this.sendRequest(e,{type:"user_dialog_request",dialogKind:t.dialogKind,payload:t.payload,toolUseID:t.toolUseID},r)).result';
+
 // ---------------------------------------------------------------------------
 // Logging — plain text, no emojis (kept terminal-friendly & greppable)
 // ---------------------------------------------------------------------------
@@ -2267,7 +2308,7 @@ function buildIIFE(resDir: string): string {
         // globalThis. decay (st!=="idle") still applies after the OR so the
         // 30min/5min/24h GC rules are not bypassed.
         `var __ps=globalThis.__ccsdPendingSet;`,
-        `var isPend=((j.pending===true)||(__ps&&__ps[files[i].slice(0,-5)]===true))&&st!=="idle";`,
+        `var isPend=((j.pending===true)||(__ps&&__ps[files[i].slice(0,-5)]===true)||(globalThis.__ccsdUserDialogSet&&globalThis.__ccsdUserDialogSet[files[i].slice(0,-5)]===true))&&st!=="idle";`,
         `if(isPend){ag.pending++;}`,
         `else if(st==="interrupted"){ag.interrupted++;}`,
         `else if(st==="running"){ag.running++;}`,
@@ -2436,7 +2477,21 @@ function buildIIFE(resDir: string): string {
          * → v0.5.23 reverted. DO NOT re-unify — re-unifying = re-arming the
          * decay-desync bug. This is the 3rd flip (v0.5.11 direct → v0.5.12 cache
          * → v0.5.23 direct); the split is the stable decision. */
-        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)||(globalThis.__ccsdPendingSet&&globalThis.__ccsdPendingSet[sid]===true)}catch(e){}`,
+        // v0.5.30 SENTINEL — three independent OR sources for `pend`, mirroring
+        // §F. (1) j.pending via the Notification hook (cross-window file flag;
+        // askUserQuestion NOT covered here — see Fact 1). (2) __ps via rename_tab
+        // hasPendingPermissions (per-window IPC; askUserQuestion IS covered here
+        // via can_use_tool → tool_permission_request → permissionRequests →
+        // rename_tab hasPendingPermissions; this is the IMPLICIT DEPENDENCY).
+        // (3) __ccsdUserDialogSet via requestUserDialog/ANCHOR_C (per-window IPC;
+        // covers consent/refusal dialogs the Notification hook CANNOT see).
+        // Each source is a SINGLE-WRITER, read FRESH per tick — R-INT-07 not_a_
+        // symptom ③: three independent authorities OR-ed at independent fresh-
+        // reading consumers, the structural inverse of the v0.5.18 shared mutable-
+        // sink trap. RE-AUDIT TRIGGER: any CC update that drifts ANCHOR_C bytes,
+        // changes askUserQuestion's can_use_tool routing, or adds notification_
+        // type coverage for consent → re-audit which term covers which dialog.
+        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)||(globalThis.__ccsdPendingSet&&globalThis.__ccsdPendingSet[sid]===true)||(globalThis.__ccsdUserDialogSet&&globalThis.__ccsdUserDialogSet[sid]===true)}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
         `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){`,
         ,
@@ -2507,7 +2562,7 @@ function buildIIFE(resDir: string): string {
         `},${TICK_MS});`,
         // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}/*v0.4.0 FAV BRIDGE §Z: release this panel's entry in the sid→panel map so the companion's Favorites tree sees the session as closed (node grayed out, click degrades to Copy resume cmd). Symmetric to the §A preamble publish; uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdSidToPanel&&t.__ccsdSid)delete globalThis.__ccsdSidToPanel[t.__ccsdSid]}catch(_){}/*v0.5.3 FAV BRIDGE §Z: release this panel's entry in the sid→title map (symmetric to the sid→panel delete above + the §A title init).*/try{if(globalThis.__ccsdSidToTitle&&t.__ccsdSid)delete globalThis.__ccsdSidToTitle[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid=""}})}catch(e){}`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}/*v0.5.30 ANCHOR_C teardown: release this panel's entry in the user-dialog set so a panel closed mid-consent/refusal dialog cannot false-stick the tab blue. Mirrors the __ps release above (single-writer __ccsdUserDialogSet is set in ANCHOR_C's try and deleted in its finally for normal exits; this is the safety-net for panel-close mid-dialog). Uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[t.__ccsdSid]}catch(_){}/*v0.4.0 FAV BRIDGE §Z: release this panel's entry in the sid→panel map so the companion's Favorites tree sees the session as closed (node grayed out, click degrades to Copy resume cmd). Symmetric to the §A preamble publish; uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdSidToPanel&&t.__ccsdSid)delete globalThis.__ccsdSidToPanel[t.__ccsdSid]}catch(_){}/*v0.5.3 FAV BRIDGE §Z: release this panel's entry in the sid→title map (symmetric to the sid→panel delete above + the §A title init).*/try{if(globalThis.__ccsdSidToTitle&&t.__ccsdSid)delete globalThis.__ccsdSidToTitle[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid=""}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -2747,9 +2802,48 @@ function injectFresh(extJs: string, src: string): void {
         }
     }
 
+    // Anchor C (optional v0.5.30): wrap requestUserDialog's outgoing
+    // sendRequest(user_dialog_request) in try/finally so consent/refusal
+    // dialogs (fable_overage_consent_prompt, refusal_fallback_prompt) turn
+    // the tab blue while the dialog is open. Mirrors the optional-Anchor-B
+    // pattern: cCount===0 is a SOFT warn (install proceeds A+B only,
+    // consent-blue INACTIVE, askUserQuestion-blue still active via __ps).
+    // cCount===1 wraps the sendRequest call; the original args + .result
+    // return are preserved byte-for-byte; try/finally-without-catch is valid
+    // JS (assertCompiles below verifies parse). Clearing is the finally
+    // itself — every exit path (user response / abort on new user message /
+    // channel close / any reject) flows through it. NO processRequest splice
+    // is needed: the webview's user_dialog_response reply is routed by the
+    // message dispatcher's case "response" keyed on requestId, NOT through
+    // processRequest's case chain.
+    const cCount = countOccurrences(src, ANCHOR_C);
+    if (cCount > 1) {
+        fail(`Anchor C (requestUserDialog) matched ${cCount} times, expected 0 or 1. ` + "No files were modified.");
+    }
+    if (cCount === 0) {
+        warn(
+            "Anchor C not found — installing with Anchor A+B only. The consent/refusal blue-dot fix will be INACTIVE (consent prompts fall back to CC's native presentation; askUserQuestion-blue still active via Anchor B/__ps).",
+        );
+    }
+    if (cCount === 1) {
+        // Wrap the requestUserDialog tail in try/finally. Reads this.__ccsdSid
+        // fresh inside the try (NOT the channelId first arg `e`). The finally
+        // re-reads this.__ccsdSid (cheap; defensive against any future code
+        // path that nulls it mid-flight) and deletes unconditionally — the
+        // if(this.__ccsdSid) guard inside the try prevented the set, so a
+        // never-set sid yields no-op delete on an unused key. The sendRequest
+        // call + args + .result return are preserved byte-for-byte.
+        const replC =
+            'try{if(this.__ccsdSid){var __ud=globalThis.__ccsdUserDialogSet||(globalThis.__ccsdUserDialogSet=Object.create(null));__ud[this.__ccsdSid]=true}var __ccsdUdRes=await this.sendRequest(e,{type:"user_dialog_request",dialogKind:t.dialogKind,payload:t.payload,toolUseID:t.toolUseID},r);return __ccsdUdRes.result}finally{try{if(this.__ccsdSid&&globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[this.__ccsdSid]}catch(_){}}';
+        next = next.replace(ANCHOR_C, replC);
+        if (!next.includes("__ccsdUserDialogSet")) {
+            fail("Anchor C replacement did not apply. No files were modified.");
+        }
+    }
+
     assertCompiles(next, "patched extension.js");
     writeAtomicSync(extJs, next);
-    log(`patched extension.js (anchors injected: A${bCount === 1 ? "+B" : " only"})`);
+    log(`patched extension.js (anchors injected: A${bCount === 1 ? "+B" : " only"}${cCount === 1 ? "+C" : ""})`);
 }
 
 /** Extract the baked `var RES="..."` path from an already-patched extension.js.

@@ -32,6 +32,40 @@
 
 ---
 
+## 1.5 per-tab 状态转换逻辑（权威定义 · v0.5.32）
+
+> **每 tab 渲染(§H)的状态机,单一真相源。** 任何 tab 颜色争议以此为准。
+> 实现:patch.ts §H per-panel 500ms tick(读 `<sid>.json` → `__ccsdDecayState` 衰减 → SVG 渲染分支)。
+
+### 状态机（用户确认 spec）
+
+```
+初始化（sid 未设 / 读不到文件）        → 灰  claude-logo-idle.svg
+初始化已有（读到文件）→ 按优先级渲染：
+  需人为介入（pending）                 → 蓝  claude-logo-pending.svg   [优先级最高]
+  出现问题（interrupted）              → 红  claude-logo-error.svg（快闪）
+  对话开始（running）                  → 黄  claude-logo-running.svg
+  对话结束（done）                     → 绿  claude-logo-done.svg
+  绿 > 5 分钟（done 衰减→idle）        → 灰  claude-logo-idle.svg
+```
+
+### 渲染优先级（上方高；`st` 互斥取一,`pend` 与 `st` 正交）
+
+1. **蓝** `if(pend && st!=="idle")`（patch.ts:2552）—— `pend` 三源 OR:`j.pending`(Notification 文件标记) ‖ `__ccsdPendingSet[sid]`/`__ps`(rename_tab `hasPendingPermissions` —— 覆盖**工具授权 + askUserQuestion**,因 askUserQuestion 走 can_use_tool→permissionRequests→hasPendingPermissions) ‖ `__ccsdUserDialogSet[sid]`(ANCHOR_C —— consent/refusal 对话框)。interrupted 时 writer 侧抑制 `j.pending`(cc-status.js preserveInterrupted),故"问题"必显红、不被蓝盖。
+2. **红** `if(st==="interrupted")`（:2554）—— StopFailure 写入,sticky(直到 `UserPromptSubmit` 才清 → running)。
+3. **黄** `else if(st==="running")`（:2556）。
+4. **绿** `else if(st==="done")`（:2557）。
+5. **灰（衰减）** `else if(st==="idle")`（:2558）—— `done` 超 `DONE_TO_IDLE_MS`(5min)或 `running` 超 `SBI_RUNNING_STALE_MS`(30min 且无 token 活动),经 `__ccsdDecayState(st,since,j,now,false)` 降级。
+6. **灰（初始化）** `else`(st=null 读失败,:2559)或 `if(!sid)` 早返回(:2410)。
+
+### 关键语义（v0.5.32 定案）
+
+- **初始化 = 灰**:sid 未设 / 读失败 → 一律灰。含会话刚建、历史重开(sid 瞬态未到)、sid 永久缺失(罕见边角 —— §H 诚实显灰,**§F 四灯始终显真相**)。**不猜绿 / 不猜黄 —— 未知即灰。**
+- **绿→灰(5min)是唯一合法的"由绿转灰"路径**;初始化/读失败的灰与之同色(都是 idle.svg)但来源不同。
+- **蓝覆盖一切活动态**(running/done 上的 pending 都显蓝);红(interrupted)因 writer 抑制 pending 而独占红。
+- **sid 来源**:`update_session_state`(带 sessionId)设定;`rename_tab` 在 CC 2.1.220 **不携带 sessionId**(v0.2.5 注释前提已证伪)。故"初始化"窗口 = panel 建立到首次 `update_session_state` 到达。
+- **底部四灯(§F)**:与 §H 同公式,但 sid-blind(`readdirSync` 扫所有 `<sid>.json`),故多 tab / sid 缺失时 §F 仍是真相。
+
 ## 2. 事件 → 状态映射（writer 的 case 集 ＝ patcher 的 `HOOK_EVENTS` 接线集，二者必须逐一对齐）
 
 | CC hook 事件                   | → 写入 state                                                                                                                                                                                                                                                          | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |

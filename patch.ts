@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.37";
+const INJECT_VERSION = "v0.5.38";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -3812,6 +3812,32 @@ function installCompanionIntoCli(cliName: string, cliPath: string, vsixAbs: stri
         log(`  ${cliName}: ${last || "installed"}`);
         return true;
     } catch (e) {
+        // v0.5.38: fallback — bare CLI install failed (broken shim, e.g. Windows
+        // code.cmd resolving Code.exe to a wrong/cwd-relative path; reported on
+        // Win10 with a stray code.cmd in the project folder). resolveVscodeCli
+        // returned the bare name because `code --version` happened to work, but
+        // `--install-extension` exercises the broken Code.exe path. Try the well-
+        // known VS Code install path directly (bypasses the broken PATH entry).
+        if (cliPath === cliName) {
+            const known = resolveKnownVscodeCliPath(cliName);
+            if (known) {
+                try {
+                    const out2 = cp.execSync(`"${known}" --install-extension "${vsixAbs}" --force`, {
+                        encoding: "utf8",
+                        stdio: ["ignore", "pipe", "pipe"],
+                        timeout: 30000,
+                    });
+                    const last2 = (out2.split(/\r?\n/).filter(Boolean).pop() || "").trim();
+                    log(
+                        `  ${cliName}: ${last2 || "installed"} (via fallback ${known} — bare CLI "${cliName}" --install-extension was broken)`,
+                    );
+                    return true;
+                } catch (e2) {
+                    warn(`  ${cliName}: install-extension failed via bare CLI AND well-known-path fallback ${known}`);
+                    return false;
+                }
+            }
+        }
         warn(`  ${cliName}: install-extension failed (${(e as Error).message ?? String(e)})`);
         return false;
     }

@@ -58,6 +58,8 @@
 5. **灰（衰减）** `else if(st==="idle")`（:2558）—— `done` 超 `DONE_TO_IDLE_MS`(5min)或 `running` 超 `SBI_RUNNING_STALE_MS`(30min 且无 token 活动),经 `__ccsdDecayState(st,since,j,now,false)` 降级。
 6. **灰（初始化）** `else`(st=null 读失败,:2559)或 `if(!sid)` 早返回(:2410)。
 
+> **F7 (v0.5.34 文档)**: panel 关闭时正有 permission(Notification 已写 pending:true 到 .json)→ onDidDispose 不清 .json → SBI 有 ≤30min 假蓝尾(由 running-stale 衰减 SBI_RUNNING_STALE_MS 兜底)。这是已知有界行为,不是 bug;衰减链是此 crash 路径的 load-bearing 安全网。
+
 ### 关键语义（v0.5.32 定案）
 
 - **初始化 = 灰**:sid 未设 / 读失败 → 一律灰。含会话刚建、历史重开(sid 瞬态未到)、sid 永久缺失(罕见边角 —— §H 诚实显灰,**§F 四灯始终显真相**)。**不猜绿 / 不猜黄 —— 未知即灰。**

@@ -155,6 +155,22 @@ vscode-claude-code-status-dot        # tras instalar, ejecuta el comando directa
 
 ---
 
+## ⚡ Rendimiento (v0.2.9 basado en evidencia)
+
+**Conclusión: este plugin no causa lag de UI perceptible** — el EH (Extension Host) usa como peor caso 1.1% mean / 3.4% p99 CPU (streaming intensivo), típico <0.3%; el writer hook corre en el subproceso de CC a ~1-2ms/event. Todos los números se midieron sobre fixtures reales (42MB jsonl + 185KB sidecar + 2.1GB outlier). Detalles en [`docs/STATES.md`](docs/STATES.md) §9.
+
+¿Por qué no se laguea? La IIFE corre en el EH (proceso independiente), **no en el renderer**. Escribir, cambiar de pestaña y copiar son operaciones renderer-local que no esperan al EH. Incluso en el peor caso de 17ms p99 de bloqueo del EH, solo retrasa el IPC EH→renderer de otras extensiones 17ms (imperceptible para el usuario).
+
+v0.2.9 corrige 3 puntos de desperdicio de hygiene **medidos** (cada uno pequeño por sí solo, en conjunto ~10 IPC/sec + 1.1ms/tick):
+
+| Optimización | Desperdicio medido (v0.2.8) | Arreglo v0.2.9 | Ganancia |
+|---|---|---|---|
+| **Caché de Uri** (p.iconPath) | 8 IPC/sec churn en steady-state (refs de vs.Uri.file no idénticas disparan) | `__ccsdUriCache` memoize → EH setter dedup dispara | 8 IPC/sec → ~0 (**99.6% de reducción**) |
+| **dedup de texto token SBI** (tsbi.text) | 2 IPC/sec (asimetría con tooltip dedup) | espeja el patrón tooltip dedup de `__ccsdTokSbiLastTip` | 2 IPC/sec → 0 |
+| **Caché de .offset sidecar** | 1.04ms/tick parse (sesión larga de 186KB = 58% EH I/O) | espeja el patrón mtime+size de `__ccsdAgCache` | 1.1ms/tick → ~0 (cache hit) |
+
+---
+
 ## 🏗️ Arquitectura + Documentación
 
 **Parchea el `extension.js` de CC (inyecta un temporizador que fija el icono de la pestaña) + los hooks de CC escriben el estado + notificaciones de completado/interrupción.** Documentación completa:

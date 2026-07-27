@@ -155,6 +155,22 @@ vscode-claude-code-status-dot        # lancez directement la commande après ins
 
 ---
 
+## ⚡ Performance (v0.2.9 preuves à l'appui)
+
+**Conclusion : cette extension ne cause aucun ralentissement perceptible de l'UI** — EH (Extension Host) occupe au pire 1.1% mean / 3.4% p99 CPU (streaming intensif), typical <0.3% ; le writer hook tourne dans le sous-processus CC à ~1-2ms/event. Tous les chiffres sont mesurés sur des fixture réels (42MB jsonl + 185KB sidecar + 2.1GB outlier). Voir [`docs/STATES.md`](docs/STATES.md) §9.
+
+Pourquoi ça ne ralentit pas ? L'IIFE tourne dans l'EH (processus indépendant), **pas dans le renderer**. Taper au clavier, changer d'onglet, copier sont des opérations renderer-local qui n'attendent pas l'EH. Même dans le worst-case 17ms p99 de blocage EH, seul l'IPC EH→renderer des autres extensions est retardé de 17ms (imperceptible pour l'utilisateur).
+
+v0.2.9 corrige 3 points de gaspillage de hygiene **mesurés** (chacun faible pris isolément, mais cumulés ~10 IPC/sec + 1.1ms/tick) :
+
+| Optimisation | Gaspillage mesuré (v0.2.8) | Correctif v0.2.9 | Gain |
+|---|---|---|---|
+| **cache Uri** (p.iconPath) | 8 IPC/sec churn à l'état stationnaire (vs.Uri.file : inégalité de références → déclenchement) | `__ccsdUriCache` memoize → setter EH dedup le déclenchement | 8 IPC/sec → ~0 (**-99.6%**) |
+| **dedup texte token SBI** (tsbi.text) | 2 IPC/sec (asymétrique vs. dedup tooltip) | réplique le schéma dedup tooltip `__ccsdTokSbiLastTip` | 2 IPC/sec → 0 |
+| **cache .offset sidecar** | 1.04ms/tick parse (186KB session longue = 58% EH I/O) | réplique le schéma mtime+size `__ccsdAgCache` | 1.1ms/tick → ~0 (cache hit) |
+
+---
+
 ## 🏗️ Principe + Documentation
 
 **Patche le `extension.js` de CC (injecte un minuteur pour régler l'icône d'onglet) + hooks CC écrivent l'état + notifications de fin / interruption.** Documentation complète :

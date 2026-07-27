@@ -25,25 +25,21 @@
 
 <div align="center">
 
-<img src="docs/images/status-dots.png" alt="顶部 tab 与侧边打开的编辑器里的状态点" width="640">
-
-**顶部 tab + 左上"打开的编辑器"侧边栏**——🟡 运行中 · 🟢 完成 · 🔵 待输入 · 🔴 中断
-
-<br>
-
-<img src="docs/images/completion-notification.png" alt="macOS 完成通知 + Glass 声" width="640">
-
-**会话完成时弹出的系统通知 + 提示音**（前台后台都弹）
-
-<br>
-
-<img src="docs/images/token-sbi-config.png" alt="右下角 token SBI 与点击弹出的 QuickPick 配置面板">
-
-**右下角 token 实时计数 + 点击弹出的配置面板**——token SBI 显示当前激活会话的用量与可选 $ 估算，**点击它**切换统计窗口 / 显示模式 / 通知 / 声音，或复制 token 数 / 重置统计 / 打开设置（面板跟随 VSCode 界面语言）
-
-<!-- 底部 4 灯聚合截图占位：建议补一张窗口底部状态栏的整体块截图，展示 🟢done 🟡running 🔵pending 🔴interrupted + 数字的视觉效果。 -->
+<img src="docs/images/overview-annotated.png" alt="总览：6 个功能点标注（点击放大）" width="820">
 
 </div>
+
+**① Tab 五态状态点**　每个 CC 会话 tab 的 Claude 图标按状态变色——🟡 运行中 / 🟢 完成 / 🔴 中断快闪 / ⚪ 空闲 / 🔵 待输入（CC 弹权限授权时让位给 CC 原生蓝点，不覆盖）；收藏的会话 tab 标题加 **★** 前缀 + 图标底部金线。顶部 tab 栏 + 左侧"打开的编辑器"都显示，两边同步。
+
+**② 侧边栏 CC 收藏视图**　Explorer 侧边新增 CC Favorites，把常用文件/会话 pin 在一起；会话图标 open=实心气泡 / closed=轮廓气泡，点击即跳转或 resume 到新 panel；右键已闭会话可复制 `claude -r <sid>` 命令。
+
+**③ 底部 4 灯聚合**　状态栏一个整体块 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + 计数，所有会话整体状态一眼看完，不用切 tab；4 灯位置固定，数字变化不位移。
+
+**④ ★ 一键收藏按钮**　状态栏 token 旁的 ★/☆ 按钮，一键收藏/取消当前活动 CC 会话（已收藏显金色 ★，未收藏显空心 ☆）；无活动 CC 会话时自动隐藏。
+
+**⑤ 右下角 token / $ cost**　当前激活会话的 token 用量 + 可选 USD 估算 + 流式速率（tok/s）；点击弹 QuickPick 配置面板（统计窗口 / 显示模式 / 通知 / 声音 / 复制 / 重置），面板跟随 VSCode 界面语言（中/英/日/德/西/法/葡/俄）。
+
+**⑥ 完成 / 中断通知**　会话跑完或被限速中断时弹系统通知 + 提示音（macOS 屏幕右上角下拉 / Windows·Linux 右下角 toast），前台后台都弹，切去干别的也能被提醒。
 
 ---
 
@@ -124,6 +120,7 @@ $(clock) 12.3k tok · 1.2k/s · ~$0.42
 - 点击 SBI 弹 QuickPick 配置面板：窗口切换 / 显示模式（token / cost / both）/ 通知开关 / 声音选择 / 复制 token 数 / 重置统计 / 打开状态目录 / 打开设置
 - **QuickPick 面板 + tooltip 跟随 VSCode 界面语言**（zh/en/ja/de/es/fr/pt/ru，未知语言 fallback en）——VSCode 中文 → 面板中文；配置值（5min/all/token/cost/both/声音名）跨语言统一不译
 - 限额告警：`ccStatusDot.warnThresholdUsd` 跨阈触发一次通知（默认禁用）
+- **v0.5.36 新：切 tab 即时跟手**——切到另一个会话时，token SBI 立刻反映新会话数据（扫 `__ccsdSidToPanel` 实时活动 panel + 事件驱动刷新，同款收藏星标机制）；切到**正在初始化**的会话（sid 还没捕获）显示 ⟳ loading，不再残留旧会话数字。加载完两个会话互切**无 loading 闪烁**（即时切换）
 
 **数据源**：CC transcript jsonl 是唯一权威源（每条 assistant 行的 `message.usage`），writer hook 增量读（byte-offset sidecar，33MB 大文件也能 < 100ms）。CC `/resume` 复用同一 sid → 统计天然延续；开新会话 → 从 0 起。
 
@@ -217,6 +214,7 @@ VSCode 资源管理器侧边栏新增 **CC Favorites** 视图——把常用文�
 - **跳转**：点文件节点 → 跳到该文件（带行号定位）；**点会话节点 → 已开的切过去，未开的恢复打开（resume 到新 panel，v0.5.11+）**；右键已闭会话 → **Copy 'claude -r <sid>'** 复制 resume 命令到剪贴板（终端兜底）。
 - **浏览**：命令面板 **CC Favorites: Browse** 用 QuickPick 键盘导航（打开已收藏项）。
 - **金线标记（v0.5.0+）**：收藏的 CC 会话，tab icon 底部加一条细金线（5 态点色/形完全不变），IIFE 500ms tick 自动从 `favorites.json` 同步。
+- **会话树图标区分（v0.5.36 新）**：侧边栏 CC Favorites 视图里，**open 会话**（已初始化在使用）显示实心浅灰聊天气泡（前景实心 + 后景轮廓），**closed 会话**显示单轮廓气泡——一眼区分哪些会话还活着、哪些已关。
 
 收藏存在 `~/.claude/cc-tab-status/favorites.json`（atomic 写，跨重启保留）。完整设计（4 路调研 + 5 个不明确点的确定答案 + 推迟到 v0.5 的风险部分）见 [`docs/FAVORITES-DESIGN.md`](docs/FAVORITES-DESIGN.md)。
 

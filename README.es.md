@@ -21,29 +21,25 @@
 
 ---
 
-## 🖼️ Vista previa
+## 🖼️ De un vistazo
 
 <div align="center">
 
-<img src="docs/images/status-dots.png" width="640" alt="Puntos de estado en la pestaña superior y en Editores abiertos">
-
-**Barra de pestañas superior + vista "Editores abiertos" arriba a la izquierda** — 🟡 corriendo · 🟢 completado · 🔵 esperando tu entrada · 🔴 interrumpido
-
-<br>
-
-<img src="docs/images/completion-notification.png" width="640" alt="Notificación del sistema al completarse + sonido Glass">
-
-**Notificación del sistema + sonido cuando termina la sesión** (en primer y segundo plano)
-
-<br>
-
-<img src="docs/images/token-sbi-config.png" alt="SBI de tokens en la esquina inferior derecha y panel QuickPick que se abre al hacer clic">
-
-**Conteo de tokens en tiempo real en la esquina inferior derecha + panel de configuración que se abre al hacer clic** — el SBI de tokens muestra el uso de la sesión activa y (opcional) la estimación en $; **haz clic en él** para cambiar ventana de estadísticas / modo de muestra / notificación / sonido, o copiar el conteo de tokens / reiniciar estadísticas / abrir ajustes (el panel sigue el idioma de la interfaz de VSCode)
-
-<!-- Placeholder para captura de la barra inferior de 4 luces: valdría la pena añadir una captura de la esquina inferior de la ventana mostrando 🟢done 🟡running 🔵pending 🔴interrupted + números. -->
+<img src="docs/images/overview-annotated.png" alt="Vista general: 6 funciones anotadas (haz clic para ampliar)" width="820">
 
 </div>
+
+**① Punto de cinco estados en la pestaña**　El icono de Claude de cada pestaña de sesión de CC cambia de color según su estado — 🟡 corriendo / 🟢 completado / 🔴 parpadeo rápido de interrupción / ⚪ inactivo / 🔵 esperando tu entrada (cuando CC pide autorización, cede el paso al punto azul nativo de CC, sin sobrescribirlo); las pestañas de sesiones favoritas llevan un prefijo **★** en el título + una línea dorada en la parte inferior del icono. Visible a la vez en la barra de pestañas superior y en "Editores abiertos" de la izquierda, totalmente sincronizado en ambos lados.
+
+**② Vista CC Favorites en la barra lateral**　El Explorador añade una vista CC Favorites, donde fijar juntos tus archivos y sesiones de uso frecuente; el icono de sesión open=bocadillo sólido / closed=bocadillo de solo contorno; un clic salta a ella o la reanuda (resume) en un panel nuevo; clic derecho sobre una sesión cerrada copia el comando `claude -r <sid>`.
+
+**③ 4 luces agregadas abajo**　Un único bloque en la barra de estado 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + conteo; el estado global de todas las sesiones de un vistazo, sin cambiar de pestaña; las 4 posiciones son fijas, los cambios en los números no desplazan la fila.
+
+**④ Botón ★ de un clic para marcar favorito**　El botón ★/☆ junto al contador de tokens en la barra de estado, con un clic marca/desmarca la sesión de CC activa como favorita (si ya es favorita muestra la estrella dorada sólida ★; si no, muestra un ☆ hueco); se oculta automáticamente cuando no hay sesión de CC activa.
+
+**⑤ Token / coste $ en la esquina inferior derecha**　Uso de tokens de la sesión activa + estimación opcional en USD + velocidad de streaming (tok/s); un clic abre el panel de configuración QuickPick (ventana de estadísticas / modo de muestra / notificación / sonido / copiar / reiniciar); el panel sigue el idioma de la interfaz de VSCode (zh/en/ja/de/es/fr/pt/ru).
+
+**⑥ Notificación de completado / interrupción**　Cuando la sesión termina o se interrumpe por rate limit salta una notificación del sistema + sonido (esquina superior derecha en macOS / toast abajo a la derecha en Windows·Linux), en primer y segundo plano; aunque cambies a otra app te avisa.
 
 ---
 
@@ -121,6 +117,7 @@ $(clock) 12.3k tok · $0.42
 - **El panel QuickPick + el tooltip siguen el idioma de la interfaz de VSCode** (zh/en/ja/de/es/fr/pt/ru; los idiomas desconocidos caen a en) — VSCode en español → panel en español; los valores de configuración (5min/all/token/cost/both/nombres de sonido) son neutros al idioma y nunca se traducen
 - **v0.3.0 nuevo: velocidad tok/s + mini-gráfico Unicode** —— cada tick de 500ms muestrea tokens input+output (excluye cache_read/cache_creation adrede; los spikes de cache producirían lecturas sin sentido de millones de tok/s); los últimos 8 samples (4s) se dibujan como mini-gráfico `▁▂▃▄▅▆▇█`, ventana móvil de 5s para `tok/s`. `ccStatusDot.rateDisplayMode` (`off|numeric|sparkline|both`, por defecto `both`) controla el render; cambia a `numeric` u `off` si la barra de estado está saturada
 - Alerta de umbral: `ccStatusDot.warnThresholdUsd` lanza una notificación al cruzarlo (desactivado por defecto)
+- **Nuevo en v0.5.36: cambio de pestaña instantáneo y fluido**——al cambiar a otra sesión, el SBI de tokens refleja al instante los datos de la nueva sesión (escanea `__ccsdSidToPanel` para el panel activo en tiempo real + refresco basado en eventos, mismo mecanismo que la estrella de favorito); al cambiar a una sesión **inicializándose** (sid aún no capturado) muestra ⟳ loading, y ya no queda el número de la sesión anterior. Una vez cargadas, al alternar entre dos sesiones **no parpadea el loading** (cambio instantáneo)
 
 **Fuente de datos**: el `jsonl` de transcripción de CC es la fuente autoritativa única (cada fila `assistant` lleva en `message.usage` el 100% de input/output/cache_read/cache_creation). El hook writer lo lee incrementalmente vía un sidecar de byte-offset (un archivo de 33MB cuesta < 100ms igualmente). CC `/resume` reutiliza el mismo sid → la estadística continúa naturalmente; una sesión nueva arranca en 0.
 
@@ -200,6 +197,26 @@ Al instalar con `npx`, el patcher detecta cada CLI de la familia VSCode en tu `P
 
 En cada arranque de VSCode, el companion comprueba el marcador `cc-status-dot-injected` dentro de la extensión de CC — si CC lo borró en una actualización, ejecuta silenciosamente `node ~/.claude/cc-status-dot/patch.js` para reparchear y sugiere un `Reload Window`. El usuario **se recupera sin enterarse**, no hace falta correr `npx` a mano.
 
+### ⭐ Vista CC Favorites (v0.4.0+) + menú contextual de pestaña / marca de línea dorada (v0.5.0+)
+
+La barra lateral del Explorador de VSCode incorpora una nueva vista **CC Favorites** — fija juntos tus archivos de uso frecuente y tus sesiones de CC, para volver a ellos rápidamente entre paneles y entre reinicios.
+
+- **Añadir archivo**: en el Explorer, clic derecho sobre cualquier archivo → **CC Favorites: Add/Remove File** (la opción `ccStatusDot.fav.includeInExplorerContextMenu` está activa por defecto; puedes desactivarla si el menú está saturado).
+- **Añadir sesión de CC** (tres puntos de entrada):
+  - En la paleta de comandos busca **CC Favorites: Star/Unstar Current CC Tab** — añade o quita la sesión activa de Favorites.
+  - En la paleta de comandos busca **CC Favorites: Pick CC Session to Star/Unstar** (v0.5.9+) — un QuickPick lista todas las sesiones de CC abiertas (las ya favoritas con ★ al frente); elegir una hace toggle, **sin depender de la pestaña activa**; es el punto de entrada fiable para marcar favoritos dentro de una sesión.
+  - **Botón ★ en la barra de estado (v0.5.10+, lo más cómodo)** — en la barra de estado inferior derecha (junto al contador de tokens) un botón ★/☆ **con un clic** marca/desmarca la sesión de CC activa: si ya es favorita muestra la estrella dorada sólida ★ (en oro, alineada con la línea dorada); si no, muestra un ☆ hueco. Actúa siempre sobre la sesión activa (esquiva las limitaciones de plataforma del webview de solo-escritura-una-vez y del clic derecho que confunde pestaña), y al hacer clic cambia al instante (tras cambiar de pestaña se sincroniza en ≤500ms, v0.5.11); se oculta automáticamente cuando no hay sesión de CC activa.
+  - En la zona **Open Editors** del Explorer, clic derecho sobre una pestaña de CC → **Añadir/Quitar de CC Favorites** (texto dinámico, opción `ccStatusDot.fav.includeInExplorerContextMenu`).
+- **Prefijo ★ en el título (v0.5.9+)**: las sesiones de CC favoritas llevan automáticamente un prefijo `★ ` en el **título** de la pestaña (el color y la forma del punto de cinco estados no cambian, la marca de línea dorada se mantiene). Una IIFE sincroniza cada 500ms tick desde `favorites.json` (caché por mtime → visible en ≤1s tras escribir el favorito). La "estrella clicable dentro del webview" de v0.5.8 se demostró arquitectónicamente inviable tras una investigación forense (CC solo fija `webview.html` una vez al crear el panel; cualquier reasignación dispara una recarga completa que destruye la sesión) y quedó descartada; el prefijo en el título es su sustituto sin recarga.
+- **Navegación**: clic en un nodo de archivo → salta a ese archivo (con posicionamiento por número de línea); **clic en un nodo de sesión → si está abierta, cambia a ella; si está cerrada, se reabre (resume en un panel nuevo, v0.5.11+)**; clic derecho sobre una sesión cerrada → **Copy 'claude -r <sid>'** copia el comando de resume al portapapeles (respaldo en terminal).
+- **Explorar**: en la paleta de comandos **CC Favorites: Browse** abre un QuickPick navegable por teclado (abre los elementos favoritos).
+- **Marca de línea dorada (v0.5.0+)**: las sesiones de CC favoritas llevan una línea dorada fina en la parte inferior del icono de la pestaña (el color y la forma del punto de cinco estados no cambian en absoluto); una IIFE sincroniza cada 500ms tick automáticamente desde `favorites.json`.
+- **Distinción de iconos en el árbol de sesiones (nuevo en v0.5.36)**: en la vista CC Favorites de la barra lateral, las sesiones **open** (ya inicializadas y en uso) muestran un bocadillo de chat gris claro sólido (frente sólido + fondo en contorno), mientras que las sesiones **closed** muestran un bocadillo de solo contorno — de un vistazo distingues qué sesiones siguen vivas y cuáles se han cerrado.
+
+Los favoritos se guardan en `~/.claude/cc-tab-status/favorites.json` (escritura atómica, persistente entre reinicios). Diseño completo en [`docs/FAVORITES-DESIGN.md`](docs/FAVORITES-DESIGN.md).
+
+> Desde v0.5.11, hacer clic en una sesión cerrada la reanuda directamente en un panel — invoca el propio `claude-vscode.editor.open(sid)` de CC → `createPanel(sid)`, que al arrancar el CLI pasa `--session-id=<sid>` para cargar el historial de esa sesión. El comando Copy del clic derecho se conserva como respaldo para terminal.
+
 ### ⚙️ Se mantiene en _running_ durante workflows
 
 Cuando se ejecutan workflows o subagentes en segundo plano, la sesión principal se mantiene amarilla (no se pone verde por error) y no reporta un completado falso — `Stop` solo confía en el `background_tasks` del payload, sin deriva.
@@ -259,7 +276,7 @@ Ambas formas son equivalentes e idempotentes. La IIFE y los hooks referencian la
 
 **Dos formas de cambiar la configuración**:
 
-1. **Haz clic en el SBI de tokens abajo a la derecha** → se abre el panel QuickPick de configuración (ver la captura en "🖼️ Vista previa" arriba) — cambia gráficamente ventana de estadísticas / modo de muestra / notificación / sonido, o copia el conteo de tokens / reinicia las estadísticas / abre el directorio de estado / abre los ajustes. Los cambios se escriben automáticamente en `settings.json`; el panel sigue el idioma de la interfaz de VSCode (zh/en/ja/de/es/fr/pt/ru; los idiomas desconocidos caen a en).
+1. **Haz clic en el SBI de tokens abajo a la derecha** → se abre el panel QuickPick de configuración (ver la captura en "🖼️ De un vistazo" arriba) — cambia gráficamente ventana de estadísticas / modo de muestra / notificación / sonido, o copia el conteo de tokens / reinicia las estadísticas / abre el directorio de estado / abre los ajustes. Los cambios se escriben automáticamente en `settings.json`; el panel sigue el idioma de la interfaz de VSCode (zh/en/ja/de/es/fr/pt/ru; los idiomas desconocidos caen a en).
 2. **Editar `settings.json` directamente** (tabla más abajo) — práctico para configuración en lote o control de versiones.
 
 Escríbelo en el `settings.json` de VSCode (si no lo configuras, se usan los valores por defecto):

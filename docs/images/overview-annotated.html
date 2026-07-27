@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{width:2028px;height:1500px;position:relative;background:#1e1e1e;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  .bg{position:absolute;left:0;top:0;width:2028px;height:1456px}
+  .c{position:absolute;width:48px;height:48px;border-radius:50%;background:#CCA700;
+     border:3.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.6);
+     color:#1e1e1e;font-weight:800;font-size:27px;display:flex;align-items:center;justify-content:center;z-index:10}
+  .legend{position:absolute;right:20px;top:206px;width:400px;background:rgba(30,30,30,.94);
+     border:1.5px solid #CCA700;border-radius:10px;padding:16px 18px;color:#e8e8e8;
+     font-size:17px;line-height:1.5;box-shadow:0 4px 18px rgba(0,0,0,.5);z-index:20}
+  .legend h3{color:#CCA700;font-size:19px;margin-bottom:9px;border-bottom:1px solid #555;padding-bottom:6px}
+  .legend .row{display:flex;align-items:flex-start;margin:6px 0}
+  .legend .n{flex:0 0 28px;height:26px;width:26px;border-radius:50%;background:#CCA700;color:#1e1e1e;
+     font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;margin-right:9px;margin-top:1px}
+  .legend b{color:#fff}
+</style></head>
+<body>
+<img class="bg" src="overview-user-redacted.png">
+<!-- 均匀缩放 0.895 from 2266x1626 → 2028x1456; 4-light center 像素扫描确认 x=511 -->
+<!-- ①再右移(+80→620), ②再上移(-80→80) -->
+<div class="c" style="left:620px;top:25px">1</div>
+<div class="c" style="left:121px;top:80px">2</div>
+<div class="c" style="left:504px;top:1452px">3</div>
+<div class="c" style="left:1763px;top:1452px">4</div>
+<div class="c" style="left:1897px;top:1452px">5</div>
+<div class="c" style="left:1727px;top:25px">6</div>
+
+<div class="legend">
+  <h3>功能点 / Features</h3>
+  <div class="row"><div class="n">1</div><div><b>Tab 五态状态点</b>　每个 CC 会话 tab 的 Claude 图标按状态变色(🟡运行 🟢完成 🔵待输入 🔴中断);收藏会话 tab 标题加 <b>★</b> 前缀 + 图标底部金线</div></div>
+  <div class="row"><div class="n">2</div><div><b>侧边栏 CC 收藏</b>　Explorer 侧边新增 CC Favorites 视图,把常用文件/会话 pin 在一起;会话图标 open=实心气泡 / closed=轮廓气泡,点击即跳转或恢复</div></div>
+  <div class="row"><div class="n">3</div><div><b>底部 4 灯聚合</b>　状态栏左下整体块 🟢done 🟡running 🔵pending 🔴interrupted + 计数,所有会话整体状态一眼看完</div></div>
+  <div class="row"><div class="n">4</div><div><b>★ 一键收藏按钮</b>　状态栏 token 旁的 ★/☆ 按钮,一键收藏/取消当前活动 CC 会话</div></div>
+  <div class="row"><div class="n">5</div><div><b>右下角 token / $ cost</b>　当前激活会话的 token 用量 + 可选 USD 估算 + 流式速率;点击弹 QuickPick 配置面板</div></div>
+  <div class="row"><div class="n">6</div><div><b>完成/中断通知</b>　会话跑完或被限速中断时弹系统通知 + 提示音(前台后台都弹)</div></div>
+</div>
+</body></html>

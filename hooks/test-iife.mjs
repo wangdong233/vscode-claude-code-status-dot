@@ -227,9 +227,24 @@ check(
 // are GONE from the baked IIFE so a regression that re-adds the dead logger
 // surfaces here.
 check(
-  'IIFE.12b2 v0.2.9-debug __ccsdDbg logger REMOVED from IIFE (F3) [v0.5.29: __ccsdDebug temp diag also removed after root-causing]',
-  !/__(?:ccsdDbg(?:Log)?|ccsdRenderMap|ccsdDebug)\b/.test(iife) && !/_panel-debug\.log/.test(iife),
-  'v0.5.2 removed __ccsdDbg + __ccsdRenderMap (dead loggers). v0.5.27 temporarily re-added __ccsdDebug (CCSD_DEBUG=1 gated, wrote _panel-debug.log) to diagnose the §F/§H blue-tab divergence; v0.5.29 root-caused it (Stop awaitsUser text heuristic) and removed the diag again.',
+  'IIFE.12b2 v0.2.9-debug dead loggers REMOVED (F3): __ccsdDbg/__ccsdRenderMap/_panel-debug.log absent [v0.5.36: __ccsdDebug re-added as zero-sync-I/O flag — see IIFE.12b3]',
+  !/__(?:ccsdDbg(?:Log)?|ccsdRenderMap)\b/.test(iife) && !/_panel-debug\.log/.test(iife),
+  'v0.5.2 removed __ccsdDbg + __ccsdRenderMap (dead loggers). v0.5.27 temporarily re-added __ccsdDebug writing _panel-debug.log via appendFileSync; v0.5.29 removed it after root-causing (Stop awaitsUser text heuristic). v0.5.36 re-added __ccsdDebug as a zero-sync-I/O boolean FLAG (NOT a logger) for QuickPick click-timing — the dead __ccsdDbg/__ccsdRenderMap loggers + _panel-debug.log sync file stay removed forever.',
+);
+// v0.5.36 __ccsdDebug re-introduction contract. The 03-review HIGH finding
+// flagged that the QuickPick root cause was L1 inference; the zero-sync-I/O
+// instrumentation here elevates it to L2. The CRITICAL guard: this __ccsdDebug
+// must NEVER pair with appendFileSync / _panel-debug.log (the v0.5.27 Anchor B
+// Heisenbug, patch.ts:2772: sync I/O shifted tick timing -> masked the bug).
+check(
+  'IIFE.12b3 v0.5.36 __ccsdDebug zero-sync-I/O QuickPick timing: env-gated + in-memory marks + OutputChannel dump (NOT appendFileSync — Anchor B Heisenbug guard)',
+  /typeof globalThis\.__ccsdDebug\s*===\s*"undefined"\s*\)\s*\{\s*try\s*\{\s*globalThis\.__ccsdDebug\s*=\s*\(process\.env\.CCSD_DEBUG/.test(
+    iife,
+  ) &&
+    /__marks\.push\(\{p:p,t:/.test(iife) &&
+    /createOutputChannel\("CCSD Debug"\)/.test(iife) &&
+    !/_panel-debug\.log/.test(iife),
+  'v0.5.36 re-introduces __ccsdDebug (removed v0.5.29) as a zero-sync-I/O boolean flag for QuickPick click-timing instrumentation. Contract: (1) lazy-init gated by typeof-undefined + process.env.CCSD_DEBUG (off by default, zero overhead in production); (2) timing marks are in-memory __marks.push({p,t}) — microseconds, no I/O; (3) dump via vs.window.createOutputChannel("CCSD Debug").appendLine (async, non-blocking). NEVER appendFileSync/_panel-debug.log (Anchor B Heisenbug, patch.ts:2772). If a future change pairs __ccsdDebug with sync file I/O, this assertion + 12b2 together must catch it.',
 );
 // v0.2.6 blue-via-content: per-panel reader pending branch. The IIFE's
 // per-panel tick reads j.pending from the status file and renders our blue
@@ -386,7 +401,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.35 stamp', /\/\*cc-status-dot-injected:v0.5.35:/.test(iife));
+check('IIFE.21c banner carries v0.5.36 stamp', /\/\*cc-status-dot-injected:v0.5.36:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -2905,6 +2920,44 @@ check(
   'IIFE.174 v0.5.9 tab-title write guarded by `panelTab.title !== __want` (no redundant 2×/sec IPC)',
   /if\(t\.panelTab\.title!==__want\)t\.panelTab\.title=__want/.test(iife),
   'only re-assign panelTab.title when the desired value differs from the current — avoids a redundant renderer write every 500ms tick when fav state is unchanged',
+);
+check(
+  'IIFE.175 v0.5.36 Fix 1 rev5: onDidChangeViewState sets __switching__ sentinel (when sid unset) + triggers event-driven __ccsdSbiTick refresh; NO unconditional loading icon (rev3 removed — caused loaded-switch flicker)',
+  /if\(ev&&ev\.webviewPanel&&ev\.webviewPanel\.active===true\)\{if\(t\.__ccsdSid\)\{globalThis\.__ccsdActiveSid=t\.__ccsdSid/.test(
+    iife,
+  ) &&
+    /\}else\{globalThis\.__ccsdActiveSid="__switching__";\}/.test(iife) &&
+    /if\(globalThis\.__ccsdSbiTick\)\{try\{globalThis\.__ccsdSbiTick\(\)\}catch/.test(iife) &&
+    !/__ccsdTokSbi\.text="\$\(sync~spin\)";globalThis\.__ccsdTokSbiLastText=""/.test(iife),
+  'v0.5.36 Fix 1 evolved through 5 revs. rev1 gated loading on t.__ccsdSid (failed for initializing sessions). rev3 added unconditional $(sync~spin) on every activation — but user reported this caused a loading FLICKER on loaded-session switches (unnecessary transition). rev5 mirrors the companion favStatusBar exactly: (1) onDidChangeViewState sets the __switching__ sentinel ONLY when t.__ccsdSid is unset (initializing); (2) triggers an event-driven __ccsdSbiTick refresh (immediate, like favStatusBar tabGroups activation — not waiting for the 500ms tick); (3) NO unconditional loading icon. The §G tick (IIFE.179) scans __ccsdSidToPanel for the real-time active panel → instant swap for loaded sessions, loading via sentinel for initializing. Asserts: active=true gate + sentinel when sid unset + __ccsdSbiTick trigger + NO unconditional tsbi.text=$(sync~spin).',
+);
+check(
+  'IIFE.179 v0.5.36 Fix 1 rev5: §G tick scans __ccsdSidToPanel for panelTab.active===true (real-time, mirrors favStatusBar) + __ccsdSbiTick exposed on globalThis for event-driven refresh',
+  /var __spm=globalThis\.__ccsdSidToPanel;if\(__spm\)\{for\(var __pk in __spm\)/.test(iife) &&
+    /if\(__spm\[__pk\]&&__spm\[__pk\]\.active===true\)\{activeSid=__pk;break/.test(iife) &&
+    /globalThis\.__ccsdSbiTick=__ccsdSbiTick/.test(iife),
+  'THE specific difference (user ask "为什么收藏能 token 不能"): companion favStatusBar activeCcSidOrLoading() scans globalThis.__ccsdSidToPanel for the panel with .active===true — VSCode panelTab.active is a REAL-TIME property that flips the instant a tab is switched (does NOT wait for the 500ms per-panel tick to write __ccsdActiveSid). The token SBI formerly read __ccsdActiveSid (lagging ≤500ms) → stale prev-session data during switch + loading flicker. rev5 fix: §G tick now scans __ccsdSidToPanel the same way (real-time active panel) → instant correct sid on switch. __ccsdSbiTick is exposed on globalThis so onDidChangeViewState (event-driven, fires on tab switch) can trigger an immediate §G refresh — matching favStatusBar tabGroups activation timing. Loading (via __switching__ sentinel, IIFE.177/178) only fires when the active panel has no captured sid (truly initializing). Asserts: scan loop + active===true check + globalThis.__ccsdSbiTick exposure.',
+);
+check(
+  'IIFE.177 v0.5.36 Fix 1 rev6: §G tick checks __switching__ sentinel FIRST (before scan) → shows $(sync~spin) + returns',
+  /if\(globalThis\.__ccsdActiveSid==="__switching__"\)\{[^]*?tsbi\.text="\$\(sync~spin\)"\}return/.test(iife) &&
+    !/if\(activeSid==="__switching__"\)/.test(iife),
+  'rev6 moved the sentinel check to the TOP of the §G tick (before the __ccsdSidToPanel scan), checking globalThis.__ccsdActiveSid directly. Previously the sentinel check was AFTER the scan+fallback — if the scan resolved activeSid to a real sid (e.g. a stale-active prev-session panel whose panelTab.active transiently lagged the tab switch), the sentinel was skipped → stale prev-session tokens shown during initializing-session switch. rev6: sentinel takes ABSOLUTE priority — if __ccsdActiveSid is "__switching__" (set by per-panel tick rev4 / onDidChangeViewState rev5 when the active panel sid is not captured), show loading + return, regardless of scan result. The old post-scan if(activeSid===...) check is removed (dead code). Asserts: globalThis.__ccsdActiveSid sentinel check + loading+return + NO leftover activeSid===sentinel check.',
+);
+check(
+  'IIFE.178 v0.5.36 Fix 1 rev4: per-panel tick ASSERTS __switching__ sentinel when active && sid unset (500ms poll — mirrors companion favStatusBar activeCcSidOrLoading)',
+  /claude-logo-idle\.svg/.test(iife) &&
+    /if\(p\.active===true\)\{globalThis\.__ccsdActiveSid="__switching__"\}return/.test(iife),
+  'rev3 relied on onDidChangeViewState (one-time event) to set the sentinel — but for a resumed HISTORICAL session the per-panel tick (500ms poll) is the robust path, mirroring the companion favStatusBar activeCcSidOrLoading() which pulls the active tab registration status every tick. Root cause traced by user-reported asymmetry: favStatusBar showed loading immediately while token SBI showed stale prev-session tokens — because the per-panel tick early-returned at if(!sid) WITHOUT touching __ccsdActiveSid, so the global stayed at the previous session A until B sid landed. rev4 fix: in the !sid early-return, if p.active===true assert globalThis.__ccsdActiveSid="__switching__" every tick → §G tick (IIFE.177) shows loading. Once Anchor A captures the real sid, the active-gate (if(p.active===true){__ccsdActiveSid=sid}) overwrites the sentinel. Asserts: idle.svg catch immediately followed by the active-gate sentinel assertion.',
+);
+check(
+  'IIFE.176 v0.5.36 rev2: showQuickPick().then dumps timing marks via __dump() — NO withProgress notification, NO qpLoadingTitle (cancel/Esc just closes picker, nothing to leak)',
+  /showQuickPick\(items,\{placeHolder:tr\("qpPlaceHolder"\)\}\)\.then\(function\(p\)\{__dump\(\);if\(!p\)return/.test(
+    iife,
+  ) &&
+    !/vs\.window\.withProgress/.test(iife) &&
+    !/qpLoadingTitle/.test(iife),
+  'rev2 removed the initial v0.5.36 withProgress wrapper — it popped an intrusive "Loading token stats…" notification on EVERY click, and misleadingly suggested a network fetch. The config panel is 100 percent local: getConfiguration("ccStatusDot") + readTok() reading ~/.claude/cc-status-dot/<sid>.json; ZERO network calls; works fully offline. The first-click latency is VSCode showQuickPick cold-start (picker UI + codicon first-init, once per session) — extension code cannot eliminate it. The .then callback now just dumps timing marks (gated by CCSD_DEBUG) then handles the pick. resolveCb is gone (no withProgress Promise) so cancel/Esc has nothing to leak. Asserts: .then(function(p){__dump();if(!p)return + NO withProgress + NO qpLoadingTitle (unused i18n key removed with the notification).',
 );
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

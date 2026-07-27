@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.35";
+const MIN_PATCHER_VERSION = "0.5.36";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.35";
+    return effectiveConfig?.injectVersion ?? "v0.5.36";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1274,7 +1274,15 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
         // (🚫) and misleads users into thinking the session errored. "comment"
         // reads as "inactive conversation" — visually coherent with the open
         // variant. Long-stable codicon; no fallback risk.
-        item.iconPath = isOpen ? new vscode.ThemeIcon("comment-discussion") : new vscode.ThemeIcon("comment");
+        // v0.5.36: open-session icon — custom SVG (front bubble SOLID WHITE, back
+        // bubble outline) to clearly distinguish "initialized + in use" from the
+        // closed-session outline codicon "comment". User request: the small
+        // foreground chat bubble in the in-use icon should be solid white.
+        // Closed session stays codicon "comment" (single outline bubble).
+        // See companion/media/fav-open.svg (packaged via .vscodeignore allow-list).
+        item.iconPath = isOpen
+            ? vscode.Uri.file(path.join(__dirname, "..", "media", "fav-open.svg"))
+            : new vscode.ThemeIcon("comment");
         item.description = isOpen
             ? `${String(s.state || "open").slice(0, 12)}`
             : `(closed)${s.state ? " " + String(s.state).slice(0, 8) : ""}`;

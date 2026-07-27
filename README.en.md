@@ -17,33 +17,25 @@
 
 ---
 
-## Stop tab-switching. Start seeing.
-
-When you've got several Claude Code sessions going in parallel — one coding, one reviewing, one quietly waiting on permission — it's easy to lose track of which is done, which is still working, and which is stalled on you.
-
-**vscode-claude-code-status-dot lights up every CC session's tab icon, adds a single-glance aggregate at the bottom of the window, and pings you with a system notification when a turn ends.** You always know the state of every session without leaving what you're doing.
+## 🖼️ See it at a glance
 
 <div align="center">
 
-<img src="docs/images/status-dots.png" width="640" alt="Five-state status dots on every CC session">
-
-_Every CC session's tab — in both the top tab bar and the left-side "Open Editors" view — shows its live state. 🟡 yellow = running, 🟢 green = done, 🔵 blue = awaiting your input (permission yield), 🔴 red = interrupted, ⚪ gray = idle._
-
-<br>
-
-<img src="docs/images/completion-notification.png" width="640" alt="Completion notification">
-
-_A native macOS notification drops the moment a turn ends — foreground or background, with sound, no buttons, auto-dismisses._
-
-<br>
-
-<img src="docs/images/token-sbi-config.png" width="640" alt="Right-side token SBI and the QuickPick config panel that pops up when you click it">
-
-**Right-side real-time token count + the config panel that pops up when you click it** — the token SBI shows the active session's usage and (optional) $ estimate. **Click it** to switch the stats window / display mode / notifications / sound, or copy the token count / reset stats / open settings (the panel follows VSCode's UI language).
-
-<!-- SCREENSHOT-TODO: bottom status bar 4-light aggregate is a new visual not yet captured. Suggested shot: VSCode window with 2+ CC sessions running, bottom-left status bar showing the 4-light row (🟢done · 🟡running · 🔵pending · 🔴interrupted + per-light counts). Drop the file at docs/images/bottom-bar-aggregate.png and reference it here. -->
+<img src="docs/images/overview-annotated.png" alt="Overview: 6 features annotated (click to enlarge)" width="820">
 
 </div>
+
+**① Tab five-state status dots**　Every CC session tab's Claude icon changes color by state — 🟡 running / 🟢 done / 🔴 interrupted fast-flash / ⚪ idle / 🔵 awaiting input (yields to CC's native blue dot when CC pops a permission dialog, never overrides it); favorited session tabs get a **★** prefix on the title + a gold line under the icon. Shown in both the top tab bar and the left-side "Open Editors" view, synced on both sides.
+
+**② Sidebar CC Favorites view**　A new CC Favorites in the Explorer sidebar pins frequently-used files and sessions together; session icons show open = solid chat bubble / closed = outline bubble, click to jump to it or resume into a new panel; right-click a closed session to copy the `claude -r <sid>` command.
+
+**③ Bottom 4-light aggregate**　A single block on the status bar — 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + counts — every session's overall status at a glance, no tab-switching needed; the 4 light slots are fixed in place, counts changing never shifts the layout.
+
+**④ ★ One-click favorite button**　The ★/☆ button next to the token count on the status bar — one click to favorite / unfavorite the currently active CC session (favorited shows solid gold ★, unfavorited shows hollow ☆); auto-hides when there is no active CC session.
+
+**⑤ Bottom-right token / $ cost**　The currently active session's token usage + optional USD estimate + streaming rate (tok/s); click to pop a QuickPick config panel (stats window / display mode / notifications / sound / copy / reset), the panel follows VSCode's UI language (zh/en/ja/de/es/fr/pt/ru).
+
+**⑥ Completion / interruption notifications**　When a session finishes running or gets interrupted by rate-limiting, a system notification + sound pops up (macOS top-right dropdown / Windows · Linux bottom-right toast), fires in both foreground and background, so you get reminded even when you've switched away to do something else.
 
 ---
 
@@ -125,6 +117,7 @@ $(clock) 12.3k tok · 1.2k/s · ~$0.42
 - Click the SBI for a QuickPick config panel: window switch / display mode (token / cost / both) / notify toggle / sound pick / copy token count / reset stats / open state dir / open settings.
 - **The QuickPick config panel + tooltip follow VSCode's UI language** (zh/en/ja/de/es/fr/pt/ru, unknown falls back to en) — VSCode in Chinese → panel in Chinese. Config values (5min / all / token / cost / both / sound names) are language-neutral and never translated.
 - Threshold alert: `ccStatusDot.warnThresholdUsd` fires a notification when crossed (disabled by default).
+- **v0.5.36 new: instant tracking on tab switch** — when you switch to another session, the token SBI immediately reflects the new session's data (scans `__ccsdSidToPanel` for the real-time active panel + event-driven refresh, same pattern as the favorites star); switching to a session that's **still initializing** (sid not yet captured) shows ⟳ loading instead of leaving stale numbers from the previous session. Once loaded, switching back and forth between two sessions has **no loading flicker** (instant switch).
 
 **Data source**: CC's transcript jsonl is the single authoritative source (each `assistant` row's `message.usage` carries 100% of input/output/cache_read/cache_creation). The writer hook reads it incrementally via a byte-offset sidecar (a 33MB file still costs < 100ms). CC `/resume` reuses the same sid → stats carry over naturally; a fresh session starts from 0.
 
@@ -201,6 +194,26 @@ The CC tab in VSCode's top-left "Open Editors" view **also carries the status do
 
 Runtime files (4 SVGs + hook script + patcher) live in `~/.claude/cc-status-dot/`. CC's auto-update only wipes its own extension dir — `~/.claude/` is untouched. Deleting the source project or purging the npx cache also has no effect. **Plus**, since v0.2.0, the companion extension silently re-applies the patch on next VSCode start.
 
+### ⭐ CC Favorites view (v0.4.0+) + tab right-click / gold-line marker (v0.5.0+)
+
+A new **CC Favorites** view in VSCode's Explorer sidebar — pin frequently-used files and CC sessions together, and jump back to them quickly across panels and restarts.
+
+- **Add a file**: right-click any file in Explorer → **CC Favorites: Add/Remove File** (setting `ccStatusDot.fav.includeInExplorerContextMenu` is on by default; turn it off if the menu gets crowded).
+- **Add a CC session** (three entry points):
+  - Command palette: **CC Favorites: Star/Unstar Current CC Tab** — adds/removes the currently active session to/from Favorites.
+  - Command palette: **CC Favorites: Pick CC Session to Star/Unstar** (v0.5.9+) — a QuickPick listing every open CC session (already-favorited ones ★ to the top); pick one to toggle, **independent of the currently active tab** — the reliable entry point for starring a session from inside itself.
+  - **Status-bar ★ button (v0.5.10+, handiest)** — a ★/☆ button on the bottom-right status bar (next to the token count) that **one-click** favorites/unfavorites the currently active CC session: favorited shows a solid gold ★ (gold, aligned with the gold-line marker), unfavorited shows a hollow ☆. It always acts on the currently active session (sidestepping the platform limits of webview write-once / right-click picking the wrong tab), and toggles on click (catches up to state within ≤500ms after switching tabs, v0.5.11); auto-hides when there is no active CC session.
+  - Right-click a CC tab in Explorer's **Open Editors** area → **Add to / Remove from CC Favorites** (dynamic label, setting `ccStatusDot.fav.includeInExplorerContextMenu`).
+- **★ title prefix (v0.5.9+)**: a favorited CC session automatically gets a `★ ` prepended to its tab **title** (the five-state dot color/shape stays unchanged, and the gold-line marker remains). An IIFE syncs from `favorites.json` every 500ms tick (mtime cache → shows within ≤1s after a favorite is written). The v0.5.8 "clickable star inside the webview" was forensically proven architecturally infeasible (CC only sets webview.html once when creating the panel; any reset triggers a full-page reload that destroys the session) and was abandoned; the title prefix is its reload-free replacement.
+- **Jump**: click a file node → jump to that file (with line-number positioning); **click a session node → switch to it if open, or resume-open if closed (resume into a new panel, v0.5.11+)**; right-click a closed session → **Copy 'claude -r <sid>'** copies the resume command to the clipboard (terminal fallback).
+- **Browse**: command palette **CC Favorites: Browse** for QuickPick keyboard navigation (opens favorited items).
+- **Gold-line marker (v0.5.0+)**: a favorited CC session gets a thin gold line at the bottom of its tab icon (the five-state dot color/shape stays completely unchanged), synced automatically from `favorites.json` by an IIFE every 500ms tick.
+- **Session-tree icon differentiation (v0.5.36 new)**: in the sidebar CC Favorites view, **open sessions** (initialized and in use) show a solid light-gray chat bubble (solid foreground + outline background), while **closed sessions** show a single-outline bubble — tell at a glance which sessions are still alive and which are closed.
+
+Favorites are stored in `~/.claude/cc-tab-status/favorites.json` (atomic writes, preserved across restarts). Full design in [`docs/FAVORITES-DESIGN.md`](docs/FAVORITES-DESIGN.md).
+
+> As of v0.5.11, clicking a closed session directly resumes it into a panel — going through CC's own `claude-vscode.editor.open(sid)` → `createPanel(sid)`, launching the CLI with `--session-id=<sid>` to load that session's history. The right-click Copy cmd is kept as a terminal fallback.
+
 ### 🔒 Safe writes
 
 Every patch is preceded by `node --check` (the `assertCompiles` guard): if the IIFE we're about to write isn't syntactically valid, we refuse the write — the extension is never left broken. Writes are atomic, and `INJECT_VERSION` ensures stale patches get automatically re-injected on the next run.
@@ -260,7 +273,7 @@ Both paths (npx and source) are equivalent and idempotent. The injected IIFE and
 
 **Two ways to change config**:
 
-1. **Click the right-side token SBI** → a QuickPick config panel pops up (see the screenshot in "Stop tab-switching. Start seeing." above) — graphically switch the stats window / display mode / notifications / sound, or copy the token count / reset stats / open the state dir / open settings. Changes are written to `settings.json` automatically. The panel follows VSCode's UI language (zh/en/ja/de/es/fr/pt/ru, unknown falls back to en).
+1. **Click the right-side token SBI** → a QuickPick config panel pops up (see the screenshot in "See it at a glance" above) — graphically switch the stats window / display mode / notifications / sound, or copy the token count / reset stats / open the state dir / open settings. Changes are written to `settings.json` automatically. The panel follows VSCode's UI language (zh/en/ja/de/es/fr/pt/ru, unknown falls back to en).
 2. **Edit `settings.json` directly** (table below) — for batch config or version control.
 
 Add to VSCode's `settings.json` (skip to keep defaults):

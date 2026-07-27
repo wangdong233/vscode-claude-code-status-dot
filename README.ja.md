@@ -157,21 +157,6 @@ vscode-claude-code-status-dot        # インストール後そのままコマ�
 
 ---
 
-## ⚡ 性能（v0.2.9 証拠駆動）
-
-**結論：本プラグインが知覚可能な UI カクつきを引き起こすことはない**——EH（拡張ホスト）占用は最悪 1.1% mean / 3.4% p99 CPU（重度のストリーミング）、typical <0.3%；writer hook は CC 子プロセスで ~1-2ms/event で実行。すべての数値は実際の fixture（42MB jsonl + 185KB sidecar + 2.1GB outlier）で実測。詳しくは [`docs/STATES.md`](docs/STATES.md) §9 を参照。
-
-なぜ卡つかないのか？IIFE は EH（独立プロセス）で動き、**renderer ではない**。タイピング、タブ切替、コピーはすべて renderer-local 操作で、EH を待たない。たとえ worst-case 17ms p99 の EH ブロックがあっても、他の拡張の EH→renderer IPC を 17ms 遅らせるだけ（ユーザーには見えない）。
-
-v0.2.9 は 3 つの**実測された** hygiene 浪費点を修正（各項目単独では小さいが、合計 ~10 IPC/sec + 1.1ms/tick）：
-
-| 最適化                                  | 測定された浪費（v0.2.8）                               | v0.2.9 の修法                                      | 効果                               |
-| ------------------------------------- | ----------------------------------------------------- | -------------------------------------------------- | ---------------------------------- |
-| **Uri キャッシュ**（p.iconPath）       | 8 IPC/sec の定常 churn（vs.Uri.file の参照不一致がトリガー） | `__ccsdUriCache` memoize → EH setter dedup でトリガー  | 8 IPC/sec → ~0（**99.6% 削減**）   |
-| **token SBI text dedup**（tsbi.text） | 2 IPC/sec（tooltip dedup と非対称）                    | `__ccsdTokSbiLastTip` tooltip dedup パターンを鏡像      | 2 IPC/sec → 0                      |
-| **.offset sidecar キャッシュ**         | 1.04ms/tick の parse（186KB の長会話 = 58% EH I/O）    | `__ccsdAgCache` mtime+size パターンを鏡像              | 1.1ms/tick → ~0（cache hit）       |
-
----
 
 ## 🏗️ 原理 + ドキュメント
 

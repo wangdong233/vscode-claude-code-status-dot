@@ -149,21 +149,6 @@ vscode-claude-code-status-dot        # run the command directly after install
 
 ---
 
-## ⚡ Performance (v0.2.9 evidence-driven)
-
-**Bottom line: this extension causes no perceptible UI lag** — EH (Extension Host) usage is at worst 1.1% mean / 3.4% p99 CPU (heavy streaming), typically <0.3%; the writer hook runs in the CC child process at ~1-2ms/event. All numbers were measured on real fixtures (42MB jsonl + 185KB sidecar + 2.1GB outlier). See [`docs/STATES.md`](docs/STATES.md) §9.
-
-Why won't it lag? The IIFE runs in the EH (a separate process), **not in the renderer**. Typing, tab-switching, and copy are all renderer-local operations that don't wait on the EH. Even in the worst-case 17ms p99 EH block, it only delays other extensions' EH→renderer IPC by 17ms (imperceptible to the user).
-
-v0.2.9 fixes 3 **measured** hygiene waste points (each small on its own, together ~10 IPC/sec + 1.1ms/tick):
-
-| Optimization | Measured waste (v0.2.8) | v0.2.9 fix | Gain |
-|---|---|---|---|
-| **Uri cache** (p.iconPath) | 8 IPC/sec steady-state churn (vs.Uri.file reference-inequality triggers) | `__ccsdUriCache` memoize → EH setter dedup triggers | 8 IPC/sec → ~0 (**99.6% drop**) |
-| **token SBI text dedup** (tsbi.text) | 2 IPC/sec (asymmetric with tooltip dedup) | mirror `__ccsdTokSbiLastTip` tooltip dedup pattern | 2 IPC/sec → 0 |
-| **.offset sidecar cache** | 1.04ms/tick parse (186KB long session = 58% EH I/O) | mirror `__ccsdAgCache` mtime+size pattern | 1.1ms/tick → ~0 (cache hit) |
-
----
 
 ## 🏗️ How it works + docs
 

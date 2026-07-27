@@ -155,21 +155,6 @@ vscode-claude-code-status-dot        # nach der Installation direkt den Befehl a
 
 ---
 
-## ⚡ Leistung (v0.2.9 evidenzgetrieben)
-
-**Fazit: Diese Erweiterung verursacht keine spürbare UI-Verzögerung** — EH (Extension Host) belegt im schlechtesten Fall 1.1% mean / 3.4% p99 CPU (bei schwerem streaming), typisch <0.3%; der writer hook läuft im CC-Subprozess mit ~1-2ms/event. Alle Zahlen wurden an realen fixtures gemessen (42MB jsonl + 185KB sidecar + 2.1GB outlier). Siehe [`docs/STATES.md`](docs/STATES.md) §9.
-
-Warum ruckelt nichts? Die IIFE läuft im EH (separater Prozess), **nicht im renderer**. Tippen, Tabwechsel und Kopieren sind renderer-local-Operationen, die nicht auf den EH warten. Selbst bei einer worst-case 17ms p99 EH-Blockade wird nur die EH→renderer-IPC anderer Erweiterungen um 17ms verschoben (für dich nicht sichtbar).
-
-v0.2.9 behebt 3 **gemessene** hygiene-Verschwendungen (jede für sich klein, zusammen ~10 IPC/sec + 1.1ms/tick):
-
-| Optimierung | Gemessene Verschwendung (v0.2.8) | v0.2.9-Lösung | Gewinn |
-|---|---|---|---|
-| **Uri-Cache** (p.iconPath) | 8 IPC/sec steady-state churn (vs.Uri.file-Referenzen nicht gleich → Trigger) | `__ccsdUriCache` memoize → EH setter dedup Trigger | 8 IPC/sec → ~0 (**99.6% Reduktion**) |
-| **token SBI text dedup** (tsbi.text) | 2 IPC/sec (asymmetrisch zum tooltip dedup) | Spiegelt `__ccsdTokSbiLastTip` tooltip dedup-Muster | 2 IPC/sec → 0 |
-| **.offset sidecar-Cache** | 1.04ms/tick parse (186KB lange Session = 58% EH-I/O) | Spiegelt `__ccsdAgCache` mtime+size-Muster | 1.1ms/tick → ~0 (cache hit) |
-
----
 
 ## 🏗️ Architektur + Dokumentation
 

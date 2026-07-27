@@ -157,21 +157,6 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 
 ---
 
-## ⚡ 性能（v0.2.9 证据驱动）
-
-**结论：本插件不会造成可感知 UI 卡顿**——EH（扩展宿主）占用最坏 1.1% mean / 3.4% p99 CPU（重度 streaming），typical <0.3%；writer hook 跑在 CC 子进程 ~1-2ms/event。所有数字实测于真实 fixture（42MB jsonl + 185KB sidecar + 2.1GB outlier）。详见 [`docs/STATES.md`](docs/STATES.md) §9。
-
-为什么不会卡？IIFE 跑在 EH（独立进程），**不在 renderer**。打字、切 tab、复制都是 renderer-local 操作，不等 EH。即便 worst-case 17ms p99 EH 阻塞，也只延迟其他扩展的 EH→renderer IPC 17ms（对用户不可见）。
-
-v0.2.9 修了 3 个**测得**的 hygiene 浪费点（每项单独小，合起来 ~10 IPC/sec + 1.1ms/tick）：
-
-| 优化                                  | 测得浪费（v0.2.8）                               | v0.2.9 修法                                     | 收益                           |
-| ------------------------------------- | ------------------------------------------------ | ----------------------------------------------- | ------------------------------ |
-| **Uri 缓存**（p.iconPath）            | 8 IPC/sec 稳态 churn（vs.Uri.file 引用不等触发） | `__ccsdUriCache` memoize → EH setter dedup 触发 | 8 IPC/sec → ~0（**99.6% 降**） |
-| **token SBI text dedup**（tsbi.text） | 2 IPC/sec（与 tooltip dedup 不对称）             | 镜像 `__ccsdTokSbiLastTip` tooltip dedup 模式   | 2 IPC/sec → 0                  |
-| **.offset sidecar 缓存**              | 1.04ms/tick parse（186KB 长会话 = 58% EH I/O）   | 镜像 `__ccsdAgCache` mtime+size 模式            | 1.1ms/tick → ~0（cache hit）   |
-
----
 
 ## 🏗️ 原理 + 文档
 

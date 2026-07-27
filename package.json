@@ -1,7 +1,7 @@
 {
   "name": "vscode-claude-code-status-dot",
   "version": "0.5.36",
-  "description": "Colorize Claude Code's VSCode tab icon with 4-state status dots (idle/running/done/interrupted), add a bottom status-bar 4-light aggregate (done/running/pending/interrupted), and surface per-session token usage / cost on the right side of the status bar — all via a minimal, reversible patch.",
+  "description": "5-state status dots on every Claude Code tab (idle/running/done/pending/interrupted) + bottom 4-light aggregate + per-session token usage & $ cost + favorites sidebar (★) + completion/interruption notifications — minimal, reversible VSCode patch with auto-repatch after CC updates. QuickPick config panel follows VSCode UI language (zh/en/ja/de/es/fr/pt/ru).",
   "type": "module",
   "license": "MIT",
   "bin": {

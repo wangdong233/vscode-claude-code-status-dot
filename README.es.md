@@ -29,7 +29,7 @@
 
 </div>
 
-**① Punto de cinco estados en la pestaña**　El icono de Claude de cada pestaña de sesión de CC cambia de color según su estado — 🟡 corriendo / 🟢 completado / 🔴 parpadeo rápido de interrupción / ⚪ inactivo / 🔵 esperando tu entrada (cuando CC pide autorización, cede el paso al punto azul nativo de CC, sin sobrescribirlo); las pestañas de sesiones favoritas llevan un prefijo **★** en el título + una línea dorada en la parte inferior del icono. Visible a la vez en la barra de pestañas superior y en "Editores abiertos" de la izquierda, totalmente sincronizado en ambos lados.
+**① Punto de cinco estados en la pestaña**　El icono de Claude de cada pestaña de sesión de CC cambia de color según su estado — 🟡 corriendo / 🟢 completado / 🔴 parpadeo rápido de interrupción / ⚪ inactivo / 🔵 esperando tu entrada. 🔵 Esperando tu entrada tiene dos tipos de disparador: (a) cuando CC abre un cuadro de autorización, cede el paso al punto azul nativo de CC (sin sobrescribirlo); (b) cuando la respuesta de CC contiene semántica de **"esperando tu decisión"** (`espero tu confirmación` / `let me know` / `your call` etc.) la pestaña se vuelve azul automáticamente (sobrescribe el amarillo-running / verde-done) — de un vistazo distingues "terminó de verdad" de "espera que le diga algo", sin mirar la pestaña adivinando. Las sesiones favoritas llevan un prefijo **★** en el título + una línea dorada en la parte inferior del icono. Visible a la vez en la barra de pestañas superior y en "Editores abiertos" de la izquierda, totalmente sincronizado en ambos lados.
 
 **② Vista CC Favorites en la barra lateral**　El Explorador añade una vista CC Favorites, donde fijar juntos tus archivos y sesiones de uso frecuente; el icono de sesión open=bocadillo sólido / closed=bocadillo de solo contorno; un clic salta a ella o la reanuda (resume) en un panel nuevo; clic derecho sobre una sesión cerrada copia el comando `claude -r <sid>`.
 
@@ -40,6 +40,8 @@
 **⑤ Token / coste $ en la esquina inferior derecha**　Uso de tokens de la sesión activa + estimación opcional en USD + velocidad de streaming (tok/s); un clic abre el panel de configuración QuickPick (ventana de estadísticas / modo de muestra / notificación / sonido / copiar / reiniciar); el panel sigue el idioma de la interfaz de VSCode (zh/en/ja/de/es/fr/pt/ru).
 
 **⑥ Notificación de completado / interrupción**　Cuando la sesión termina o se interrumpe por rate limit salta una notificación del sistema + sonido (esquina superior derecha en macOS / toast abajo a la derecha en Windows·Linux), en primer y segundo plano; aunque cambies a otra app te avisa.
+
+> **Garantía de fiabilidad**: cuando una actualización automática de CC sobrescribe el parche, la extensión companion lo reparchea automáticamente y sugiere un `Reload Window` (recuperación transparente); antes de parchear se ejecuta `node --check` sobre el `extension.js` completo de 2.6MB + escritura atómica (**CC nunca se rompe**); `--revert` restaura con un solo comando sin efectos secundarios; la copia de runtime vive en `~/.claude/cc-status-dot/` (borrar el fuente / limpiar la caché / actualizar CC no afectan a lo ya instalado). Durante workflows con subagentes, la sesión principal se mantiene 🟡 sin volverse verde por error.
 
 ---
 
@@ -59,94 +61,6 @@ La pestaña se vuelve 🟡 amarilla al instante, pasa a 🟢 verde al terminar y
 
 ---
 
-## 💬 ¿Qué obtienes?
-
-### 1. Puntos de cinco estados en cada pestaña
-
-El icono de la pestaña de CC cambia de color según su estado — 🟡 corriendo / 🟢 completado / 🔴 parpadeo rápido de interrupción / ⚪ inactivo / 🔵 esperando tu entrada (cuando CC pide autorización el reader cede el icono al punto azul nativo de CC, **no lo sobrescribe**). **Visible a la vez en la barra de pestañas superior y en la vista "Editores abiertos" de la izquierda**, totalmente sincronizado. Si tienes varias sesiones corriendo en paralelo, de un vistazo sabes cuál sigue trabajando, cuál terminó, cuál está esperando tu autorización.
-
-### 2. 4 luces agregadas abajo: estado global de todas las sesiones de un vistazo
-
-Un único bloque en la barra de estado inferior, 4 puntos + números:
-
-```
-🟢 1   🟡 2   🔵 1   🔴 0
-done   running  pending  interrupted
-```
-
-Tienes 3 sesiones — una corriendo, una esperando autorización, una completada — abajo ves directamente `🟢1 🟡1 🔵1 🔴0`, sin cambiar de pestaña. **Las 4 posiciones son fijas, los cambios en los números no desplazan la fila** (dígitos tabulares en la barra de estado). Cuando un contador es 0 el punto va gris ⚪ (ocupa su sitio pero no brilla); cuando es >0 el punto toma color.
-
-### 3. Notificaciones de completado / interrupción
-
-Cuando CC termina o se interrumpe por rate limit salta una **notificación del sistema** — en primer y segundo plano:
-
-- **macOS**: se desliza desde la esquina superior derecha, sonido Glass, sin botones, se cierra sola a los pocos segundos
-- **Windows / Linux**: toast abajo a la derecha en VSCode, también sin botones
-
-Puedes cambiar al navegador o a otra ventana tranquilo; cuando termine te avisa, no hace falta mirar.
-
-### 4. 🔵 pending: avísarte en cuanto CC espera tu entrada
-
-La luz 🔵 abajo suma +1 y la pestaña se vuelve azul, con **dos tipos de disparador**:
-
-**(a) CC abre un cuadro de autorización** (permission / question / elicit) — en la pestaña el reader cede el icono al punto azul nativo de CC (**no lo sobrescribe**), y la barra de estado inferior cuenta el pendiente por separado. De un vistazo sabes cuántas sesiones están bloqueadas esperando tu autorización.
-
-**(b) La respuesta de CC claramente "espera tu decisión / feedback"** — por ejemplo CC termina diciendo `espero tu feedback de las pruebas`, `tú decides si seguimos`, `let me know`, `your call`, `please confirm`, `Should I proceed?`, etc., y la pestaña se vuelve 🔵 azul automáticamente (sobrescribe el amarillo-running / verde-done). **Ya no tienes que mirar la pestaña adivinando "¿terminó o está esperando que le diga algo?"** — este es el punto de dolor más frecuente que reportan los usuarios (CC finge haber terminado cuando en realidad espera entrada), ahora la pestaña te lo dice directo.
-
-**Cómo se distingue finalización neutra vs espera de respuesta**:
-
-- Finalización neutra (`Completado`, `Done.`, `Todas las pruebas pasan`) → la pestaña se queda 🟢 verde
-- Espera de decisión/feedback (en chino `等你`/`你决定`/`请确认`/`告诉我`/`听你的`, en inglés `let me know`/`your call`/`please confirm`/`what do you think`/`over to you`, o una pregunta corta final como `¿Sigo?`/`Should I proceed?`) → la pestaña se vuelve 🔵 azul
-
-**Sin falsos positivos**: los identificadores en bloques de código tipo `letMeKnow()` se eliminan antes de coincidir; las preguntas retóricas/informativas (`Why?`/`¿qué significa?`/`¿qué tal el resultado?`) tampoco disparan (evita azul falso cuando CC se pregunta a sí mismo).
-
-### 4.5. 🪙 Token / coste $ en la esquina inferior derecha
-
-Un segundo SBI en la **esquina inferior derecha** muestra el uso de tokens del panel CC activo y (opcional) la estimación en USD:
-
-```
-$(clock) 12.3k tok · $0.42
-```
-
-- **Durante el streaming de CC los tokens crecen en tiempo real** — sin esperar a que termine la respuesta, cada tick lee el final del transcript de forma incremental; el tooltip es estático y no parpadea. En máquinas sensibles al rendimiento puedes desactivar `tokenLiveDeltaEnabled`
-- **Ventana por defecto `all` (acumulativa, sin reseteo)** — opciones: 5min / 10min / 1h / 24h / 3d / 7d / 30d / all. `all` es acumulativo para toda la sesión (crecimiento monotónico a nivel de sesión, como un libro mayor que solo suma); `5min..30d` es ventana móvil (los turnos antiguos se deslizan fuera al caducar, parece un "reseteo", útil para ver "cuánto se gastó en los últimos X minutos")
-- **Los tokens de subagentes de workflow también se incluyen** — los subagentes / teammates lanzados en segundo plano se consolidan en las estadísticas de la sesión padre (lo que pagas por ellos no se vuelve "invisible")
-- La estimación en USD usa la tabla de precios de recarga en caliente `token-rates.json` (precios oficiales de Anthropic preconfigurados; los modelos desconocidos como GLM ocultan el `$` automáticamente, solo muestran tokens)
-- El tooltip muestra los `$` acumulados de la sesión para total / 24h / 7d / 30d + modelo + proyecto + cuánto lleva corriendo este turno
-- Clic en el SBI abre el panel QuickPick: cambio de ventana / modo de muestra (token / cost / both) / toggle de notificación / elegir sonido / copiar conteo de tokens / reiniciar estadísticas / abrir directorio de estado / abrir ajustes
-- **El panel QuickPick + el tooltip siguen el idioma de la interfaz de VSCode** (zh/en/ja/de/es/fr/pt/ru; los idiomas desconocidos caen a en) — VSCode en español → panel en español; los valores de configuración (5min/all/token/cost/both/nombres de sonido) son neutros al idioma y nunca se traducen
-- **v0.3.0 nuevo: velocidad tok/s + mini-gráfico Unicode** —— cada tick de 500ms muestrea tokens input+output (excluye cache_read/cache_creation adrede; los spikes de cache producirían lecturas sin sentido de millones de tok/s); los últimos 8 samples (4s) se dibujan como mini-gráfico `▁▂▃▄▅▆▇█`, ventana móvil de 5s para `tok/s`. `ccStatusDot.rateDisplayMode` (`off|numeric|sparkline|both`, por defecto `both`) controla el render; cambia a `numeric` u `off` si la barra de estado está saturada
-- Alerta de umbral: `ccStatusDot.warnThresholdUsd` lanza una notificación al cruzarlo (desactivado por defecto)
-- **Nuevo en v0.5.36: cambio de pestaña instantáneo y fluido**——al cambiar a otra sesión, el SBI de tokens refleja al instante los datos de la nueva sesión (escanea `__ccsdSidToPanel` para el panel activo en tiempo real + refresco basado en eventos, mismo mecanismo que la estrella de favorito); al cambiar a una sesión **inicializándose** (sid aún no capturado) muestra ⟳ loading, y ya no queda el número de la sesión anterior. Una vez cargadas, al alternar entre dos sesiones **no parpadea el loading** (cambio instantáneo)
-
-**Fuente de datos**: el `jsonl` de transcripción de CC es la fuente autoritativa única (cada fila `assistant` lleva en `message.usage` el 100% de input/output/cache_read/cache_creation). El hook writer lo lee incrementalmente vía un sidecar de byte-offset (un archivo de 33MB cuesta < 100ms igualmente). CC `/resume` reutiliza el mismo sid → la estadística continúa naturalmente; una sesión nueva arranca en 0.
-
-Ver [USAGE.md §3.6](docs/USAGE.md) y [STATES.md §8](docs/STATES.md) para más detalles.
-
-### 5. Companion auto-curativo: recuperación automática tras actualizaciones de CC
-
-Las actualizaciones automáticas de CC reemplazan el parche por completo. Desde **v0.2.0**, al instalar con `npx` se instala también una **extensión companion** en todos tus editores de la familia VSCode (incluidos Insiders / Cursor / VSCodium); la próxima vez que arranque VSCode, si el companion detecta que CC sobrescribió el parche, **reparchea automáticamente y sugiere un `Reload Window`** — la mayoría de las veces no tienes que hacer nada, recuperación transparente.
-
-### 6. Persistencia: borrar el código / limpiar caché / actualizar CC no afecta
-
-La copia de runtime vive en `~/.claude/cc-status-dot/` (iconos SVG + scripts de hook + patcher). Todas las rutas de hooks y SVG apuntan a esta **ruta absoluta** — borrar el código fuente del proyecto, limpiar la caché de npx o una actualización automática de CC no tocan este directorio, y la extensión ya parcheada sigue renderizando con normalidad.
-
-### 7. No se pone verde por error durante workflows
-
-Cuando se ejecutan subagentes / cron en segundo plano, la pestaña de la sesión principal **se mantiene amarilla** (no simula un completado falso) — el hook `Stop` solo confía en el `background_tasks` del payload, sin deriva. Solo cuando el trabajo de verdad terminó se vuelve verde.
-
-### 8. Red de seguridad (CC nunca se rompe)
-
-Antes de escribir el `extension.js` se ejecuta `node --check` sobre el archivo completo de 2.6MB (guardia `assertCompiles`, una inyección defectuosa se rechaza antes de escribir), escritura atómica (`.tmp` + rename), `INJECT_VERSION` se reinyecta automáticamente. Aunque el patcher falle, **no brickea la extensión de CC**.
-
-### 9. Reversión limpia en una línea, sin efectos secundarios
-
-`npx vscode-claude-code-status-dot --revert` restaura por completo `extension.js` desde `.bak`, retira los hooks quirúrgicamente y **conserva todos tus datos de usuario**.
-
-> ⚠️ **Declaración honesta**: este proyecto es un **parche (patch), no una extensión independiente** — VSCode no permite que una extensión de terceros modifique el icono de la pestaña webview de otra extensión; la única vía viable es parchear el `extension.js` del propio CC. La contrapartida: las actualizaciones automáticas de CC lo sobrescriben, pero la extensión companion lo restaura sola (ver punto 5).
-
----
-
 ## 🎨 Colores de estado
 
 | Color                                               | Significado                             | Disparador                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -161,162 +75,47 @@ Antes de escribir el `extension.js` se ejecuta `node --check` sobre el archivo c
 
 ---
 
-## 🛠️ Capacidades en detalle
-
-### 🟡 Punto de icono de pestaña de cinco estados
-
-El icono de cada sesión de CC cambia de color según su estado, **a la vez en la barra de pestañas superior y en la vista "Editores abiertos" arriba a la izquierda**. `running` / `idle` / `done` son puntos estáticos; `interrupted` parpadea en rojo rápido. Cuando CC muestra una solicitud de permiso, el reader **cede el icono** y deja que se muestre el punto azul nativo de CC (no lo sobrescribe).
-
-### 📊 Cuatro luces agregadas en la barra de estado inferior
-
-La mitad izquierda de la barra de estado inferior (la zona cercana al centro) renderiza **un único `StatusBarItem`** (`parts.join(' ')` con separación por espacios) que agrega 4 luces: **🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted**, cada una seguida de su número (limitado a `0/1/2/3/N`, N = 4 o más):
-
-- count=0 → bola gris ⚪ + número (atenuado, ocupa sitio pero no brilla)
-- count>0 → bola en color + número (brilla)
-
-**Las 4 posiciones son fijas, los cambios de número no desplazan la fila** — VSCode aplica `font-variant-numeric: tabular-nums` a todos los items de la barra de estado, así que los dígitos ASCII 0-9 son de igual ancho en cualquier fuente.
-
-🔵 pending es una dimensión independiente (desacoplada del estado), **cuenta ambos tipos de disparidor**: (a) CC pide permiso / question / elicit (el hook `Notification` escribe `pending:true`); (b) la respuesta de CC contiene semántica de "espera tu decisión" (el hook `Stop` lee la última respuesta y, si coincide con `espero tu`/`let me know`/`your call` etc., escribe `pending:true`). **Conteo doble fuente** — flag `pending` en tiempo real de CC (sincronizado en esta ventana) + archivo en disco `<sid>.json.pending` (asíncrono, entre ventanas); en cuanto se abre el cuadro de autorización se ilumina, sin pérdidas. El icono de la pestaña en (a) cede al punto azul nativo de CC (no se sobrescribe), y en (b) renderiza directamente el azul (sobrescribe amarillo/verde).
-
-**GC por tramos** para evitar conteos derivados: done sin cambios > 5 min → idle (verde −1) · running sin cambios > 30 min → idle (sesión colapsada) · interrupted sin cambios > 24 h → idle; pending con GC basado en el campo `st` (pending colapsado → idle, resta amarillo + azul).
-
-El bloque entero va en **un único StatusBarItem en runtime + texto concatenado** (la IIFE muta el `text` del SBI cada 500ms), sin necesidad de parchear el `package.json` de CC ni de usar bloques `ThemeColor`.
-
-### 🔔 Notificaciones de completado / interrupción
-
-Cuando una sesión pasa a `done` o `interrupted` (cada nuevo completado/interrupción `since` dispara una vez, sin repetir):
-
-- **macOS**: lanza una **notificación del sistema** (se desliza desde la esquina superior derecha, con sonido, sin botones, se cierra sola a los pocos segundos) — **en primer y segundo plano** (`notifyWhenFocused` por defecto en `true`).
-- **Windows / Linux**: como no hay `osascript`, se recurre al **toast integrado de VSCode** (abajo a la derecha, también sin botón, se cierra solo).
-
-El sonido lo controla `ccStatusDot.notifySound` (por defecto `Glass`, compartido por done e interrupción; `""` silencia). La primera vez macOS pedirá autorización para "Script Editor quiere enviar notificaciones", basta con permitirlo.
-
-### 🛡️ Companion auto-curativo
-
-Al instalar con `npx`, el patcher detecta cada CLI de la familia VSCode en tu `PATH` (`code`, `code-insiders`, `cursor`, `codium`) e instala el **companion .vsix** (`cc-status-dot-companion`) en cada uno con `code --install-extension`; también copia `patch.js` a `INSTALL_DIR/patch.js`.
-
-En cada arranque de VSCode, el companion comprueba el marcador `cc-status-dot-injected` dentro de la extensión de CC — si CC lo borró en una actualización, ejecuta silenciosamente `node ~/.claude/cc-status-dot/patch.js` para reparchear y sugiere un `Reload Window`. El usuario **se recupera sin enterarse**, no hace falta correr `npx` a mano.
-
-### ⭐ Vista CC Favorites (v0.4.0+) + menú contextual de pestaña / marca de línea dorada (v0.5.0+)
-
-La barra lateral del Explorador de VSCode incorpora una nueva vista **CC Favorites** — fija juntos tus archivos de uso frecuente y tus sesiones de CC, para volver a ellos rápidamente entre paneles y entre reinicios.
-
-- **Añadir archivo**: en el Explorer, clic derecho sobre cualquier archivo → **CC Favorites: Add/Remove File** (la opción `ccStatusDot.fav.includeInExplorerContextMenu` está activa por defecto; puedes desactivarla si el menú está saturado).
-- **Añadir sesión de CC** (tres puntos de entrada):
-  - En la paleta de comandos busca **CC Favorites: Star/Unstar Current CC Tab** — añade o quita la sesión activa de Favorites.
-  - En la paleta de comandos busca **CC Favorites: Pick CC Session to Star/Unstar** (v0.5.9+) — un QuickPick lista todas las sesiones de CC abiertas (las ya favoritas con ★ al frente); elegir una hace toggle, **sin depender de la pestaña activa**; es el punto de entrada fiable para marcar favoritos dentro de una sesión.
-  - **Botón ★ en la barra de estado (v0.5.10+, lo más cómodo)** — en la barra de estado inferior derecha (junto al contador de tokens) un botón ★/☆ **con un clic** marca/desmarca la sesión de CC activa: si ya es favorita muestra la estrella dorada sólida ★ (en oro, alineada con la línea dorada); si no, muestra un ☆ hueco. Actúa siempre sobre la sesión activa (esquiva las limitaciones de plataforma del webview de solo-escritura-una-vez y del clic derecho que confunde pestaña), y al hacer clic cambia al instante (tras cambiar de pestaña se sincroniza en ≤500ms, v0.5.11); se oculta automáticamente cuando no hay sesión de CC activa.
-  - En la zona **Open Editors** del Explorer, clic derecho sobre una pestaña de CC → **Añadir/Quitar de CC Favorites** (texto dinámico, opción `ccStatusDot.fav.includeInExplorerContextMenu`).
-- **Prefijo ★ en el título (v0.5.9+)**: las sesiones de CC favoritas llevan automáticamente un prefijo `★ ` en el **título** de la pestaña (el color y la forma del punto de cinco estados no cambian, la marca de línea dorada se mantiene). Una IIFE sincroniza cada 500ms tick desde `favorites.json` (caché por mtime → visible en ≤1s tras escribir el favorito). La "estrella clicable dentro del webview" de v0.5.8 se demostró arquitectónicamente inviable tras una investigación forense (CC solo fija `webview.html` una vez al crear el panel; cualquier reasignación dispara una recarga completa que destruye la sesión) y quedó descartada; el prefijo en el título es su sustituto sin recarga.
-- **Navegación**: clic en un nodo de archivo → salta a ese archivo (con posicionamiento por número de línea); **clic en un nodo de sesión → si está abierta, cambia a ella; si está cerrada, se reabre (resume en un panel nuevo, v0.5.11+)**; clic derecho sobre una sesión cerrada → **Copy 'claude -r <sid>'** copia el comando de resume al portapapeles (respaldo en terminal).
-- **Explorar**: en la paleta de comandos **CC Favorites: Browse** abre un QuickPick navegable por teclado (abre los elementos favoritos).
-- **Marca de línea dorada (v0.5.0+)**: las sesiones de CC favoritas llevan una línea dorada fina en la parte inferior del icono de la pestaña (el color y la forma del punto de cinco estados no cambian en absoluto); una IIFE sincroniza cada 500ms tick automáticamente desde `favorites.json`.
-- **Distinción de iconos en el árbol de sesiones (nuevo en v0.5.36)**: en la vista CC Favorites de la barra lateral, las sesiones **open** (ya inicializadas y en uso) muestran un bocadillo de chat gris claro sólido (frente sólido + fondo en contorno), mientras que las sesiones **closed** muestran un bocadillo de solo contorno — de un vistazo distingues qué sesiones siguen vivas y cuáles se han cerrado.
-
-Los favoritos se guardan en `~/.claude/cc-tab-status/favorites.json` (escritura atómica, persistente entre reinicios). Diseño completo en [`docs/FAVORITES-DESIGN.md`](docs/FAVORITES-DESIGN.md).
-
-> Desde v0.5.11, hacer clic en una sesión cerrada la reanuda directamente en un panel — invoca el propio `claude-vscode.editor.open(sid)` de CC → `createPanel(sid)`, que al arrancar el CLI pasa `--session-id=<sid>` para cargar el historial de esa sesión. El comando Copy del clic derecho se conserva como respaldo para terminal.
-
-### ⚙️ Se mantiene en _running_ durante workflows
-
-Cuando se ejecutan workflows o subagentes en segundo plano, la sesión principal se mantiene amarilla (no se pone verde por error) y no reporta un completado falso — `Stop` solo confía en el `background_tasks` del payload, sin deriva.
-
-### 📂 Sincronización con Open Editors
-
-Las pestañas de CC en la vista "Editores abiertos" arriba a la izquierda **también llevan el punto de estado**, totalmente sincronizadas con la barra de pestañas superior.
-
-### 🔒 Mecanismo de persistencia
-
-Las rutas SVG a las que referencia el reader (IIFE inyectada) y los comandos de hook cableados en `settings.json` apuntan a la **ruta absoluta** de `INSTALL_DIR` (`~/.claude/cc-status-dot/`), no al directorio del código fuente. Durante la instalación, el patcher copia una réplica idempotente desde el código fuente (`resources/` + `hooks/`) hacia allí. Por eso, aunque se borre el directorio del código fuente, se limpie la caché de npx o CC se actualice automáticamente (solo sobrescribe el directorio de la extensión, no toca `~/.claude/`), la extensión ya parcheada sigue renderizando con normalidad.
-
-### ↩️ Reversión limpia en una línea
-
-`--revert` restaura por completo `extension.js` desde `.bak`, retira los hooks quirúrgicamente y conserva tus datos de usuario.
-
-<details>
-<summary>📖 Ruta de actualización (usuarios antiguos con git clone)</summary>
-
-Los usuarios de versiones antiguas pueden simplemente volver a ejecutar `npx vscode-claude-code-status-dot`: el patcher detecta la lógica de inyección antigua → restaura el original automáticamente → reinyecta la nueva versión, **sin necesidad de `--revert` antes**.
-
-</details>
-
-<details>
-<summary>📖 Por qué es un parche (no una extensión independiente)</summary>
-
-El icono de la pestaña de un `WebviewPanel` de VSCode (`iconPath`) lo fija **en exclusiva la extensión que crea ese panel** — no hay API pública que permita a una extensión de terceros modificarlo. La pestaña de sesión de CC es precisamente un `WebviewPanel` creado por la propia extensión de CC, así que su icono solo se puede asignar dentro del `extension.js` de CC. Tras agotar las alternativas (extensión independiente, proposed API, interceptación webview, etc.) ninguna era viable: la única vía es el parche. La contrapartida: las actualizaciones automáticas de CC lo sobrescriben (desde v0.2.0 el companion lo restaura solo).
-
-</details>
-
-<details>
-<summary>📖 Resumen de comandos</summary>
-
-| Comando                                      | Acción                                                                                                                   |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `npx vscode-claude-code-status-dot`          | Instalar (parchear extension.js + conectar hooks + instalar companion, idempotente; limpia restos de versiones antiguas) |
-| `npx vscode-claude-code-status-dot --revert` | Revertir (restaurar desde `.bak` + eliminar hooks + borrar INSTALL_DIR, conservando los datos del usuario)               |
-| `npx vscode-claude-code-status-dot --status` | dry-run, informa sin tocar ningún archivo                                                                                |
-
-En modo desarrollo cambia el comando por `npx tsx patch.ts` (con los mismos parámetros).
-
-O desde el código fuente (desarrollo):
-
-```bash
-git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
-cd vscode-claude-code-status-dot
-npx tsx patch.ts
-```
-
-Ambas formas son equivalentes e idempotentes. La IIFE y los hooks referencian la ruta absoluta de `INSTALL_DIR` — **borrar el código fuente / limpiar la caché de npx no afecta a la extensión ya parcheada**.
-
-</details>
-
----
-
 ## ⚙️ Configuración (opcional)
 
-**Dos formas de cambiar la configuración**:
+**Dos formas de cambiar la configuración**: ① haz clic en el SBI de tokens abajo a la derecha → se abre el panel QuickPick (gráfico, sigue el idioma de la interfaz de VSCode zh/en/ja/de/es/fr/pt/ru); ② edita `settings.json` directamente (las tablas de cada bloque más abajo). Si no configuras nada, se usan los valores por defecto.
 
-1. **Haz clic en el SBI de tokens abajo a la derecha** → se abre el panel QuickPick de configuración (ver la captura en "🖼️ De un vistazo" arriba) — cambia gráficamente ventana de estadísticas / modo de muestra / notificación / sonido, o copia el conteo de tokens / reinicia las estadísticas / abre el directorio de estado / abre los ajustes. Los cambios se escriben automáticamente en `settings.json`; el panel sigue el idioma de la interfaz de VSCode (zh/en/ja/de/es/fr/pt/ru; los idiomas desconocidos caen a en).
-2. **Editar `settings.json` directamente** (tabla más abajo) — práctico para configuración en lote o control de versiones.
+### 1. Notificaciones (corresponde a la función ⑥)
 
-Escríbelo en el `settings.json` de VSCode (si no lo configuras, se usan los valores por defecto):
+Al terminar / interrumpirse salta una notificación del sistema + sonido (esquina superior derecha en macOS / toast abajo a la derecha en Win·Linux, en primer y segundo plano).
 
-```json
-{
-  "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": true,
-  "ccStatusDot.notifySound": "Glass",
+| Opción | Por defecto | Descripción |
+|---|---|---|
+| `ccStatusDot.notify` | `true` | Interruptor maestro de notificaciones |
+| `ccStatusDot.notifyWhenFocused` | `true` | Notificar también en primer plano; con `false` solo en segundo plano |
+| `ccStatusDot.notifySound` | `"Glass"` | Sonido de notificación de macOS (compartido por done e interrupción; `""` silencia; admite Basso/Ping/Hero etc.) |
 
-  "ccStatusDot.tokenStatsWindow": "all",
-  "ccStatusDot.tokenDisplayMode": "both",
-  "ccStatusDot.tokenSbiVisible": true,
-  "ccStatusDot.tokenLiveDeltaEnabled": true,
-  "ccStatusDot.showCost": true,
-  "ccStatusDot.warnThresholdUsd": 0
-}
-```
+### 2. Estadísticas de tokens y coste (corresponde a la función ⑤)
 
-| Opción                              | Por defecto | Descripción                                                                                                                                                                                                                  |
-| ----------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ccStatusDot.notify`                | `true`      | Interruptor maestro de notificaciones                                                                                                                                                                                        |
-| `ccStatusDot.notifyWhenFocused`     | `true`      | Notificar también cuando VSCode está en primer plano (notificación del sistema en macOS / mensaje VSCode en Windows/Linux); con `false`, solo en segundo plano                                                               |
-| `ccStatusDot.notifySound`           | `"Glass"`   | Sonido de notificación de macOS (compartido por done e interrupción; `""` silencia; admite Basso/Ping/Hero, etc.)                                                                                                            |
-| `ccStatusDot.tokenStatsWindow`      | `"all"`     | Ventana temporal del SBI de tokens derecho. `all` = acumulativo (toda la sesión, sin reset, por defecto); `5min/10min/1h/24h/3d/7d/30d` = ventanas móviles (los turnos antiguos se deslizan fuera, puede parecer un "reset") |
-| `ccStatusDot.tokenDisplayMode`      | `"both"`    | Modo de muestra del SBI de tokens: `token` (solo tokens) / `cost` (solo $) / `both` (ambos)                                                                                                                                  |
-| `ccStatusDot.tokenSbiVisible`       | `true`      | Mostrar / ocultar el SBI de tokens                                                                                                                                                                                           |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true`      | Durante el streaming el IIFE lee el final del transcript en cada tick para que los tokens se actualicen entre fuegos del hook; ponlo a `false` en máquinas sensibles al rendimiento                                          |
-| `ccStatusDot.showCost`              | `true`      | Mostrar `$` (los modelos desconocidos se ocultan automáticamente; requiere una entrada coincidente en `token-rates.json`)                                                                                                    |
-| `ccStatusDot.warnThresholdUsd`      | `0`         | Notificación al cruzar el umbral de coste (0 = desactivado; número positivo = umbral USD, se dispara una vez por cruce)                                                                                                      |
+El SBI de tokens abajo a la derecha muestra el uso de tokens de la sesión activa + estimación opcional en $ + velocidad de streaming; los tokens de subagentes de workflow también se incluyen (no se vuelven "invisibles").
 
-> **Precios personalizados por modelo**: `~/.claude/cc-status-dot/token-rates.json` es una tabla de precios de recarga en caliente — por defecto cubre los precios oficiales de Anthropic; los modelos no coincidentes como GLM ocultan el `$` automáticamente. Añade un glob para mostrar el `$` en ellos:
+| Opción | Por defecto | Descripción |
+|---|---|---|
+| `ccStatusDot.tokenStatsWindow` | `"all"` | Ventana temporal: `all` = acumulativo (toda la sesión, sin reseteo); `5min/10min/1h/24h/3d/7d/30d` = ventana móvil (los turnos antiguos se deslizan fuera al caducar, parece un "reseteo") |
+| `ccStatusDot.tokenDisplayMode` | `"both"` | Modo de muestra: `token` solo tokens / `cost` solo $ / `both` ambos |
+| `ccStatusDot.rateDisplayMode` | `"numeric"` | Presentación de velocidad de streaming: `off` / `numeric` (p. ej. `1.2k/s`) / `sparkline` (mini-gráfico `▁▂▃▄▅▆▇█`) / `both`; si la barra de estado está saturada cambia a `off` |
+| `ccStatusDot.tokenSbiVisible` | `true` | Mostrar / ocultar el SBI de tokens |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | Durante el streaming, actualización incremental en tiempo real de los tokens; en máquinas sensibles al rendimiento ponlo a `false` |
+| `ccStatusDot.showCost` | `true` | Mostrar `$` (los modelos desconocidos se ocultan automáticamente; requiere una entrada coincidente en `token-rates.json`) |
+| `ccStatusDot.warnThresholdUsd` | `0` | Notificación al cruzar el umbral de coste (`0` = desactivado; número positivo = umbral USD, se dispara una vez por cruce) |
 
-```jsonc
-{
-  "_default": null,
-  "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
-  "glm-*": { "in": 0.5, "out": 1.5 },
-}
-```
+> **Precios personalizados por modelo**: `~/.claude/cc-status-dot/token-rates.json` es una tabla de precios de recarga en caliente (por defecto cubre los precios oficiales de Anthropic; los modelos no coincidentes como GLM ocultan el `$` automáticamente). Añade un glob para mostrar el `$`:
+>
+> ```jsonc
+> { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
+> ```
+
+### 3. Favoritos (corresponde a las funciones ②④)
+
+Vista CC Favorites en la barra lateral + marca ★ en la pestaña + botón ★ en la barra de estado.
+
+| Opción | Por defecto | Descripción |
+|---|---|---|
+| `ccStatusDot.fav.includeInExplorerContextMenu` | `true` | Mostrar "Añadir/Quitar de CC Favorites" en el menú contextual del Explorer; si el menú está saturado ponlo a `false` |
 
 ---
 

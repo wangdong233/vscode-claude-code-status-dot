@@ -29,7 +29,7 @@
 
 </div>
 
-**① Tab 五态状态点**　每个 CC 会话 tab 的 Claude 图标按状态变色——🟡 运行中 / 🟢 完成 / 🔴 中断快闪 / ⚪ 空闲 / 🔵 待输入（CC 弹权限授权时让位给 CC 原生蓝点，不覆盖）；收藏的会话 tab 标题加 **★** 前缀 + 图标底部金线。顶部 tab 栏 + 左侧"打开的编辑器"都显示，两边同步。
+**① Tab 五态状态点**　每个 CC 会话 tab 的 Claude 图标按状态变色——🟡 运行中 / 🟢 完成 / 🔴 中断快闪 / ⚪ 空闲 / 🔵 待输入。🔵 待输入有两类触发：(a) CC 弹权限授权框时让位给 CC 原生蓝点（不覆盖）；(b) CC 回复含"等你确认 / let me know / your call"等**待你决策**语义时 tab 自动转蓝（覆盖原 running-黄 / done-绿）——一眼区分"真跑完"还是"等我说啥"，不用盯着 tab 猜。收藏会话 tab 标题加 **★** 前缀 + 图标底部金线。顶部 tab 栏 + 左侧"打开的编辑器"都显示，两边同步。
 
 **② 侧边栏 CC 收藏视图**　Explorer 侧边新增 CC Favorites，把常用文件/会话 pin 在一起；会话图标 open=实心气泡 / closed=轮廓气泡，点击即跳转或 resume 到新 panel；右键已闭会话可复制 `claude -r <sid>` 命令。
 
@@ -40,6 +40,8 @@
 **⑤ 右下角 token / $ cost**　当前激活会话的 token 用量 + 可选 USD 估算 + 流式速率（tok/s）；点击弹 QuickPick 配置面板（统计窗口 / 显示模式 / 通知 / 声音 / 复制 / 重置），面板跟随 VSCode 界面语言（中/英/日/德/西/法/葡/俄）。
 
 **⑥ 完成 / 中断通知**　会话跑完或被限速中断时弹系统通知 + 提示音（macOS 屏幕右上角下拉 / Windows·Linux 右下角 toast），前台后台都弹，切去干别的也能被提醒。
+
+> **可靠性保障**：CC 自动更新覆盖 patch 时，companion 自愈扩展自动重 patch + 提示 reload（无感恢复）；patch 前对完整 2.6MB `extension.js` 跑 `node --check` 校验 + 原子写（**绝不砖 CC**）；`--revert` 一键零副作用还原；运行时副本在 `~/.claude/cc-status-dot/`（删源 / 清缓存 / CC 更新都不影响已装）。workflow 跑子代理期间主会话保持 🟡 不假绿。
 
 ---
 
@@ -61,95 +63,6 @@ tab 图标立刻变 🟡 黄，跑完变 🟢 绿并弹通知；CC 弹权限授�
 
 ---
 
-## 💬 你能得到什么
-
-### 1. 每个 tab 都带五态状态点
-
-CC 会话的 tab 图标按状态变色——🟡 运行中 / 🟢 完成 / 🔴 中断快闪 / ⚪ 空闲 / 🔵 待输入（CC 弹权限授权时 reader 让出图标，CC 原生蓝点显示，**不覆盖**）。**顶部 tab 栏 + 左上"打开的编辑器"侧边栏都显示**，两边完全同步。开几个会话并排跑，扫一眼就知道哪个还在干、哪个完事了、哪个卡在等你授权。
-
-### 2. 底部 4 灯聚合：所有会话整体状态一眼看完
-
-窗口底部状态栏一个整体块，4 个圆点 + 数字：
-
-```
-🟢 1   🟡 2   🔵 1   🔴 0
-done   running  pending  interrupted
-```
-
-开 3 个会话——一个跑着、一个等你授权、一个完成了——底部直接看到 `🟢1 🟡1 🔵1 🔴0`，不用切 tab。**4 灯位置固定，数字变化不会让整行位移**（状态栏数字等宽）。每灯 count=0 时灰灭（占位但不亮），count>0 时亮彩球。
-
-### 3. 完成 / 中断通知
-
-CC 跑完或被限速中断时弹**系统通知**——前台后台都弹：
-
-- **macOS**：屏幕右上角下拉，Glass 声，无按钮，几秒自动消失
-- **Windows / Linux**：VSCode 右下角 toast，同样无按钮
-
-你可以放心切去浏览器 / 别的窗口干别的，跑完自会提醒，不用一直盯着。
-
-### 4. 🔵 pending：CC 等你输入时立刻让你知道
-
-底部 🔵 灯 +1、tab 变蓝，**两类触发**：
-
-**(a) CC 弹授权框**（permission / question / elicit）—— tab 上 reader 让出图标给 CC 原生蓝点（**不覆盖**），底部状态栏独立计 pending。一眼知道有几个会话卡在等你授权。
-
-**(b) CC 回复里明确"等你决策/反馈"**——比如 CC 跑完最后一句说 `等你测试反馈`、`你决定要不要继续`、`let me know`、`your call`、`please confirm`、`Should I proceed?` 等，tab 自动转蓝（覆盖原 running-黄 / done-绿）。**你不用盯着 tab 猜"它到底跑完了还是等我说啥"**——这是用户反馈最多、最高频的痛点（CC 假报完成实则等输入），现在 tab 直接告诉你。
-
-**怎么区分中性完成 vs 待你回复**：
-
-- 中性完成（`已完成`、`Done.`、`所有测试通过`）→ tab 保持 🟢 绿
-- 待你决策/反馈（中文含 `等你`/`你决定`/`请确认`/`告诉我`/`听你的`，英文含 `let me know`/`your call`/`please confirm`/`what do you think`/`over to you` 等，或末行简短问句如 `需要继续吗？`/`Should I proceed?`）→ tab 转 🔵 蓝
-
-**不会误触发**：代码块里 `letMeKnow()` 这类标识符会先剥离再判断；`Why?`/`什么意思?`/`效果如何?` 这类修辞性/信息性问句也不触发（避免 CC 自问自答时假蓝）。
-
-### 4.5. 🪙 右下角 token / $ cost
-
-状态栏**右下角**第二个 SBI 显示当前激活 CC panel 的 token 用量与可选 USD 估算：
-
-```
-$(clock) 12.3k tok · 1.2k/s · ~$0.42
-```
-
-- **v0.3.0 新：瞬时 tok/s 速率 + 可选 unicode sparkline**——每 500ms tick 采样 input+output token（故意排除 cache_read/cache_creation，否则 cache spike 会产出无意义的数十 M tok/s），最近 8 个采样点（4s）可渲染为 `▁▂▃▄▅▆▇█` 8 块迷你图，5 秒滑动窗口算 `tok/s`。`ccStatusDot.rateDisplayMode`（`off|numeric|sparkline|both`，默认 `numeric`）控制呈现；要 sparkline 改 `both` 或 `sparkline`，状态栏拥挤时切 `off`。流式输出时显速率（如 `· 1.2k/s`），空闲时隐速率显费用（如 `· ~$0.42`）——速率段与费用段同用 `·` 分隔
-- **v0.3.0 新：单位 B/T**——`fmtTok` 从 {k, M} 扩到 {k, M, B, T} 4-sig-fig 自适应。1.5B 显 "1.50B" 而非 "1500.0M"；796M 显 "796M" 而非 "796.0M"
-- **CC 流式输出时 token 实时增长**——不等回复结束，每 tick 读 transcript 尾部增量；tooltip 静态不闪。性能敏感机器可关 `tokenLiveDeltaEnabled`
-- **默认窗口 `all`（累积，不清零）**——可选 5min / 10min / 1h / 24h / 3d / 7d / 30d / all。`all` 是全程累积（会话级单调增长，跟账本一样只增不减）；`5min..30d` 是滚动窗口（旧 turn 到期滑出，看起来像"清零"，适合看"最近多久花了多少"）
-- **workflow 子代理 token 也算进来**——后台 spawn 的 subagent / teammate 跑出的 token 归并到父会话统计（你为它们付的费不会"隐形"）
-- $ 估算走 `token-rates.json` 热更定价表（Anthropic 官方价已预置；GLM 等未知模型自动隐藏 $，只显 token）
-- tooltip 显示当前会话 total / 24h / 7 日 / 30 日累计 $ + model + project + 本轮已跑多久
-- 点击 SBI 弹 QuickPick 配置面板：窗口切换 / 显示模式（token / cost / both）/ 通知开关 / 声音选择 / 复制 token 数 / 重置统计 / 打开状态目录 / 打开设置
-- **QuickPick 面板 + tooltip 跟随 VSCode 界面语言**（zh/en/ja/de/es/fr/pt/ru，未知语言 fallback en）——VSCode 中文 → 面板中文；配置值（5min/all/token/cost/both/声音名）跨语言统一不译
-- 限额告警：`ccStatusDot.warnThresholdUsd` 跨阈触发一次通知（默认禁用）
-- **v0.5.36 新：切 tab 即时跟手**——切到另一个会话时，token SBI 立刻反映新会话数据（扫 `__ccsdSidToPanel` 实时活动 panel + 事件驱动刷新，同款收藏星标机制）；切到**正在初始化**的会话（sid 还没捕获）显示 ⟳ loading，不再残留旧会话数字。加载完两个会话互切**无 loading 闪烁**（即时切换）
-
-**数据源**：CC transcript jsonl 是唯一权威源（每条 assistant 行的 `message.usage`），writer hook 增量读（byte-offset sidecar，33MB 大文件也能 < 100ms）。CC `/resume` 复用同一 sid → 统计天然延续；开新会话 → 从 0 起。
-
-详见 [USAGE.md §3.6](docs/USAGE.md) 与 [STATES.md §8](docs/STATES.md)。
-
-### 5. companion 自愈：CC 更新覆盖后自动恢复
-
-CC 自动更新会把 patch 整体覆盖掉。**v0.2.0 起**，`npx` 装的时候会自动装一个 **companion 扩展**进你的 VSCode 系编辑器（含 Insiders / Cursor / VSCodium）；下次 VSCode 启动时，companion 检测到 CC 把 patch 冲掉了，**自动重跑 patcher + 提示一次 Reload Window**——多数情况你什么都不用做，无感恢复。
-
-### 6. 持久化：删源 / 清缓存 / CC 更新都不影响
-
-运行时副本落在 `~/.claude/cc-status-dot/`（SVG 图标 + hook 脚本 + patcher）。所有 hook 命令和图标路径都指向这个**绝对路径**——删项目源、清 npx 缓存、CC 自动更新都不碰这里，已 patch 的扩展照常渲染。
-
-### 7. workflow 跑期间不假绿
-
-后台跑 subagent / cron 时，主会话 tab **保持黄色**（不误显完成）——`Stop` hook 只信 payload 里的 `background_tasks` 计数，不退化漂移。活儿真跑完才转绿。
-
-### 8. 安全兜底（绝不砖 CC）
-
-写 `extension.js` 前对完整 2.6MB 文件跑 `node --check`（assertCompiles 守卫，坏的注入直接拒绝写入），原子写（`.tmp` + rename），`INJECT_VERSION` 自动重注入。哪怕 patcher 出错，也**不会把 CC 扩展写坏**。
-
-### 9. 一键零副作用还原
-
-`npx vscode-claude-code-status-dot --revert` 从 `.bak` 完整恢复 `extension.js`，外科手术式移除 hooks，**保留你的所有用户数据**。
-
-> ⚠️ **诚实声明**：这是一个 **patch（补丁），不是独立扩展**——VSCode 不允许第三方扩展修改另一个扩展的 webview tab 图标，唯一可行路径是 patch CC 自己的 `extension.js`。代价：CC 自动更新会覆盖，但 companion 自愈扩展会自动恢复（见第 5 点）。
-
----
-
 ## 🎨 状态色
 
 | 颜色                                  | 含义                   | 触发                                                                                                                                                                                                                                                         |
@@ -164,162 +77,47 @@ CC 自动更新会把 patch 整体覆盖掉。**v0.2.0 起**，`npx` 装的时�
 
 ---
 
-## 🛠️ 能力详解
-
-### 🟡 五态 tab 图标点
-
-每个 CC 会话的 tab 图标按状态变色，**顶部 tab 栏 + 左上角"打开的编辑器"视图都显示**。running/idle/done 是静态色点，interrupted 红色快闪，permission 时 reader 让出图标给 CC 原生蓝点显示（**不覆盖**）。
-
-### 📊 底部状态栏 4 灯聚合
-
-窗口底部状态栏（左半靠近中间）一个整体块（**单个 StatusBarItem + `parts.join(' ')` 空格拼接**）聚合显示 4 灯：**🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted**，每灯紧跟数字（封顶 0/1/2/3/N，N 表示 ≥4）：
-
-- count=0 → 灰球 ⚪ + 数字（灰灭，占位但不亮）
-- count>0 → 彩球 + 数字（亮）
-
-**4 灯位置固定，数字变化不位移**——VSCode 状态栏 CSS `font-variant-numeric:tabular-nums` 给所有 item 强制数字等宽，ASCII 0-9 在任何字体下都不抖。
-
-🔵 pending 是独立维度（与 state 解耦），**两类触发都计数**：(a) CC 弹权限授权 / question / elicit（`Notification` hook 写 `pending:true`）；(b) CC 回复含"待你决策"语义（`Stop` hook 读最后一条回复命中 `等你`/`let me know`/`your call` 等关键词时写 `pending:true`）。**底部聚合双源计数**——CC 实时 pending flag（本窗口同步）+ 落盘 `<sid>.json.pending`（跨窗口异步），权限框一弹出就亮，不漏计。tab 图标在 (a) 让位给 CC 原生蓝点（不覆盖），在 (b) 直接渲染蓝点（覆盖黄/绿）。
-
-**3 段 GC** 防止计数漂移：done 超 5 分钟 → idle（绿减 1）/ running 状态超 30 分钟未更新 → idle（崩溃会话回收）/ interrupted 超 24 小时 → idle；pending 基于 st 字段 GC（崩溃 pending 回 idle，同时减黄 + 减蓝）。
-
-整块通过 **1 个运行时 StatusBarItem + 拼接 text**（IIFE 每 500ms 直接 mutate SBI 的 text），无需 patch CC `package.json`，无需 ThemeColor 块。
-
-### 🔔 完成 / 中断通知
-
-会话转为 `done` 或 `interrupted` 时（每个新的完成/中断 `since` 触发一次，不重复）：
-
-- **macOS**：弹**系统通知**（从屏幕右上角下拉，带声音，无任何按钮，几秒后自动消失）——**前台和后台都弹**（`notifyWhenFocused` 默认 `true`）。
-- **Windows / Linux**：没有 osascript，退化为 VSCode 内置消息（右下角 toast，同样无按钮、自动消失）。
-
-通知声音由 `ccStatusDot.notifySound` 控制（默认 `Glass`，done 与中断共用；`""` 静音）。首次 macOS 系统通知会弹一次"Script Editor 想发送通知"授权，允许即可。
-
-### 🛡️ companion 自愈扩展（v0.2.0+）
-
-`npx` 装的时候会自动检测 PATH 上的 `code` CLI（含 `code-insiders` / `cursor` / `codium`），把 **companion .vsix**（`cc-status-dot-companion`）`code --install-extension` 进每个检测到的 VS Code 系编辑器；同时把 `patch.js` 拷贝到 `INSTALL_DIR/patch.js`。
-
-VSCode 每次启动时，companion 扩展检测 CC 扩展里的 `cc-status-dot-injected` marker——如果 CC 自动更新把 patch 冲掉了（marker 不见了），companion 自动跑 `node ~/.claude/cc-status-dot/patch.js` 重 patch，并提示一次 `Reload Window`。用户**无感恢复**，不用手动跑 `npx`。
-
-### ⭐ CC Favorites 视图（v0.4.0+）+ tab 右键/金线标记（v0.5.0+）
-
-VSCode 资源管理器侧边栏新增 **CC Favorites** 视图——把常用文件和 CC 会话 pin 在一起，跨面板/跨重启快速跳回。
-
-- **加文件**：在 Explorer 中右键任意文件 → **CC Favorites: Add/Remove File**（设置项 `ccStatusDot.fav.includeInExplorerContextMenu` 默认开，菜单拥挤可关）。
-- **加 CC 会话**（三种入口）：
-  - 命令面板搜 **CC Favorites: Star/Unstar Current CC Tab**——把当前活动会话加入/移出 Favorites。
-  - 命令面板搜 **CC Favorites: Pick CC Session to Star/Unstar**（v0.5.9+）——QuickPick 列出所有打开的 CC 会话（已收藏的 ★ 在前），选一个即 toggle，**不依赖当前活动 tab**，是会话内收藏的可靠入口。
-  - **状态栏 ★ 按钮（v0.5.10+，最顺手）**——右下角状态栏（token 计数旁）一个 ★/☆ 按钮，**一键**收藏/取消当前活动 CC 会话：已收藏显实心金星 ★（金色，对齐金线），未收藏显空心 ☆。永远作用于当前活动会话（绕开 webview 只写一次 / 右键认错 tab 的平台限制），点击即翻（切 tab 后 ≤500ms 跟上状态，v0.5.11）；无活动 CC 会话时自动隐藏。
-  - 在 Explorer 的 **Open Editors** 区右键 CC tab → **加入/退出 CC 收藏**（动态文案，设置项 `ccStatusDot.fav.includeInExplorerContextMenu`）。
-- **★ 标题前缀（v0.5.9+）**：收藏的 CC 会话，tab **标题**前自动加 `★ `（5 态点色/形不变，金线标记仍在）。IIFE 每 500ms tick 从 `favorites.json` 同步（mtime 缓存 → 收藏写入后 ≤1s 内显）。v0.5.8 的"webview 内可点击星标"经取证证明架构不可行（CC 只在创建 panel 时设一次 webview.html，任何重设触发整页重载摧毁会话）已废弃，标题前缀是其 reload-free 替代。
-- **跳转**：点文件节点 → 跳到该文件（带行号定位）；**点会话节点 → 已开的切过去，未开的恢复打开（resume 到新 panel，v0.5.11+）**；右键已闭会话 → **Copy 'claude -r <sid>'** 复制 resume 命令到剪贴板（终端兜底）。
-- **浏览**：命令面板 **CC Favorites: Browse** 用 QuickPick 键盘导航（打开已收藏项）。
-- **金线标记（v0.5.0+）**：收藏的 CC 会话，tab icon 底部加一条细金线（5 态点色/形完全不变），IIFE 500ms tick 自动从 `favorites.json` 同步。
-- **会话树图标区分（v0.5.36 新）**：侧边栏 CC Favorites 视图里，**open 会话**（已初始化在使用）显示实心浅灰聊天气泡（前景实心 + 后景轮廓），**closed 会话**显示单轮廓气泡——一眼区分哪些会话还活着、哪些已关。
-
-收藏存在 `~/.claude/cc-tab-status/favorites.json`（atomic 写，跨重启保留）。完整设计（4 路调研 + 5 个不明确点的确定答案 + 推迟到 v0.5 的风险部分）见 [`docs/FAVORITES-DESIGN.md`](docs/FAVORITES-DESIGN.md)。
-
-> v0.5.11 起已闭会话点击直接 resume 到 panel——走 CC 自己的 `claude-vscode.editor.open(sid)` → `createPanel(sid)`，启动 CLI 时带 `--session-id=<sid>` 加载该会话历史。（v0.4 时这还是上游架构性限制——CC 无 sid-resume 入口，只提供"复制 resume 命令"降级；CC 2.1.x 的 `createPanel` 闭合了这个缺口。右键 Copy cmd 保留为终端兜底。）
-
-### ⚙️ workflow 跑期间保持 running
-
-后台跑 workflow / subagent 时，主会话保持黄色（不误显绿），不会假报完成——`Stop` 只信 payload 里的 `background_tasks` 计数，不退化漂移。
-
-### 📂 Open Editors 同步
-
-左上角"打开的编辑器"视图里的 CC tab **也带状态点**，和顶部 tab 栏完全同步。
-
-### 🔒 持久化机制
-
-reader（注入 IIFE）引用的 SVG 路径与 settings.json 接线的 hook 命令都指向 `INSTALL_DIR`（`~/.claude/cc-status-dot/`）的**绝对路径**，而非项目源目录。安装时 patcher 从项目源（`resources/` + `hooks/`）幂等复制一份过去。所以即便删除项目源目录、npx 缓存被清、CC 自动更新（只覆盖扩展目录，不碰 `~/.claude/`），已 patch 的扩展仍照常渲染。
-
-### ↩️ 零副作用一键还原
-
-`--revert` 从 `.bak` 完整恢复 extension.js、外科手术式移除 hooks、保留你的用户数据。
-
-<details>
-<summary>📖 升级路径（旧版 git clone 装的怎么升级）</summary>
-
-旧版用户直接重跑 `npx vscode-claude-code-status-dot` 即可：patcher 检测到旧版注入逻辑 → 自动还原原版 → 重新注入新版，**不用先 `--revert`**。
-
-</details>
-
-<details>
-<summary>📖 为什么是 patch（不是独立扩展）</summary>
-
-VSCode 的 `WebviewPanel` tab 图标（`iconPath`）由**创建该 panel 的扩展独占设置**，没有公开 API 让第三方扩展改它。CC 的 session tab 正是 CC 扩展自己创建的 WebviewPanel，其图标只能在 CC 的 `extension.js` 内部赋值。穷尽替代方案（独立扩展、proposed API、webview 拦截等）均不可达，唯一可行路径是 patch。代价：CC 自动更新会覆盖（v0.2.0 起 companion 自愈自动恢复）。
-
-</details>
-
-<details>
-<summary>📖 命令一览</summary>
-
-| 命令                                          | 作用                                                                              |
-| --------------------------------------------- | --------------------------------------------------------------------------------- |
-| `npx -y vscode-claude-code-status-dot@latest` | 安装/升级（patch extension.js + 接 hooks + 装 companion，幂等；自动清理旧版残留） |
-| `npx vscode-claude-code-status-dot --revert`  | 还原（从 `.bak` 恢复 + 移除 hooks + 删 INSTALL_DIR，保留用户数据）                |
-| `npx vscode-claude-code-status-dot --status`  | dry-run 诊断报告，不改任何文件                                                    |
-
-开发态把命令换成 `npx tsx patch.ts`（带同样参数）。
-
-或从源码（开发态）：
-
-```bash
-git clone https://github.com/wangdong233/vscode-claude-code-status-dot.git
-cd vscode-claude-code-status-dot
-npx tsx patch.ts
-```
-
-两种方式等价、幂等。IIFE 与 hook 都引用 `INSTALL_DIR` 绝对路径——**删项目源 / 清 npx 缓存都不影响已 patch 的扩展**。
-
-</details>
-
----
-
 ## ⚙️ 配置（可选）
 
-**两种改配置的方式**：
+**两种改配置的方式**：① 点击右下角 token SBI → 弹 QuickPick 面板（图形化，跟随 VSCode 界面语言中/英/日/德/西/法/葡/俄）；② 直接编辑 `settings.json`（下方各功能块表格）。不配都用默认值。
 
-1. **点击右下角 token SBI** → 弹出 QuickPick 配置面板（见上方"🖼️ 看一眼就懂"截图）——图形化切换统计窗口 / 显示模式 / 通知 / 声音，或复制 token 数 / 重置统计 / 打开状态目录 / 打开设置。改完自动写进 `settings.json`，面板跟随 VSCode 界面语言（中/英/日/德/西/法/葡/俄，未知 fallback en）。
-2. **直接编辑 `settings.json`**（下方表格）——适合批量配置或版本控制。
+### 1. 通知（对应功能⑥）
 
-写进 VSCode 的 `settings.json`（不配就用默认值）：
+跑完 / 中断时弹系统通知 + 提示音（macOS 屏幕右上角 / Win·Linux 右下角 toast，前台后台都弹）。
 
-```json
-{
-  "ccStatusDot.notify": true,
-  "ccStatusDot.notifyWhenFocused": true,
-  "ccStatusDot.notifySound": "Glass",
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `ccStatusDot.notify` | `true` | 通知总开关 |
+| `ccStatusDot.notifyWhenFocused` | `true` | 前台时也弹；设 `false` 仅后台时通知 |
+| `ccStatusDot.notifySound` | `"Glass"` | macOS 通知声音（done 与中断共用；`""` 静音；可选 Basso/Ping/Hero 等） |
 
-  "ccStatusDot.tokenStatsWindow": "all",
-  "ccStatusDot.tokenDisplayMode": "both",
-  "ccStatusDot.tokenSbiVisible": true,
-  "ccStatusDot.tokenLiveDeltaEnabled": true,
-  "ccStatusDot.showCost": true,
-  "ccStatusDot.warnThresholdUsd": 0
-}
-```
+### 2. Token 统计与费用（对应功能⑤）
 
-| 配置项                              | 默认      | 说明                                                                                                                                                |
-| ----------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ccStatusDot.notify`                | `true`    | 通知总开关                                                                                                                                          |
-| `ccStatusDot.notifyWhenFocused`     | `true`    | 前台时也弹通知（macOS 系统通知 / Windows/Linux VSCode 消息）；设 `false` 仅后台时通知                                                               |
-| `ccStatusDot.notifySound`           | `"Glass"` | macOS 系统通知声音（done 与中断共用；`""` 静音；可选 Basso/Ping/Hero 等）                                                                           |
-| `ccStatusDot.tokenStatsWindow`      | `"all"`   | 右下角 token SBI 的时间窗口。`all` = 累积（整个会话，不清零，默认）；`5min/10min/1h/24h/3d/7d/30d` = 滚动窗口（旧 turn 到期自动滑出，会显得"清零"） |
-| `ccStatusDot.tokenDisplayMode`      | `"both"`  | token SBI 显示模式：`token` 仅 token / `cost` 仅 $ / `both` 两者                                                                                    |
-| `ccStatusDot.tokenSbiVisible`       | `true`    | 显示 / 隐藏 token SBI                                                                                                                               |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true`    | 流式输出期间 IIFE 每 tick 读 transcript 尾部增量，让 token 在 hook 触发之间也能实时更新；性能敏感机器可设 `false` 关闭                              |
-| `ccStatusDot.showCost`              | `true`    | 显示 $（未知 model 自动隐藏，需 `token-rates.json` 有匹配条目）                                                                                     |
-| `ccStatusDot.warnThresholdUsd`      | `0`       | cost 跨阈通知（0 = 禁用；正数 = USD 阈值，每次跨越触发一次通知）                                                                                    |
+右下角 token SBI 显示当前激活会话的 token 用量 + 可选 $ 估算 + 流式速率；workflow 子代理 token 也算进来（不会"隐形"）。
 
-> **自定义模型定价**：`~/.claude/cc-status-dot/token-rates.json` 是热更定价表，默认覆盖 Anthropic 官方价；GLM 等未匹配 model 自动隐藏 `$`。加一条 glob 即可显示 `$`：
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `ccStatusDot.tokenStatsWindow` | `"all"` | 时间窗口：`all` = 累积（整个会话不清零）；`5min/10min/1h/24h/3d/7d/30d` = 滚动窗口（旧 turn 到期滑出，像"清零"） |
+| `ccStatusDot.tokenDisplayMode` | `"both"` | 显示模式：`token` 仅 token / `cost` 仅 $ / `both` 两者 |
+| `ccStatusDot.rateDisplayMode` | `"numeric"` | 流式速率呈现：`off` / `numeric`（如 `1.2k/s`）/ `sparkline`（▁▂▃▄▅▆▇█ 迷你图）/ `both`；状态栏拥挤可切 `off` |
+| `ccStatusDot.tokenSbiVisible` | `true` | 显示 / 隐藏 token SBI |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | 流式输出时实时增量更新 token；性能敏感机器可设 `false` |
+| `ccStatusDot.showCost` | `true` | 显示 $（未知 model 自动隐藏，需 `token-rates.json` 有匹配条目） |
+| `ccStatusDot.warnThresholdUsd` | `0` | cost 跨阈通知（`0` = 禁用；正数 = USD 阈值，每次跨越触发一次） |
 
-```jsonc
-{
-  "_default": null,
-  "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
-  "glm-*": { "in": 0.5, "out": 1.5 },
-}
-```
+> **自定义模型定价**：`~/.claude/cc-status-dot/token-rates.json` 是热更定价表（默认覆盖 Anthropic 官方价；GLM 等未匹配 model 自动隐藏 `$`）。加一条 glob 即可显示 `$`：
+>
+> ```jsonc
+> { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
+> ```
+
+### 3. 收藏（对应功能②④）
+
+侧边栏 CC Favorites 视图 + tab ★ 标记 + 状态栏 ★ 按钮。
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `ccStatusDot.fav.includeInExplorerContextMenu` | `true` | Explorer 右键菜单显示"加入/退出 CC 收藏"；菜单拥挤可设 `false` 关闭 |
 
 ---
 

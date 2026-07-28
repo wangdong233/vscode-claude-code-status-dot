@@ -11,7 +11,7 @@
 
 🟡 运行中 · 🟢 完成 · 🔵 待你输入（CC 弹授权，或 CC 回复"等你确认 / let me know"）· 🔴 中断快闪 —— **tab 五态点 + 底部 4 灯聚合（🟢🟡🔵🔴，无灰——idle 不计底部）+ 完成/中断通知 + CC 更新自愈 + 右下角 token 实时刷新 / $ cost 估算（workflow 子代理 token 也算进来）+ QuickPick 配置面板跟随 VSCode 语言（中/英/日/德/西/法/葡/俄）**
 
-**简体中文** | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
+**简体中文** | [English](docs/README.en.md) | [Deutsch](docs/README.de.md) | [Español](docs/README.es.md) | [Français](docs/README.fr.md) | [日本語](docs/README.ja.md) | [Português](docs/README.pt.md) | [Русский](docs/README.ru.md)
 
 </div>
 

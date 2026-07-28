@@ -11,7 +11,7 @@
 
 🟡 Выполняется · 🟢 Завершено · 🔵 Ждёт вашего ввода (CC запросил авторизацию, или в ответе Claude есть «ждём вашего решения / let me know») · 🔴 Прерывание (быстрое мигание) — **пятисостояная точка на вкладке + агрегат из 4 огней внизу (🟢🟡🔵🔴, без серого — idle не учитывается внизу) + уведомления о завершении/прерывании + авто-восстановление после обновления CC + токены в реальном времени в правом нижнем углу / оценка стоимости в $ (токены workflow-субагентов тоже учитываются) + панель настройки QuickPick следует языку VSCode (zh/en/ja/de/es/fr/pt/ru)**
 
-[English](README.en.md) | [简体中文](README.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | **Русский**
+[English](README.en.md) | [简体中文](../README.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | **Русский**
 
 </div>
 

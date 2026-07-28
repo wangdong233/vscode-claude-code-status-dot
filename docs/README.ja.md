@@ -11,7 +11,7 @@
 
 🟡 実行中 · 🟢 完了 · 🔵 入力待ち（CC が権限承認を要求、または CC の返信が「確認待ち / let me know」を含む）· 🔴 中断（速ブリンク）—— **タブ 5 状態ドット + 下部 4 ライト集計（🟢🟡🔵🔴、灰は含まない —— idle は下部集計外）+ 完了 / 中断通知 + CC 更新自動修復 + 右下トークンリアルタイム更新 / $ コスト推定（workflow サブエージェントのトークンも集計）+ QuickPick 設定パネルが VSCode 言語に追従（中 / 英 / 日 / 独 / 西 / 仏 / 葡 / 露）**
 
-[简体中文](README.md) | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | **日本語** | [Português](README.pt.md) | [Русский](README.ru.md)
+[简体中文](../README.md) | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | **日本語** | [Português](README.pt.md) | [Русский](README.ru.md)
 
 </div>
 

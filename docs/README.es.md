@@ -11,7 +11,7 @@
 
 🟡 Corriendo · 🟢 Completado · 🔵 Esperando tu entrada (CC pide autorización, o CC responde "esperando tu confirmación / let me know") · 🔴 Interrupción rápida — **puntos de cinco estados en la pestaña + 4 luces agregadas abajo (🟢🟡🔵🔴, sin gris — idle no cuenta abajo) + notificaciones de completado/interrupción + auto-curación tras actualizaciones de CC + token en tiempo real en la esquina inferior derecha / estimación de coste $ (tokens de subagentes de workflow incluidos) + panel QuickPick que sigue el idioma de VSCode (zh/en/ja/de/es/fr/pt/ru)**
 
-[简体中文](README.md) | [English](README.en.md) | [Deutsch](README.de.md) | **Español** | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
+[简体中文](../README.md) | [English](README.en.md) | [Deutsch](README.de.md) | **Español** | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
 </div>
 

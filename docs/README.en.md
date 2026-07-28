@@ -11,7 +11,7 @@
 
 🟡 running · 🟢 done · 🔵 awaiting your input (CC permission prompt, or CC's reply says "let me know / your call") · 🔴 interrupted flashes — **tab five-state dots + bottom 4-light aggregate (🟢🟡🔵🔴, no gray — idle isn't counted at the bottom) + completion/interruption notifications + self-healing after CC updates + real-time token refresh / $ cost estimate on the right side (workflow subagent tokens included) + QuickPick config panel that follows VSCode's UI language (zh/en/ja/de/es/fr/pt/ru)**
 
-[简体中文](README.md) | **English** | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
+[简体中文](../README.md) | **English** | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
 </div>
 

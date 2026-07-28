@@ -11,7 +11,7 @@
 
 🟡 en cours · 🟢 terminé · 🔵 en attente de votre saisie (CC demande une autorisation, ou la réponse de CC dit « attend ta confirmation / let me know ») · 🔴 interruption clignotante — **point à cinq états sur l'onglet + agrégat à 4 boules en bas (🟢🟡🔵🔴, pas de gris — idle non compté en bas) + notifications de fin / interruption + auto-réparation après mise à jour CC + compteur de tokens en temps réel à droite / estimation du coût $ (tokens des subagents workflow aussi comptabilisés) + panneau de configuration QuickPick qui suit la langue de VSCode (zh/en/ja/de/es/fr/pt/ru)**
 
-[简体中文](README.md) | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | **Français** | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
+[简体中文](../README.md) | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | **Français** | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
 </div>
 

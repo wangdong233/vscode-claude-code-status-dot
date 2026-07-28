@@ -11,7 +11,7 @@
 
 🟡 Em execução · 🟢 Concluído · 🔵 Aguardando você (o CC abriu a caixa de autorização, ou a resposta do CC diz "te aguardo / let me know") · 🔴 Interrompido (pisca rápido) — **ponto de 5 estados na aba + bloco de 4 luzes na barra inferior (🟢🟡🔵🔴, sem cinza — ocioso não conta no agregado inferior) + notificação de conclusão/interrupção + autocura do companion em atualizações do CC + tokens em tempo real no canto inferior direito / estimativa de $ custo (tokens de subagentes do workflow também entram na conta) + painel QuickPick que segue o idioma do VSCode (zh/en/ja/de/es/fr/pt/ru)**
 
-[简体中文](README.md) | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | **Português** | [Русский](README.ru.md)
+[简体中文](../README.md) | [English](README.en.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | **Português** | [Русский](README.ru.md)
 
 </div>
 

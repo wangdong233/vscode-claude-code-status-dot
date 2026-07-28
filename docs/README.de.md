@@ -11,7 +11,7 @@
 
 🟡 läuft · 🟢 fertig · 🔵 wartet auf dich (CC fordert Berechtigung an, oder CCs Antwort enthält »wartet auf deine Bestätigung / let me know«) · 🔴 kurzes Rot-Blinken bei Unterbrechung —— **Fünf-Zustands-Statuspunkt auf jedem Tab + Vier-Lichter-Aggregat unten (🟢🟡🔵🔴, kein Grau — Leerlauf wird unten nicht gezählt) + Fertig-/Unterbrechen-Benachrichtigung + Selbstheilung nach CC-Updates + Token-Echtzeit-Aktualisierung unten rechts / USD-Kostenschätzung (Workflow-Subagent-Token fließt ein) + QuickPick-Konfigurationspanel folgt der VSCode-Sprache (zh/en/ja/de/es/fr/pt/ru)**
 
-[English](README.en.md) | [简体中文](README.md) | **Deutsch** | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
+[English](README.en.md) | [简体中文](../README.md) | **Deutsch** | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português](README.pt.md) | [Русский](README.ru.md)
 
 </div>
 

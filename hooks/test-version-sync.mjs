@@ -344,15 +344,19 @@ if (cVer && pVer) {
   // no way to discover the knob that disables a feature that reads the
   // transcript tail every 500ms. Pin every companion key appears in every
   // README.* so the drift cannot recur.
+  // v0.5.39 (c4b8e57): the 7 translated READMEs moved from repo root into
+  // docs/ ("7 语言 README 移入 docs/, 根目录只留 README.md"). The root README.md
+  // (zh) stayed put. Update the parity surface to the new paths so the drift
+  // gate keeps firing on real omissions rather than on moved files.
   const readmeFiles = [
     'README.md',
-    'README.en.md',
-    'README.ja.md',
-    'README.de.md',
-    'README.es.md',
-    'README.fr.md',
-    'README.pt.md',
-    'README.ru.md',
+    'docs/README.en.md',
+    'docs/README.ja.md',
+    'docs/README.de.md',
+    'docs/README.es.md',
+    'docs/README.fr.md',
+    'docs/README.pt.md',
+    'docs/README.ru.md',
   ];
   for (const fullKey of iifeCfgKeys) {
     const missingIn = [];

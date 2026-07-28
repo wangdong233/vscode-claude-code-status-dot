@@ -401,7 +401,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.38 stamp', /\/\*cc-status-dot-injected:v0.5.38:/.test(iife));
+check('IIFE.21c banner carries v0.5.39 stamp', /\/\*cc-status-dot-injected:v0.5.39:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -2437,6 +2437,35 @@ check(
       'IIFE.117k final iconPath apply wrapped in favOf(svg,sid) (v0.5.0)',
       /ccuri\(\s*favOf\(\s*svg\s*,\s*sid\s*\)\s*\)/.test(iife),
     );
+    // v0.5.X archive detection: companion writes archived:true into the
+    // favorites.json session objects. The IIFE surfaces this two ways — a ▼
+    // (BLACK DOWN-POINTING TRIANGLE) tab prefix and a skip of the -fav gold
+    // underline. readArchivedSet mirrors readFavSet (mtime+size cache via
+    // __ccsdArchCache) but returns ONLY archived===true sids; readFavSet now
+    // excludes archived so a session is never both ★ and ▼.
+    check(
+      'IIFE.117l IIFE body defines readArchivedSet helper (v0.5.X archive detection)',
+      /function readArchivedSet\(/.test(iife),
+    );
+    check(
+      'IIFE.117l2 IIFE body defines __ccsdArchCache (mtime+size cache on favorites.json, parallel to __ccsdFavCache)',
+      /globalThis\.__ccsdArchCache/.test(iife),
+    );
+    check(
+      'IIFE.117m readFavSet filters out archived sessions (archived!==true) so archived sids do not get the ★ prefix',
+      /typeof x\.sid==="string"&&x\.archived!==true/.test(iife),
+      'readFavSet must exclude archived===true sessions from the favorited set (archived and favorited are mutually exclusive tab states)',
+    );
+    check(
+      'IIFE.117n readArchivedSet filters IN archived sessions only (archived===true)',
+      /typeof x\.sid==="string"&&x\.archived===true/.test(iife),
+      'readArchivedSet must return ONLY sessions where archived===true (drives the ▼ tab prefix)',
+    );
+    check(
+      'IIFE.117o favOf skips the -fav gold underline for archived sessions (calls readArchivedSet + early-returns svgPath)',
+      /var aset=readArchivedSet\(\);if\(aset&&aset\[sid\]\)return svgPath;/.test(iife),
+      'an archived session is no longer visually highlighted with the gold underline even if it is also favorited',
+    );
   }
 }
 
@@ -2907,9 +2936,16 @@ check(
   'the entire §AA injection surface (script src, prototype setter, read-modify-write, message bridge) was removed',
 );
 check(
-  'IIFE.172 v0.5.9 tab-title ★ prefix present — __want uses \\u2605 when favorited',
-  /var __want=__isFav\?\("\\u2605 "\+__base\):__base/.test(iife),
-  'the IIFE per-panel tick must prepend a ★ to panelTab.title when the sid is favorited (the in-webview star replacement)',
+  'IIFE.172 v0.5.X tab-title ▼ (archive) prefix takes priority — __want uses \\u25BC when archived, with ★ as nested fallback for favorited',
+  /var __want=__isArch\?\("\\u25BC "\+__base\):\(__isFav\?\("\\u2605 "\+__base\):__base\)/.test(iife),
+  'archive takes priority over favorite in the per-panel tick: archived sids show ▼ (BLACK DOWN-POINTING TRIANGLE) before the title; non-archived favorited sids fall back to ★ (\\u2605); others get the bare title. Archived and favorited are mutually exclusive because readFavSet excludes archived (IIFE.117m), but the ternary orders archive first for defense-in-depth.',
+);
+check(
+  'IIFE.172b v0.5.X tab-title archived prefix reads readArchivedSet() — __aset/__isArch declared in the same tick block',
+  /var __fset=readFavSet\(\);var __aset=readArchivedSet\(\);var __isFav=!?\(!__fset\|\|!__fset\[sid\]\);var __isArch=!?\(!__aset\|\|!__aset\[sid\]\)/.test(
+    iife,
+  ),
+  'the archived state is resolved per-tick from readArchivedSet() (mirrors readFavSet/__isFav in the same try block) — drives the ▼ prefix and is independent of the fav cache',
 );
 check(
   'IIFE.173 v0.5.9 tab-title prefix bases on t.__ccsdTitle (logical title — no ★★ stacking)',

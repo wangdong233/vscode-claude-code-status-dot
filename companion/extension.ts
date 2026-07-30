@@ -1581,9 +1581,12 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
         // across open/closed transitions — same rationale as FavoritesProvider.
         item.id = "ccsdArchive:session:" + s.sid;
         item.contextValue = isOpen ? "ccsdArchivedSessionOpen" : "ccsdArchivedSessionClosed";
-        // Every archive row carries the archive codicon regardless of open/closed
-        // — the visual signal that this session is archived (not just closed).
-        item.iconPath = new vscode.ThemeIcon("archive");
+        // Same open/closed icon logic as FavoritesProvider — the session status
+        // (open vs closed) is independent of archive state. Open archived sessions
+        // show the fav-open.svg chat-bubble icon; closed show $(comment) outline.
+        item.iconPath = isOpen
+            ? vscode.Uri.file(path.join(__dirname, "..", "media", "fav-open.svg"))
+            : new vscode.ThemeIcon("comment");
         item.description = isOpen
             ? `${String(s.state || "open").slice(0, 12)}`
             : `(closed)${s.state ? " " + String(s.state).slice(0, 8) : ""}`;

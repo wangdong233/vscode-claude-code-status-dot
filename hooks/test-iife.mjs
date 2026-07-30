@@ -2470,13 +2470,14 @@ check(
       'readArchivedSet must read the independent archive.json (ARCF); archive.json contains only archived sessions so all sids are returned without any archived===true filter',
     );
     check(
-      'IIFE.117o favOf no longer calls readArchivedSet (archive does not affect tab icon — only the ▼ prefix does)',
+      'IIFE.117o favOf now handles BOTH favorited (→-fav.svg gold) AND archived (→-arch.svg grey, MUTEX)',
       (() => {
-        // Bound the match to favOf's own body (ends with the unique
-        // `}catch(_){}return svgPath;}` tail) so a lazy [\s\S]*? cannot bleed
-        // past favOf into the per-panel tick's `var __aset=readArchivedSet()`.
         const m = iife.match(/function favOf\([\s\S]*?\}catch\(_\)\{\}return svgPath;\}/);
-        return !!m && !/readArchivedSet/.test(m[0]);
+        return (
+          !!m &&
+          /aset&&aset\[sid\]\)return pth\.join\(RES,leaf\.replace.*-arch\.svg/.test(m[0]) &&
+          /fset&&fset\[sid\]\)return pth\.join\(RES,leaf\.replace.*-fav\.svg/.test(m[0])
+        );
       })(),
       'favOf must only manage the favorite → -fav.svg gold underline; the archive skip was removed because the archive visual indication is the ▼ prefix, not an icon change',
     );
@@ -2951,8 +2952,8 @@ check(
 );
 check(
   'IIFE.172 v0.5.40 tab-title ★ and ▼ are MUTUALLY EXCLUSIVE — a ternary, not prefix accumulation',
-  /var __want=__isFav\?\("\\u2605 "\+__base\):\(__isArch\?\("\\u25BC "\+__base\):__base\)/.test(iife),
-  'favorites (★) and archive (▼) are mutually exclusive dimensions: only favorited → "★ title", only archived → "▼ title", neither → bare title. There is no "both" branch — the ternary __isFav?"★ ":__isArch?"▼ ":bare picks exactly one prefix per tick. The previous append-both logic (__pre+="\\u2605"; if(__isArch)__pre+="\\u25BC" → "★▼ title") is gone: the two sets are disjoint by companion-side contract, and even if both files ever held the same sid, fav wins (a favorited session is never silently demoted to ▼).',
+  /var __want=__isFav\?\("\\u2605 "\+__base\):\(__isArch\?\("\\u25C6 "\+__base\):__base\)/.test(iife),
+  'favorites (★) and archive (▼) are mutually exclusive dimensions: only favorited → "★ title", only archived → "▼ title", neither → bare title. There is no "both" branch — the ternary __isFav?"★ ":__isArch?"▼ ":bare picks exactly one prefix per tick. The previous append-both logic (__pre+="\\u2605"; if(__isArch)__pre+="\\u25C6" → "★▼ title") is gone: the two sets are disjoint by companion-side contract, and even if both files ever held the same sid, fav wins (a favorited session is never silently demoted to ▼).',
 );
 check(
   'IIFE.172b v0.5.X tab-title archived prefix reads readArchivedSet() — __aset/__isArch declared in the same tick block',

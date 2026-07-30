@@ -776,6 +776,14 @@ function startRepatchWatcher(extDir: string): void {
 const FAV_STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status");
 const FAV_FILE = path.join(FAV_STATE_DIR, "favorites.json");
 
+/** archive.json is a SEPARATE file from favorites.json, MUTUALLY EXCLUSIVE with
+ *  it. A session row present in archive.json = archived; in favorites.json =
+ *  favorited; a sid lives in at most ONE of the two files at any time (or in
+ *  neither = no mark). Mirrors favorites.json's FavDoc schema so the same
+ *  validators / atomic-write discipline apply. The companion is the sole writer
+ *  (atomic tmp+rename, same as writeFavAtomic). */
+const ARCHIVE_FILE = path.join(FAV_STATE_DIR, "archive.json");
+
 /** favorites.json schema version. Bump on schema-incompatible changes; the
  *  loader migrates forward (or rejects with a clear error) per version. */
 const FAV_SCHEMA_VERSION = 1;
@@ -805,11 +813,6 @@ interface FavSession {
     state?: string;
     addedAt: number;
     lastSeenAt: number;
-    /** v0.5.39 Archive feature: when true the session appears in the CC Archive
-     *  view (not Favorites), and the status-bar button + tab prefix render the
-     *  archive glyph instead of the ★/☆ star. Missing = false (legacy rows keep
-     *  their pre-archive Favorites behavior unchanged). */
-    archived?: boolean;
 }
 
 interface FavFile {
@@ -1062,6 +1065,156 @@ function mutateFavDoc(mutate: (doc: FavDoc) => { changed: boolean }): FavMutatio
     return { wrote: false, noop: false };
 }
 
+// =============================================================================
+// Archive persistence — archive.json (MUTEX with favorites.json)
+// =============================================================================
+// A session row in archive.json = archived. A session row in favorites.json =
+// favorited. The two states are MUTUALLY EXCLUSIVE: a sid lives in at most ONE
+// of the two files at any time (favorited XOR archived), or in neither (no
+// mark). Archiving a favorited session MOVES its row (favorites.json →
+// archive.json); unarchiving MOVES it back (archive.json → favorites.json);
+// removing from either view DELETES the row (→ no mark). These functions mirror
+// readFavDoc / writeFavAtomic / readFavDocWithMtime / mutateFavDoc but target
+// ARCHIVE_FILE; they reuse the FavDoc schema + emptyFavDoc + isValidFavSession /
+// isValidFavFile validators (archive.json is structurally identical to
+// favorites.json).
+
+/** One-shot latch twin of futureVersionLocked, scoped to archive.json. Refuses
+ *  writes after readArchiveDoc sees a newer-schema archive.json so a downgrade
+ *  never clobbers newer data. */
+let futureVersionLockedArchive = false;
+/** One-shot latch twin of corruptFavFileWarned, scoped to archive.json. Stops
+ *  the polling cycle (refresh → readArchiveDoc every 2s) and getChildren probes
+ *  from re-firing the corrupt-JSON warning every tick. */
+let corruptArchiveFileWarned = false;
+
+/** Atomic write of archive.json — tmp + rename. Mirrors writeFavAtomic
+ *  (future-version refusal + CAS mtime gate + error toast). */
+function writeArchiveAtomic(doc: FavDoc, expectedMtime?: number): "ok" | "conflict" | "error" {
+    if (futureVersionLockedArchive) {
+        void vscode.window.showErrorMessage(
+            `cc-status-dot: archive.json was written by a newer companion. Archiving/unarchiving would overwrite it with an older schema — refusing. Upgrade the companion (or delete the file at ${ARCHIVE_FILE}) to make changes.`,
+        );
+        return "error";
+    }
+    if (typeof expectedMtime === "number") {
+        let diskMtime = -1;
+        try {
+            diskMtime = fs.statSync(ARCHIVE_FILE).mtimeMs;
+        } catch {
+            diskMtime = -1;
+        }
+        if (diskMtime !== expectedMtime) return "conflict";
+    }
+    try {
+        try {
+            fs.mkdirSync(FAV_STATE_DIR, { recursive: true });
+        } catch {
+            /* dir already exists or mkdir best-effort; the write below surfaces
+             * a real error if the path is genuinely unwritable. */
+        }
+        const tmp = `${ARCHIVE_FILE}.${process.pid}.${Date.now()}.tmp`;
+        const body = JSON.stringify(doc, null, 2);
+        fs.writeFileSync(tmp, body, "utf8");
+        try {
+            fs.renameSync(tmp, ARCHIVE_FILE);
+        } catch (e) {
+            try {
+                fs.unlinkSync(tmp);
+            } catch {
+                /* best-effort cleanup; orphan is no worse than today */
+            }
+            throw e;
+        }
+        return "ok";
+    } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        void vscode.window.showErrorMessage(
+            `cc-status-dot: could not save Archive (${msg}). Check permissions / disk space on ${FAV_STATE_DIR}.`,
+        );
+        return "error";
+    }
+}
+
+/** Read + validate archive.json. Mirrors readFavDoc (defaults applied, null
+ *  when absent, corrupt → empty + one-shot warning, newer-schema → empty +
+ *  lock). The companion never bricks activation on a bad archive.json. */
+function readArchiveDoc(): FavDoc | null {
+    let raw: string;
+    try {
+        raw = fs.readFileSync(ARCHIVE_FILE, "utf8");
+    } catch {
+        return null;
+    }
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (e) {
+        if (!corruptArchiveFileWarned) {
+            corruptArchiveFileWarned = true;
+            void vscode.window
+                .showWarningMessage(
+                    `cc-status-dot: archive.json is corrupt and could not be parsed (${(e as Error).message}). Showing an empty list. Fix or delete the file at ${ARCHIVE_FILE}.`,
+                )
+                .then(() => undefined);
+        }
+        return emptyFavDoc();
+    }
+    if (typeof parsed !== "object" || parsed === null) return emptyFavDoc();
+    const obj = parsed as Partial<FavDoc>;
+    if (typeof obj.version === "number" && obj.version > FAV_SCHEMA_VERSION) {
+        if (!futureVersionLockedArchive) {
+            futureVersionLockedArchive = true;
+            void vscode.window
+                .showWarningMessage(
+                    `cc-status-dot: archive.json was written by a newer companion (schema v${obj.version}, this companion supports v${FAV_SCHEMA_VERSION}). Showing an empty list to avoid clobbering newer data. Archiving/unarchiving is DISABLED until you upgrade the companion or delete the file at ${ARCHIVE_FILE}.`,
+                )
+                .then(() => undefined);
+        }
+        return emptyFavDoc();
+    }
+    const sessions = Array.isArray(obj.sessions) ? obj.sessions.filter(isValidFavSession) : [];
+    const files = Array.isArray(obj.files) ? obj.files.filter(isValidFavFile) : [];
+    return {
+        version: FAV_SCHEMA_VERSION,
+        updatedAt: typeof obj.updatedAt === "number" ? obj.updatedAt : Date.now(),
+        sessions,
+        files,
+    };
+}
+
+/** Read archive.json together with the file's current mtimeMs — CAS token for
+ *  writeArchiveAtomic. Mirrors readFavDocWithMtime. */
+function readArchiveDocWithMtime(): { doc: FavDoc | null; mtime: number } {
+    let mtime = -1;
+    try {
+        mtime = fs.statSync(ARCHIVE_FILE).mtimeMs;
+    } catch {
+        mtime = -1;
+    }
+    return { doc: readArchiveDoc(), mtime };
+}
+
+/** Read-mutate-write archive.json under a CAS (mtime) guard, retrying once on
+ *  conflict. Mirrors mutateFavDoc (closes the multi-window lost-update race for
+ *  archive.json the same way mutateFavDoc does for favorites.json). */
+function mutateArchiveDoc(mutate: (doc: FavDoc) => { changed: boolean }): FavMutationResult {
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const { doc: existing, mtime } = readArchiveDocWithMtime();
+        const doc = existing ?? emptyFavDoc();
+        const res = mutate(doc);
+        if (!res.changed) return { wrote: false, noop: true };
+        const outcome = writeArchiveAtomic({ ...doc, updatedAt: Date.now() }, mtime);
+        if (outcome === "ok") return { wrote: true, noop: false };
+        if (outcome === "error") return { wrote: false, noop: false }; // toast already surfaced
+        // outcome === "conflict" → loop and re-read + re-mutate + re-write once
+    }
+    void vscode.window.showErrorMessage(
+        `cc-status-dot: Archive changed in another window while saving; the toggle was not applied. Try again.`,
+    );
+    return { wrote: false, noop: false };
+}
+
 function isValidFavSession(x: unknown): x is FavSession {
     if (typeof x !== "object" || x === null) return false;
     const s = x as Partial<FavSession>;
@@ -1078,11 +1231,7 @@ function isValidFavSession(x: unknown): x is FavSession {
         (s.cwd === undefined || typeof s.cwd === "string") &&
         (s.transcript_path === undefined || typeof s.transcript_path === "string") &&
         (s.model === undefined || typeof s.model === "string") &&
-        (s.state === undefined || typeof s.state === "string") &&
-        // v0.5.39 Archive: validate the optional archived flag so a hand-edited
-        // favorites.json with `"archived": "yes"` is rejected here instead of
-        // confusing the filter logic downstream.
-        (s.archived === undefined || typeof s.archived === "boolean")
+        (s.state === undefined || typeof s.state === "string")
     );
 }
 
@@ -1149,11 +1298,12 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
     refresh(): void {
         const doc = readFavDoc() ?? emptyFavDoc();
         const open = openSidSet();
+        // Mutex: Favorites shows every row in favorites.json. Because a sid
+        // lives in at most ONE of favorites.json / archive.json, no archived
+        // filter is needed here — an archived row is, by definition, NOT in
+        // favorites.json.
         const sig = JSON.stringify({
-            s: doc.sessions
-                .filter((s) => s.archived !== true)
-                .map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${s.label}|${s.state || ""}`)
-                .sort(),
+            s: doc.sessions.map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${s.label}|${s.state || ""}`).sort(),
             f: doc.files.map((f) => `${f.fsPath}|${f.label}|${f.line || 0}`).sort(),
         });
         // v0.5.6 (Bug 4 dynamic add/remove text): the active sid can move
@@ -1171,6 +1321,16 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
             this.lastActiveSidForCtx = activeSid;
             const isFav = !!activeSid && doc.sessions.some((s) => s.sid === activeSid);
             void vscode.commands.executeCommand("setContext", "ccStatusDot.fav.currentTabFavorited", isFav).then(
+                () => undefined,
+                () => undefined,
+            );
+            // Mutex: also publish the active tab's ARCHIVED state (reads the
+            // separate archive.json) so menu `when` clauses can gate an
+            // "archive/unarchive current tab" entry. Under the mutex model a sid
+            // is favorited XOR archived; this context tracks the archived half.
+            const archDoc = readArchiveDoc();
+            const isArch = !!activeSid && (archDoc?.sessions.some((s) => s.sid === activeSid) ?? false);
+            void vscode.commands.executeCommand("setContext", "ccStatusDot.fav.currentTabArchived", isArch).then(
                 () => undefined,
                 () => undefined,
             );
@@ -1331,11 +1491,10 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
         if (element) return [];
         const doc = readFavDoc() ?? emptyFavDoc();
         const open = openSidSet();
-        // v0.5.39 Archive: archived sessions live in the CC Archive view, NOT
-        // here — filter them out so Favorites shows only active (non-archived)
-        // rows. Missing archived flag = false = shown (legacy rows unchanged).
+        // Mutex: Favorites shows every row in favorites.json. An archived row is
+        // NOT in favorites.json (a sid lives in at most one file), so no filter
+        // is needed.
         const sessions: FavNode[] = doc.sessions
-            .filter((s) => s.archived !== true)
             .slice()
             .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
             .map((s) =>
@@ -1363,12 +1522,14 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
 /** Singleton provider — created once in activate(), referenced by handlers. */
 let favoritesProvider: FavoritesProvider | null = null;
 
-/** v0.5.39 Archive: TreeDataProvider for the CC Archive view. Mirrors the
- *  FavoritesProvider SHAPE (signature dedup + forceRefresh) but surfaces only
- *  sessions with `archived === true` (files cannot be archived). Icon is the
- *  archive codicon for every row; contextValue is ccsdArchivedSession{Open|Closed}
- *  so package.json menu `when` clauses route the unarchive/open/remove/copy
- *  commands to these nodes. */
+/** v0.5.39 Archive: TreeDataProvider for the CC Archive view. Reads the SEPARATE
+ *  archive.json (NOT an `archived` flag on favorites.json). Every session row in
+ *  archive.json is archived and surfaces here. Under the mutex model a sid is in
+ *  at most ONE of favorites.json / archive.json, so a row here is, by definition,
+ *  NOT favorited. Mirrors the FavoritesProvider SHAPE (signature dedup +
+ *  forceRefresh). Icon is the archive codicon for every row; contextValue is
+ *  ccsdArchivedSession{Open|Closed} so package.json menu `when` clauses route
+ *  the unarchive/open/remove/copy commands to these nodes. */
 class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
     private readonly emitter = new vscode.EventEmitter<FavNode | undefined | null>();
     readonly onDidChangeTreeData = this.emitter.event;
@@ -1378,13 +1539,12 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
     private lastSig = "";
 
     refresh(): void {
-        const doc = readFavDoc() ?? emptyFavDoc();
+        const doc = readArchiveDoc() ?? emptyFavDoc();
         const open = openSidSet();
+        // No archived filter — every row in archive.json is, by definition,
+        // archived. The whole doc IS the archive.
         const sig = JSON.stringify({
-            s: doc.sessions
-                .filter((s) => s.archived === true)
-                .map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${s.label}|${s.state || ""}`)
-                .sort(),
+            s: doc.sessions.map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${s.label}|${s.state || ""}`).sort(),
         });
         if (sig === this.lastSig) return;
         this.lastSig = sig;
@@ -1452,10 +1612,11 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
 
     getChildren(element?: FavNode): FavNode[] {
         if (element) return [];
-        const doc = readFavDoc() ?? emptyFavDoc();
+        const doc = readArchiveDoc() ?? emptyFavDoc();
         const open = openSidSet();
+        // Every row in archive.json is archived — no filter needed. Mutex: a
+        // row here is NOT in favorites.json (a sid lives in at most one file).
         const sessions: FavNode[] = doc.sessions
-            .filter((s) => s.archived === true)
             .slice()
             .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
             .map((s) =>
@@ -1485,16 +1646,8 @@ let favStatusBar: vscode.StatusBarItem | null = null;
 /** v0.5.10: dedupe token for refreshFavStatusBar() — mirrors the tree's
  *  signature dedupe so the steady-state 2s tick does NOT re-assign
  *  .text/.color (which flickers the item) when neither the active sid nor
- *  its favorited state changed. */
+ *  its favorited/archived state changed. */
 let lastFavBarSig = "";
-/** v0.5.22 mitigation C: track the last successfully-resolved sid + timestamp.
- *  When a sid switch happens (new sid ≠ last) and the new sid is NOT favorited
- *  but the switch is recent (<600ms), we show a spinner instead of ☆ — because
- *  the sid inference (panelMap.active find) may transiently hit a stale panel
- *  (VSCode WebviewPanel.active IPC lag). This degrades "wrong ☆ flash" to
- *  "harmless spinner that self-heals ≤500ms". Pure display, no state/write impact. */
-let lastResolvedSid = "";
-let lastResolvedTs = 0;
 /** v0.5.11: fast poll handle for the status-bar ★ button (FAV_BAR_POLL_MS).
  *  Independent of favoritesWatcher (2s, tree) so the star tracks tab switches
  *  at 500ms without speeding up the heavier tree refresh. .unref()'d + cleared
@@ -1826,6 +1979,17 @@ function favToggleTab(resourceUri?: unknown): void {
         doc.sessions.push(row);
         return { changed: true };
     });
+    // Mutex: if we just FAVORITED the session (added, not removed), make sure
+    // it is no longer in archive.json — a sid lives in at most ONE of the two
+    // files. Removing a favorite just unstars; the archive side is untouched.
+    // Best-effort cleanup: mutateArchiveDoc is CAS-guarded + idempotent.
+    if (result.wrote && !removed) {
+        mutateArchiveDoc((doc) => {
+            const before = doc.sessions.length;
+            doc.sessions = doc.sessions.filter((x) => x.sid !== sid);
+            return { changed: doc.sessions.length !== before };
+        });
+    }
     if (result.wrote) {
         void vscode.window.setStatusBarMessage(
             `${removed ? "Removed" : "Added"} session ${sid.slice(0, 8)} ${removed ? "from" : "to"} Favorites`,
@@ -1833,6 +1997,7 @@ function favToggleTab(resourceUri?: unknown): void {
         );
     }
     favoritesProvider?.forceRefresh();
+    archiveProvider?.forceRefresh();
 }
 
 /** v0.5.10: Refresh the status-bar ★ button to reflect the CURRENT active
@@ -1907,8 +2072,8 @@ function refreshFavStatusBar(): void {
     const ui = activeCcSidOrLoading();
     if (ui.loading) {
         // CC tab still loading (just resumed, IIFE hasn't registered its sid) →
-        // spinner instead of the stale previous-session star (prevents
-        // misclicking the WRONG session's favorite on click).
+        // spinner on the single status-bar slot instead of the stale previous-
+        // session glyph (prevents misclicking the WRONG session on click).
         if (lastFavBarSig !== "loading") {
             lastFavBarSig = "loading";
             favStatusBar.text = "$(loading~spin)";
@@ -1916,17 +2081,17 @@ function refreshFavStatusBar(): void {
             favStatusBar.tooltip = "CC Favorites — loading…";
             // v0.5.21: disable click while loading. The spinner is a 500ms-tick
             // snapshot; by the time the user reacts & clicks, loading may have
-            // cleared (sid resolved) — a fixed toggleTab command would then run
-            // against the NEWLY-resolved sid (often the previous session B) and
-            // silently un-star it. command=undefined makes the status bar item
-            // non-interactive (pure display) until the next tick flips it back.
+            // cleared (sid resolved) — a fixed command would then run against
+            // the NEWLY-resolved sid (often the previous session B) and silently
+            // toggle the wrong session. command=undefined makes the item non-
+            // interactive (pure display) until the next tick flips it back.
             favStatusBar.command = undefined;
             favStatusBar.show();
         }
         return;
     }
     if (!ui.isCc || !ui.sid) {
-        // Non-CC tab (editor/terminal) or no resolvable sid → hide the star.
+        // Non-CC tab (editor/terminal) or no resolvable sid → hide the button.
         if (lastFavBarSig !== "") {
             favStatusBar.hide();
             lastFavBarSig = "";
@@ -1934,67 +2099,56 @@ function refreshFavStatusBar(): void {
         return;
     }
     const sid = ui.sid;
-    const doc = readFavDoc();
-    // v0.5.39 Archive: a session row is BOTH favorited AND archived when the
-    // user archives it — archiving moves the row between views, it does NOT
-    // unfavorite. So the archived flag must be checked alongside favorited to
-    // pick the right glyph (archive icon vs ★/☆). Missing row = not favorited.
-    const session = doc?.sessions.find((s) => s.sid === sid);
-    const favorited = !!session;
-    const archived = !!session?.archived;
-    // v0.5.22 mitigation C: if sid just switched (≠ last resolved) and new sid
-    // is NOT favorited but switch is recent (<600ms), show spinner instead of ☆.
-    // Root cause: panelMap[sid].active (EH cached, async IPC) may transiently
-    // hit a stale panel on tab switch → wrong sid → wrong ☆. Degrade to harmless
-    // spinner (self-heals ≤500ms when IPC arrives). Pure display, no write impact.
-    const nowMs = Date.now();
-    const sidChanged = lastResolvedSid && lastResolvedSid !== sid;
-    const recentSwitch = nowMs - lastResolvedTs < 600;
-    if (!favorited && sidChanged && recentSwitch) {
-        if (lastFavBarSig !== "loading") {
-            lastFavBarSig = "loading";
-            favStatusBar.text = "$(loading~spin)";
-            favStatusBar.color = undefined;
-            favStatusBar.tooltip = "CC Favorites — loading…";
-            favStatusBar.command = undefined;
+
+    // --- Single MUTEX button ----------------------------------------------
+    // Favorites and Archive are mutually exclusive: a sid is favorited XOR
+    // archived (or neither → no mark). One status-bar item renders BOTH states
+    // and switches its text/color/command accordingly:
+    //   favorited → ★ gold      (command=toggleTab  → click unstars → no mark)
+    //   archived  → $(archive)  (command=toggleArchive → click unarchives → no mark)
+    //   neither   → hidden
+    // The button only ever CLEARS the current mark (adding happens via the tree
+    // inline buttons / command palette / pickSession).
+    const favDoc = readFavDoc();
+    const favorited = !!favDoc?.sessions.some((s) => s.sid === sid);
+    // Mutex: favorited takes precedence; only consult archive.json when the sid
+    // is NOT favorited (a sid should never be in both files, but if a crash
+    // mid-move or a hand-edit left it in both, favorited wins the glyph).
+    let archived = false;
+    if (!favorited) {
+        const archDoc = readArchiveDoc();
+        archived = !!archDoc?.sessions.some((s) => s.sid === sid);
+    }
+    if (favorited) {
+        const sig = sid + "|fav";
+        if (sig !== lastFavBarSig) {
+            lastFavBarSig = sig;
+            // $(star-full) = solid, gold #F5A623 (aligned with the -fav SVG gold
+            // underline). .color tints the codicon glyph.
+            favStatusBar.text = "$(star-full)";
+            favStatusBar.color = "#F5A623";
+            favStatusBar.tooltip = `CC Favorites — favorited ${sid.slice(0, 8)}. Click to unstar.`;
+            // Re-arm the click command (the loading branch sets it to undefined).
+            favStatusBar.command = "ccStatusDot.fav.toggleTab";
             favStatusBar.show();
         }
-        return; // don't update lastResolvedSid — next tick retries
+    } else if (archived) {
+        const sig = sid + "|arch";
+        if (sig !== lastFavBarSig) {
+            lastFavBarSig = sig;
+            favStatusBar.text = "$(archive)";
+            favStatusBar.color = undefined;
+            favStatusBar.tooltip = `CC Archive — archived ${sid.slice(0, 8)}. Click to unarchive.`;
+            favStatusBar.command = "ccStatusDot.fav.toggleArchive";
+            favStatusBar.show();
+        }
+    } else {
+        // Neither favorited nor archived → hide.
+        if (lastFavBarSig !== "") {
+            favStatusBar.hide();
+            lastFavBarSig = "";
+        }
     }
-    lastResolvedSid = sid;
-    lastResolvedTs = nowMs;
-    // v0.5.39 Archive: archived active session → unclickable archive icon. The
-    // session is still favorited (archiving ≠ unfavorite), so we surface the
-    // archive state instead of the ★/☆ star. command=undefined makes the item
-    // non-interactive (the user must unarchive via the Archive view's right-click
-    // menu to toggle star again). Separate signature (`<sid>|archived`) so the
-    // transition to/from archived repaints even when sid is unchanged.
-    if (archived) {
-        const sig = sid + "|archived";
-        if (sig === lastFavBarSig) return;
-        lastFavBarSig = sig;
-        favStatusBar.text = "$(archive)";
-        favStatusBar.color = undefined;
-        favStatusBar.tooltip = "CC 归档 — 已归档(不可切换)";
-        favStatusBar.command = undefined;
-        favStatusBar.show();
-        return;
-    }
-    const sig = sid + "|" + (favorited ? "1" : "0");
-    if (sig === lastFavBarSig) return;
-    lastFavBarSig = sig;
-    // $(star-full) = solid (favorited → gold #F5A623, aligned with the -fav
-    // SVG gold underline), $(star-empty) = outline (not favorited → default
-    // theme color). .color tints the codicon glyph.
-    favStatusBar.text = favorited ? "$(star-full)" : "$(star-empty)";
-    favStatusBar.color = favorited ? "#F5A623" : undefined;
-    favStatusBar.tooltip = favorited
-        ? `CC Favorites — favorited ${sid.slice(0, 8)}. Click to unstar.`
-        : `CC Favorites — star this session (${sid.slice(0, 8)}).`;
-    // v0.5.21: re-arm the click command (loading branch sets it to undefined to
-    // make the spinner non-interactive). Restore toggleTab now that sid resolved.
-    favStatusBar.command = "ccStatusDot.fav.toggleTab";
-    favStatusBar.show();
 }
 
 /** v0.5.6 (Bug 4 dynamic add/remove text): explicit "Add" variant of
@@ -2035,10 +2189,21 @@ function favAddTab(resourceUri?: unknown): void {
         doc.sessions.push(row);
         return { changed: true };
     });
+    // Mutex: favoriting an archived session MOVES it (archive.json →
+    // favorites.json). Remove the row from archive.json so the sid lives in at
+    // most ONE file. Idempotent + CAS-guarded.
+    if (result.wrote) {
+        mutateArchiveDoc((doc) => {
+            const before = doc.sessions.length;
+            doc.sessions = doc.sessions.filter((x) => x.sid !== sid);
+            return { changed: doc.sessions.length !== before };
+        });
+    }
     if (result.wrote) {
         void vscode.window.setStatusBarMessage(`Added session ${sid.slice(0, 8)} to Favorites`, 3000);
     }
     favoritesProvider?.forceRefresh();
+    archiveProvider?.forceRefresh();
 }
 
 /** v0.5.6 (Bug 4 dynamic add/remove text): explicit "Remove" variant of
@@ -2400,46 +2565,136 @@ async function favPickSession(): Promise<void> {
     favoritesProvider?.forceRefresh();
 }
 
-/** v0.5.39 Archive: move a session from Favorites to the CC Archive view by
- *  setting `archived = true` on its row in favorites.json. Idempotent — if the
- *  row is already archived (or missing entirely), no write lands. After the
- *  write both trees are force-refreshed (the row leaves Favorites and appears in
- *  Archive immediately, no 2s polling lag) and the status-bar glyph is repainted
- *  (★ → archive icon if the active session was the one archived). */
+/** Mutex move: archive a session by MOVING its row from favorites.json to
+ *  archive.json (Favorites view's inline [归档] button). The sid ends up in at
+ *  most ONE file. Crash-safety: ADD to archive.json FIRST, THEN remove from
+ *  favorites.json — a crash between the two leaves the row in BOTH files
+ *  (recoverable; refreshFavStatusBar lets favorited win the glyph) rather than
+ *  in NEITHER (which would silently lose the row). Idempotent on the archive
+ *  side. Both trees + the status bar are repainted. */
 function favArchiveSession(node: FavNode): void {
     if (node.kind === "file") return; // files cannot be archived
     const sid = node.session.sid;
-    const result = mutateFavDoc((doc) => {
-        const s = doc.sessions.find((x) => x.sid === sid);
-        if (!s) return { changed: false };
-        if (s.archived === true) return { changed: false }; // idempotent
-        s.archived = true;
+    const src = node.session;
+    // 1. Add to archive.json (idempotent).
+    mutateArchiveDoc((doc) => {
+        if (doc.sessions.some((x) => x.sid === sid)) return { changed: false };
+        // Copy the row verbatim (sid/label/cwd/transcript_path/model/state/
+        // addedAt/lastSeenAt).
+        doc.sessions.push({ ...src });
         return { changed: true };
     });
-    if (result.wrote) {
-        void vscode.window.setStatusBarMessage(`Archived session ${sid.slice(0, 8)}`, 3000);
+    // 2. Remove from favorites.json (idempotent) — completes the mutex move.
+    mutateFavDoc((doc) => {
+        const before = doc.sessions.length;
+        doc.sessions = doc.sessions.filter((x) => x.sid !== sid);
+        return { changed: doc.sessions.length !== before };
+    });
+    void vscode.window.setStatusBarMessage(`Archived session ${sid.slice(0, 8)}`, 3000);
+    favoritesProvider?.forceRefresh();
+    archiveProvider?.forceRefresh();
+}
+
+/** Mutex move: reverse of favArchiveSession — MOVE the row from archive.json
+ *  back to favorites.json (Archive view's inline [收藏] button). The sid ends up
+ *  favorited (in favorites.json), no longer archived. Crash-safety: ADD to
+ *  favorites.json FIRST, THEN remove from archive.json. Idempotent on the
+ *  favorites side. Both trees + the status bar are repainted. */
+function favUnarchiveSession(node: FavNode): void {
+    if (node.kind === "file") return;
+    const sid = node.session.sid;
+    const src = node.session;
+    // 1. Add to favorites.json (idempotent).
+    mutateFavDoc((doc) => {
+        if (doc.sessions.some((x) => x.sid === sid)) return { changed: false };
+        doc.sessions.push({ ...src });
+        return { changed: true };
+    });
+    // 2. Remove from archive.json (idempotent) — completes the mutex move.
+    mutateArchiveDoc((doc) => {
+        const before = doc.sessions.length;
+        doc.sessions = doc.sessions.filter((x) => x.sid !== sid);
+        return { changed: doc.sessions.length !== before };
+    });
+    void vscode.window.setStatusBarMessage(`Moved session ${sid.slice(0, 8)} to Favorites`, 3000);
+    favoritesProvider?.forceRefresh();
+    archiveProvider?.forceRefresh();
+}
+
+/** Toggle the active CC session's ARCHIVED state under the mutex model. Bound to
+ *  the status-bar $(archive) glyph (click = unarchive → no mark) AND the command
+ *  palette. Behavior:
+ *    - already archived → unarchive (remove from archive.json only → no mark);
+ *    - not archived     → archive (add to archive.json + remove from
+ *      favorites.json if present, so the sid lives in at most ONE file). */
+function favToggleArchive(): void {
+    // Loading guard — refuse while the active CC tab's sid isn't registered yet,
+    // so the toggle doesn't fall back to __ccsdLastActiveSid and target the
+    // PREVIOUS session (same rationale as favToggleTab).
+    if (activeCcSidOrLoading().loading) {
+        void vscode.window.showInformationMessage(
+            "cc-status-dot: session still loading, try again in a moment to archive.",
+        );
+        return;
+    }
+    const sid = resolveActiveSid();
+    if (!sid) {
+        void vscode.window.showInformationMessage(
+            "cc-status-dot: no active Claude Code session. Open a CC tab first, then re-run this command.",
+        );
+        return;
+    }
+    const archDoc = readArchiveDoc();
+    const isArchived = !!archDoc?.sessions.some((s) => s.sid === sid);
+    let removed = false;
+    if (isArchived) {
+        // Unarchive: remove from archive.json only (→ no mark).
+        const result = mutateArchiveDoc((doc) => {
+            const before = doc.sessions.length;
+            doc.sessions = doc.sessions.filter((x) => x.sid !== sid);
+            return { changed: doc.sessions.length !== before };
+        });
+        removed = result.wrote;
+    } else {
+        // Archive: add to archive.json, and if favorited remove from favorites
+        // (mutex). buildFavSessionRow derives a fresh row from the active sid's
+        // sidecar so a never-favorited session can still be archived.
+        const row = buildFavSessionRow(sid);
+        if (row) {
+            mutateArchiveDoc((doc) => {
+                if (doc.sessions.some((x) => x.sid === sid)) return { changed: false };
+                doc.sessions.push(row);
+                return { changed: true };
+            });
+            mutateFavDoc((doc) => {
+                const before = doc.sessions.length;
+                doc.sessions = doc.sessions.filter((x) => x.sid !== sid);
+                return { changed: doc.sessions.length !== before };
+            });
+        }
+    }
+    if (removed || !isArchived) {
+        void vscode.window.setStatusBarMessage(
+            `${isArchived ? "Unarchived" : "Archived"} session ${sid.slice(0, 8)}`,
+            3000,
+        );
     }
     favoritesProvider?.forceRefresh();
     archiveProvider?.forceRefresh();
 }
 
-/** v0.5.39 Archive: reverse of favArchiveSession — set `archived = false` so
- *  the row returns to Favorites. Idempotent. Both trees force-refreshed so the
- *  row re-appears in Favorites and leaves Archive without polling lag. */
-function favUnarchiveSession(node: FavNode): void {
+/** Delete a session row from archive.json entirely (→ no mark) — the Archive
+ *  view's inline [移除] button. Under the mutex model this is DISTINCT from
+ *  favUnarchiveSession: remove = DELETE (become unmarked), while unarchive =
+ *  MOVE to favorites. Idempotent. */
+function favRemoveArchive(node: FavNode): void {
     if (node.kind === "file") return;
     const sid = node.session.sid;
-    const result = mutateFavDoc((doc) => {
-        const s = doc.sessions.find((x) => x.sid === sid);
-        if (!s) return { changed: false };
-        if (s.archived !== true) return { changed: false }; // idempotent
-        s.archived = false;
-        return { changed: true };
+    mutateArchiveDoc((doc) => {
+        const before = doc.sessions.length;
+        doc.sessions = doc.sessions.filter((x) => x.sid !== sid);
+        return { changed: doc.sessions.length !== before };
     });
-    if (result.wrote) {
-        void vscode.window.setStatusBarMessage(`Unarchived session ${sid.slice(0, 8)}`, 3000);
-    }
-    favoritesProvider?.forceRefresh();
     archiveProvider?.forceRefresh();
 }
 
@@ -2456,11 +2711,10 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
     });
     ctx.subscriptions.push(tree);
 
-    // v0.5.39 Archive: second tree view — surfaces sessions with archived===true.
-    // Shares the same FavNode type + readFavDoc source as Favorites; the provider
-    // filters by the archived flag so the two views partition sessions cleanly.
-    // Created unconditionally (even when empty) so the view container is always
-    // present in the Explorer sidebar; an empty Archive view just shows nothing.
+    // Second tree view — surfaces sessions in the SEPARATE archive.json (not an
+    // archived flag on favorites.json). Mutex: a sid appears in at most ONE of
+    // the two views (favorited XOR archived). Created unconditionally (even when
+    // empty) so the view container is always present in the Explorer sidebar.
     archiveProvider = new ArchiveProvider();
     const archiveTree = vscode.window.createTreeView("ccStatusDot.archive", {
         treeDataProvider: archiveProvider,
@@ -2500,11 +2754,12 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
         vscode.commands.registerCommand("ccStatusDot.fav.pickSession", () => {
             void favPickSession();
         }),
-        // v0.5.39 Archive: archive/unarchive are node-bound commands — they
-        // receive the FavNode from the tree's right-click menu (contextValue
-        // ccsdFavSession* for archive in Favorites, ccsdArchivedSession* for
-        // unarchive in Archive). Hidden from the command palette via the
-        // commandPalette `when:false` entry in package.json (no node arg there).
+        // v0.5.39 Archive: archive/unarchive are node-bound MUTEX-MOVE commands
+        // — they receive the FavNode from the tree's inline button (contextValue
+        // ccsdFavSession* for archive in Favorites → moves fav→archive;
+        // ccsdArchivedSession* for unarchive in Archive → moves archive→fav).
+        // Hidden from the command palette via the commandPalette `when:false`
+        // entry in package.json (no node arg there).
         vscode.commands.registerCommand("ccStatusDot.fav.archiveSession", (node?: FavNode) => {
             if (!node) return;
             favArchiveSession(node);
@@ -2512,6 +2767,23 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
         vscode.commands.registerCommand("ccStatusDot.fav.unarchiveSession", (node?: FavNode) => {
             if (!node) return;
             favUnarchiveSession(node);
+        }),
+        // Mutex: toggleArchive toggles the active session's ARCHIVED state under
+        // the mutex model — if archived it unarchives (→ no mark); otherwise it
+        // archives (moving the row out of favorites.json if present, so the sid
+        // stays in at most one file). Bound to the status-bar $(archive) glyph +
+        // exposed in the command palette ("CC Favorites: Toggle Archive").
+        vscode.commands.registerCommand("ccStatusDot.fav.toggleArchive", () => {
+            favToggleArchive();
+        }),
+        // Archive view inline trash button → DELETE the row from archive.json
+        // (→ no mark). Distinct from ccStatusDot.fav.unarchiveSession (which
+        // MOVES the row to favorites.json) and from ccStatusDot.fav.remove
+        // (which operates on favorites.json). Under the mutex model the Archive
+        // view's remove never touches favorites.json.
+        vscode.commands.registerCommand("ccStatusDot.fav.archiveRemove", (node?: FavNode) => {
+            if (!node) return;
+            favRemoveArchive(node);
         }),
     );
 
@@ -2524,6 +2796,10 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
     // status bar's right edge, next to the token counter. Hidden until
     // refreshFavStatusBar() finds an active CC session.
     favStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    // No fixed command here — refreshFavStatusBar reassigns .command per state
+    // (toggleTab when favorited, toggleArchive when archived). Default kept as
+    // toggleTab so a paint race before the first refresh still does something
+    // sane; refreshFavStatusBar overwrites it within one tick.
     favStatusBar.command = "ccStatusDot.fav.toggleTab";
     ctx.subscriptions.push(favStatusBar);
     // v0.5.12 perf: defer the ★ button's initial paint past registerFavorites'
@@ -2577,9 +2853,9 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
     favoritesWatcher = setInterval(() => {
         try {
             favoritesProvider?.refresh();
-            // v0.5.39 Archive: keep the Archive view in lockstep with the same
-            // 2s tick so external favorites.json edits (multi-window, hand-edit)
-            // surface in both views. Cheap — refresh() dedupes on signature.
+            // Keep the Archive view in lockstep with the same 2s tick so external
+            // archive.json edits (multi-window, hand-edit) surface. Cheap —
+            // refresh() dedupes on signature.
             archiveProvider?.refresh();
         } catch {
             /* best-effort — next tick retries */

@@ -19,6 +19,8 @@
   "ccsd.archive.viewContextualTitle": "CC Archive",
   "ccsd.fav.archive.title": "Archive Session",
   "ccsd.fav.unarchive.title": "Unarchive Session",
+  "ccsd.fav.toggleArchive.title": "Toggle Archive",
+  "ccsd.fav.archiveRemove.title": "Remove",
   "ccsd.configuration.title": "cc-status-dot",
   "ccsd.config.notify.description": "Show a notification when Claude Code completes a turn (state transitions to done or interrupted).",
   "ccsd.config.notifyWhenFocused.description": "Also fire the completion notification when VSCode is the currently focused window. Disable to only notify when you're in another app.",

@@ -114,6 +114,18 @@
         "title": "%ccsd.fav.unarchive.title%",
         "icon": "$(star-full)",
         "category": "%ccsd.fav.category%"
+      },
+      {
+        "command": "ccStatusDot.fav.toggleArchive",
+        "title": "%ccsd.fav.toggleArchive.title%",
+        "icon": "$(archive)",
+        "category": "%ccsd.fav.category%"
+      },
+      {
+        "command": "ccStatusDot.fav.archiveRemove",
+        "title": "%ccsd.fav.archiveRemove.title%",
+        "icon": "$(close)",
+        "category": "%ccsd.fav.category%"
       }
     ],
     "menus": {
@@ -148,14 +160,19 @@
       ],
       "view/item/context": [
         {
+          "command": "ccStatusDot.fav.archiveSession",
+          "when": "view == 'ccStatusDot.favorites' && viewItem =~ /^ccsdFavSession/",
+          "group": "inline@1"
+        },
+        {
           "command": "ccStatusDot.fav.open",
           "when": "view == ccStatusDot.favorites && viewItem =~ /^ccsdFav(SessionOpen|File)$/",
-          "group": "inline@1"
+          "group": "inline@2"
         },
         {
           "command": "ccStatusDot.fav.remove",
           "when": "view == ccStatusDot.favorites && viewItem =~ /^ccsdFav/",
-          "group": "inline@2"
+          "group": "inline@3"
         },
         {
           "command": "ccStatusDot.fav.copyResume",
@@ -163,29 +180,24 @@
           "group": "9_cuts@1"
         },
         {
-          "command": "ccStatusDot.fav.archiveSession",
-          "when": "view == 'ccStatusDot.favorites' && viewItem =~ /^ccsdFavSession/",
-          "group": "9_cuts@2"
-        },
-        {
           "command": "ccStatusDot.fav.unarchiveSession",
           "when": "view == 'ccStatusDot.archive' && viewItem =~ /^ccsdArchivedSession/",
-          "group": "9_cuts@1"
+          "group": "inline@1"
         },
         {
           "command": "ccStatusDot.fav.open",
           "when": "view == 'ccStatusDot.archive' && viewItem == 'ccsdArchivedSessionOpen'",
-          "group": "inline@1"
+          "group": "inline@2"
         },
         {
-          "command": "ccStatusDot.fav.remove",
+          "command": "ccStatusDot.fav.archiveRemove",
           "when": "view == 'ccStatusDot.archive' && viewItem =~ /^ccsdArchivedSession/",
-          "group": "inline@2"
+          "group": "inline@3"
         },
         {
           "command": "ccStatusDot.fav.copyResume",
           "when": "view == 'ccStatusDot.archive' && viewItem =~ /^ccsdArchivedSession/",
-          "group": "9_cuts@3"
+          "group": "9_cuts@1"
         }
       ],
       "commandPalette": [
@@ -233,6 +245,13 @@
         },
         {
           "command": "ccStatusDot.fav.unarchiveSession",
+          "when": "false"
+        },
+        {
+          "command": "ccStatusDot.fav.toggleArchive"
+        },
+        {
+          "command": "ccStatusDot.fav.archiveRemove",
           "when": "false"
         }
       ]

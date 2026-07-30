@@ -2437,34 +2437,48 @@ check(
       'IIFE.117k final iconPath apply wrapped in favOf(svg,sid) (v0.5.0)',
       /ccuri\(\s*favOf\(\s*svg\s*,\s*sid\s*\)\s*\)/.test(iife),
     );
-    // v0.5.X archive detection: companion writes archived:true into the
-    // favorites.json session objects. The IIFE surfaces this two ways — a ▼
-    // (BLACK DOWN-POINTING TRIANGLE) tab prefix and a skip of the -fav gold
-    // underline. readArchivedSet mirrors readFavSet (mtime+size cache via
-    // __ccsdArchCache) but returns ONLY archived===true sids; readFavSet now
-    // excludes archived so a session is never both ★ and ▼.
+    // v0.5.40 archive detection: archive.json is an INDEPENDENT file from
+    // favorites.json. Companion writes archive.json separately; the IIFE reads
+    // it via ARCF + readArchivedSet (mtime+size cache via __ccsdArchCache) and
+    // returns ALL sids in archive.json (the file only contains archived
+    // sessions, so no archived===true filter is needed). Favorites (★) and
+    // archive (▼) are MUTUALLY EXCLUSIVE at the tab-prefix layer: a session is
+    // either ★, ▼, or bare — never both. readFavSet returns every favorites.json
+    // sid (no archived filter), and the prefix ternary composes them exclusively
+    // (__isFav?★:__isArch?▼:bare).
     check(
       'IIFE.117l IIFE body defines readArchivedSet helper (v0.5.X archive detection)',
       /function readArchivedSet\(/.test(iife),
     );
     check(
-      'IIFE.117l2 IIFE body defines __ccsdArchCache (mtime+size cache on favorites.json, parallel to __ccsdFavCache)',
+      'IIFE.117l2 IIFE body defines __ccsdArchCache (mtime+size cache on archive.json, parallel to __ccsdFavCache)',
       /globalThis\.__ccsdArchCache/.test(iife),
     );
     check(
-      'IIFE.117m readFavSet filters out archived sessions (archived!==true) so archived sids do not get the ★ prefix',
-      /typeof x\.sid==="string"&&x\.archived!==true/.test(iife),
-      'readFavSet must exclude archived===true sessions from the favorited set (archived and favorited are mutually exclusive tab states)',
+      'IIFE.117l3 IIFE body defines ARCF=pth.join(DIR,"archive.json") (independent from FAVF/favorites.json)',
+      /ARCF\s*=\s*pth\.join\(\s*DIR\s*,\s*["']archive\.json["']\s*\)/.test(iife),
+      'archive.json is a separate file from favorites.json (independent files, independent caches) — the prefixes are composed mutually-exclusively at the tab layer',
     );
     check(
-      'IIFE.117n readArchivedSet filters IN archived sessions only (archived===true)',
-      /typeof x\.sid==="string"&&x\.archived===true/.test(iife),
-      'readArchivedSet must return ONLY sessions where archived===true (drives the ▼ tab prefix)',
+      'IIFE.117m readFavSet does NOT filter on archived (favorites and archive are independent) — restored to v0.5.0 behavior returning all favorites.json sids',
+      !/typeof x\.sid==="string"&&x\.archived!==true/.test(iife),
+      'readFavSet must return every favorited sid regardless of archived state; the archived!==true filter was a v0.5.X mistake that coupled favorites to archive',
     );
     check(
-      'IIFE.117o favOf skips the -fav gold underline for archived sessions (calls readArchivedSet + early-returns svgPath)',
-      /var aset=readArchivedSet\(\);if\(aset&&aset\[sid\]\)return svgPath;/.test(iife),
-      'an archived session is no longer visually highlighted with the gold underline even if it is also favorited',
+      'IIFE.117n readArchivedSet reads ARCF (archive.json), not FAVF (favorites.json)',
+      /statSync\(ARCF\)/.test(iife) && /readFileSync\(ARCF/.test(iife),
+      'readArchivedSet must read the independent archive.json (ARCF); archive.json contains only archived sessions so all sids are returned without any archived===true filter',
+    );
+    check(
+      'IIFE.117o favOf no longer calls readArchivedSet (archive does not affect tab icon — only the ▼ prefix does)',
+      (() => {
+        // Bound the match to favOf's own body (ends with the unique
+        // `}catch(_){}return svgPath;}` tail) so a lazy [\s\S]*? cannot bleed
+        // past favOf into the per-panel tick's `var __aset=readArchivedSet()`.
+        const m = iife.match(/function favOf\([\s\S]*?\}catch\(_\)\{\}return svgPath;\}/);
+        return !!m && !/readArchivedSet/.test(m[0]);
+      })(),
+      'favOf must only manage the favorite → -fav.svg gold underline; the archive skip was removed because the archive visual indication is the ▼ prefix, not an icon change',
     );
   }
 }
@@ -2936,9 +2950,9 @@ check(
   'the entire §AA injection surface (script src, prototype setter, read-modify-write, message bridge) was removed',
 );
 check(
-  'IIFE.172 v0.5.X tab-title ▼ (archive) prefix takes priority — __want uses \\u25BC when archived, with ★ as nested fallback for favorited',
-  /var __want=__isArch\?\("\\u25BC "\+__base\):\(__isFav\?\("\\u2605 "\+__base\):__base\)/.test(iife),
-  'archive takes priority over favorite in the per-panel tick: archived sids show ▼ (BLACK DOWN-POINTING TRIANGLE) before the title; non-archived favorited sids fall back to ★ (\\u2605); others get the bare title. Archived and favorited are mutually exclusive because readFavSet excludes archived (IIFE.117m), but the ternary orders archive first for defense-in-depth.',
+  'IIFE.172 v0.5.40 tab-title ★ and ▼ are MUTUALLY EXCLUSIVE — a ternary, not prefix accumulation',
+  /var __want=__isFav\?\("\\u2605 "\+__base\):\(__isArch\?\("\\u25BC "\+__base\):__base\)/.test(iife),
+  'favorites (★) and archive (▼) are mutually exclusive dimensions: only favorited → "★ title", only archived → "▼ title", neither → bare title. There is no "both" branch — the ternary __isFav?"★ ":__isArch?"▼ ":bare picks exactly one prefix per tick. The previous append-both logic (__pre+="\\u2605"; if(__isArch)__pre+="\\u25BC" → "★▼ title") is gone: the two sets are disjoint by companion-side contract, and even if both files ever held the same sid, fav wins (a favorited session is never silently demoted to ▼).',
 );
 check(
   'IIFE.172b v0.5.X tab-title archived prefix reads readArchivedSet() — __aset/__isArch declared in the same tick block',

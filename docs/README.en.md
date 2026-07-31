@@ -25,13 +25,13 @@
 
 </div>
 
-**① Tab five-state status dots**　Every CC session tab's Claude icon changes color by state — 🟡 running / 🟢 done / 🔴 interrupted fast-flash / ⚪ idle / 🔵 awaiting input. 🔵 awaiting input has two triggers: (a) when CC pops a permission dialog, it yields to CC's native blue dot (never overrides it); (b) when CC's reply carries an "awaiting your decision" semantic (`let me know` / `your call` / `please confirm` / `等你确认` etc.), the tab automatically turns blue (overriding the running-yellow / done-green) — so at a glance you can tell whether it's truly done or waiting on you to say something, no need to stare at the tab guessing. Favorited session tabs get a **★** prefix on the title + a gold line under the icon. Shown in both the top tab bar and the left-side "Open Editors" view, synced on both sides.
+**① Tab five-state status dots**　Every CC session tab's Claude icon changes color by state — 🟡 running / 🟢 done / 🔴 interrupted fast-flash / ⚪ idle / 🔵 awaiting input. 🔵 awaiting input has two triggers: (a) when CC pops a permission dialog, it yields to CC's native blue dot (never overrides it); (b) when CC's reply carries an "awaiting your decision" semantic (`let me know` / `your call` / `please confirm` / `等你确认` etc.), the tab automatically turns blue (overriding the running-yellow / done-green) — so at a glance you can tell whether it's truly done or waiting on you to say something, no need to stare at the tab guessing. Favorited session tabs get a **★** prefix on the title + a gold line under the icon; archived session tabs get a **●** prefix + a grey line under the icon (favorites and archives are mutually exclusive — a session is in at most one). Shown in both the top tab bar and the left-side "Open Editors" view, synced on both sides.
 
-**② Sidebar CC Favorites view**　A new CC Favorites in the Explorer sidebar pins frequently-used files and sessions together; session icons show open = solid chat bubble / closed = outline bubble, click to jump to it or resume into a new panel; right-click a closed session to copy the `claude -r <sid>` command.
+**② Sidebar CC Favorites / CC Archive views**　Two new views in the Explorer sidebar — CC Favorites + CC Archive (mutually exclusive: a session lives in at most one); the Favorites view pins frequently-used sessions/files together, the Archive view stashes sessions you don't need for now. Session icons show open = solid chat bubble / closed = outline bubble, click to jump to it or resume into a new panel; inline buttons toggle between them — Favorites view [Archive][Open][Remove], Archive view [Favorite][Open][Remove], clicking Archive/Favorite moves it to the other view automatically. Right-click a closed session to copy the `claude -r <sid>` command.
 
 **③ Bottom 4-light aggregate**　A single block on the status bar — 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + counts — every session's overall status at a glance, no tab-switching needed; the 4 light slots are fixed in place, counts changing never shifts the layout.
 
-**④ ★ One-click favorite button**　The ★/☆ button next to the token count on the status bar — one click to favorite / unfavorite the currently active CC session (favorited shows solid gold ★, unfavorited shows hollow ☆); auto-hides when there is no active CC session.
+**④ ★ Favorite / ○ Archive buttons**　Two buttons next to the token count on the status bar: ★/☆ to favorite / unfavorite the currently active CC session (favorited shows solid gold ★, unfavorited shows hollow ☆), and ○/● to archive / unarchive it (archived shows solid grey ●, unarchived shows hollow grey ring ○). Favorites and archives are mutually exclusive — clicking one automatically clears the other; both auto-hide when there is no active CC session.
 
 **⑤ Bottom-right token / $ cost**　The currently active session's token usage + optional USD estimate + streaming rate (tok/s); click to pop a QuickPick config panel (stats window / display mode / notifications / sound / copy / reset), the panel follows VSCode's UI language (zh/en/ja/de/es/fr/pt/ru).
 
@@ -103,9 +103,9 @@ The bottom-right token SBI shows the currently active session's token usage + op
 > { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
 > ```
 
-### 3. Favorites (features ②④)
+### 3. Favorites / Archive (features ②④)
 
-Sidebar CC Favorites view + tab ★ marker + status-bar ★ button.
+Sidebar CC Favorites + CC Archive views (mutually exclusive) + tab ★/● markers + status-bar ★/○ buttons. Archive mirrors Favorites — no extra config.
 
 | Option | Default | Description |
 |---|---|---|

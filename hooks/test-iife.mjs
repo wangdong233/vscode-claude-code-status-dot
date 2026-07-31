@@ -401,7 +401,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.39 stamp', /\/\*cc-status-dot-injected:v0.5.39:/.test(iife));
+check('IIFE.21c banner carries v0.5.40 stamp', /\/\*cc-status-dot-injected:v0.5.40:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -2391,15 +2391,26 @@ check(
       m[1].includes('"claude-logo-pending.svg"'),
       'OUR_SVGS body: ' + m[1],
     );
-    // v0.5.0: length is now 10 (5 base + 5 -fav variants for favorited sessions).
+    // v0.5.39+: length is 15 (5 base + 5 -fav + 5 -arch variants). The -arch
+    // set MUST be in the manifest or installRuntimeFiles never copies them,
+    // stale-sweep deletes any prior copy, and favOf()'s -arch.svg path 404s →
+    // archived tabs render a broken icon (review high finding).
     const count = (m[1].match(/"claude-logo-/g) || []).length;
-    check('IIFE.117 OUR_SVGS contains 10 entries (5 base + 5 -fav, v0.5.0)', count === 10, 'count=' + count);
+    check('IIFE.117 OUR_SVGS contains 15 entries (5 base + 5 -fav + 5 -arch)', count === 15, 'count=' + count);
     // v0.5.0: every base variant has a -fav twin.
     const baseStates = ['idle', 'running', 'done', 'error', 'pending'];
     for (const st of baseStates) {
       check(
         `IIFE.117a OUR_SVGS includes claude-logo-${st}-fav.svg (v0.5.0)`,
         m[1].includes(`"claude-logo-${st}-fav.svg"`),
+        'OUR_SVGS body: ' + m[1],
+      );
+    }
+    // v0.5.39: every base variant has a -arch twin (archived-session grey icon).
+    for (const st of baseStates) {
+      check(
+        `IIFE.117a2 OUR_SVGS includes claude-logo-${st}-arch.svg (v0.5.39 archive)`,
+        m[1].includes(`"claude-logo-${st}-arch.svg"`),
         'OUR_SVGS body: ' + m[1],
       );
     }
@@ -2442,10 +2453,10 @@ check(
     // it via ARCF + readArchivedSet (mtime+size cache via __ccsdArchCache) and
     // returns ALL sids in archive.json (the file only contains archived
     // sessions, so no archived===true filter is needed). Favorites (★) and
-    // archive (▼) are MUTUALLY EXCLUSIVE at the tab-prefix layer: a session is
-    // either ★, ▼, or bare — never both. readFavSet returns every favorites.json
+    // archive (◆) are MUTUALLY EXCLUSIVE at the tab-prefix layer: a session is
+    // either ★, ◆, or bare — never both. readFavSet returns every favorites.json
     // sid (no archived filter), and the prefix ternary composes them exclusively
-    // (__isFav?★:__isArch?▼:bare).
+    // (__isFav?★:__isArch?◆:bare).
     check(
       'IIFE.117l IIFE body defines readArchivedSet helper (v0.5.X archive detection)',
       /function readArchivedSet\(/.test(iife),
@@ -2470,7 +2481,7 @@ check(
       'readArchivedSet must read the independent archive.json (ARCF); archive.json contains only archived sessions so all sids are returned without any archived===true filter',
     );
     check(
-      'IIFE.117o favOf now handles BOTH favorited (→-fav.svg gold) AND archived (→-arch.svg grey, MUTEX)',
+      'IIFE.117o favOf now handles BOTH favorited (→-fav.svg gold underline) AND archived (→-arch.svg grey underline, MUTEX)',
       (() => {
         const m = iife.match(/function favOf\([\s\S]*?\}catch\(_\)\{\}return svgPath;\}/);
         return (
@@ -2479,7 +2490,7 @@ check(
           /fset&&fset\[sid\]\)return pth\.join\(RES,leaf\.replace.*-fav\.svg/.test(m[0])
         );
       })(),
-      'favOf must only manage the favorite → -fav.svg gold underline; the archive skip was removed because the archive visual indication is the ▼ prefix, not an icon change',
+      'favOf manages BOTH favorited (→-fav.svg gold underline) AND archived (→-arch.svg grey underline) under the mutex; favorited is checked first so a both-files state reconciles to the gold icon, matching the ★ tab-title prefix and the gold status-bar highlight',
     );
   }
 }
@@ -2951,16 +2962,16 @@ check(
   'the entire §AA injection surface (script src, prototype setter, read-modify-write, message bridge) was removed',
 );
 check(
-  'IIFE.172 v0.5.40 tab-title ★ and ▼ are MUTUALLY EXCLUSIVE — a ternary, not prefix accumulation',
-  /var __want=__isFav\?\("\\u2605 "\+__base\):\(__isArch\?\("\\u25C6 "\+__base\):__base\)/.test(iife),
-  'favorites (★) and archive (▼) are mutually exclusive dimensions: only favorited → "★ title", only archived → "▼ title", neither → bare title. There is no "both" branch — the ternary __isFav?"★ ":__isArch?"▼ ":bare picks exactly one prefix per tick. The previous append-both logic (__pre+="\\u2605"; if(__isArch)__pre+="\\u25C6" → "★▼ title") is gone: the two sets are disjoint by companion-side contract, and even if both files ever held the same sid, fav wins (a favorited session is never silently demoted to ▼).',
+  'IIFE.172 v0.5.42.2 tab-title ★ and ● are MUTUALLY EXCLUSIVE — a ternary, not prefix accumulation',
+  /var __want=__isFav\?\(\"\\u2605 \"\+__base\):\(__isArch\?\(\"\\u25CF \"\+__base\):__base\)/.test(iife),
+  'v0.5.42.2: archive tab-title marker is ● (BLACK CIRCLE, U+25CF) — same shape as the status-bar archive button ($(circle-filled) codicon), so tab + status bar stay consistent. Circle is the only full-size codicon (besides ★) with hollow+filled variants. Ternary __isFav?"★ ":__isArch?"● ":bare; favorited wins the tiebreak.',
 );
 check(
-  'IIFE.172b v0.5.X tab-title archived prefix reads readArchivedSet() — __aset/__isArch declared in the same tick block',
+  'IIFE.172b v0.5.40 tab-title archived prefix reads readArchivedSet() — __aset/__isArch declared in the same tick block',
   /var __fset=readFavSet\(\);var __aset=readArchivedSet\(\);var __isFav=!?\(!__fset\|\|!__fset\[sid\]\);var __isArch=!?\(!__aset\|\|!__aset\[sid\]\)/.test(
     iife,
   ),
-  'the archived state is resolved per-tick from readArchivedSet() (mirrors readFavSet/__isFav in the same try block) — drives the ▼ prefix and is independent of the fav cache',
+  'the archived state is resolved per-tick from readArchivedSet() (mirrors readFavSet/__isFav in the same try block) — drives the ◆ title prefix and is independent of the fav cache',
 );
 check(
   'IIFE.173 v0.5.9 tab-title prefix bases on t.__ccsdTitle (logical title — no ★★ stacking)',

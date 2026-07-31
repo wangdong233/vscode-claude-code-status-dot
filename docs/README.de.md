@@ -29,13 +29,13 @@
 
 </div>
 
-**① Tab-Fünf-Zustands-Statuspunkt**　Das Claude-Icon jedes CC-Session-Tabs ändert die Farbe nach Zustand —— 🟡 läuft / 🟢 fertig / 🔴 kurzes Rot-Blinken bei Unterbrechung / ⚪ Leerlauf / 🔵 wartet auf Eingabe. 🔵 wartet auf Eingabe hat **zwei Auslöser**: (a) CC fordert Berechtigung an → der Reader überlässt das Icon dem nativen CC-Blau-Punkt (**keine Überschreibung**); (b) CCs Antwort enthält »wartet auf deine Bestätigung / let me know / your call«-**Semantik** → der Tab schaltet automatisch auf Blau (überschreibt running-Gelb / done-Grün) —— auf einen Blick erkennst du »wirklich fertig« oder »wartet auf meine Eingabe«, ohne den Tab anstarren zu müssen. Favorisierte Session-Tabs erhalten ein **★**-Präfix im Titel + eine goldene Linie am unteren Icon-Rand. Obere Tab-Leiste + Seitenleiste „Offene Editoren“ zeigen es beide, vollständig synchron.
+**① Tab-Fünf-Zustands-Statuspunkt**　Das Claude-Icon jedes CC-Session-Tabs ändert die Farbe nach Zustand —— 🟡 läuft / 🟢 fertig / 🔴 kurzes Rot-Blinken bei Unterbrechung / ⚪ Leerlauf / 🔵 wartet auf Eingabe. 🔵 wartet auf Eingabe hat **zwei Auslöser**: (a) CC fordert Berechtigung an → der Reader überlässt das Icon dem nativen CC-Blau-Punkt (**keine Überschreibung**); (b) CCs Antwort enthält »wartet auf deine Bestätigung / let me know / your call«-**Semantik** → der Tab schaltet automatisch auf Blau (überschreibt running-Gelb / done-Grün) —— auf einen Blick erkennst du »wirklich fertig« oder »wartet auf meine Eingabe«, ohne den Tab anstarren zu müssen. Favorisierte Session-Tabs erhalten ein **★**-Präfix im Titel + eine goldene Linie am unteren Icon-Rand; archivierte Session-Tabs erhalten ein **●**-Präfix im Titel + eine graue Linie am unteren Icon-Rand (Favorit und Archiv schließen sich gegenseitig aus, eine Session ist immer nur eines von beidem). Obere Tab-Leiste + Seitenleiste „Offene Editoren“ zeigen es beide, vollständig synchron.
 
-**② CC-Favorites-Ansicht in der Seitenleiste**　In der Explorer-Seitenleiste kommt **CC Favorites** hinzu — häufig verwendete Dateien/Sessions an einem Ort anpinnen; Session-Icon open = solide Sprechblase / closed = Kontur-Sprechblase, Klick springt direkt dorthin oder resumed in ein neues panel; Rechtsklick auf eine bereits geschlossene Session kopiert den Befehl `claude -r <sid>`.
+**② CC-Favorites- / CC-Archive-Ansicht in der Seitenleiste**　In der Explorer-Seitenleiste kommen **CC Favorites** + **CC Archive** hinzu (schließen sich gegenseitig aus: eine Session ist nur in einer der beiden); die Favorites-Ansicht pinnt häufig verwendete Sessions/Dateien an einem Ort, die Archive-Ansicht nimmt derzeit ungenutzte Sessions auf. Session-Icon open = solide Sprechblase / closed = Kontur-Sprechblase, Klick springt direkt dorthin oder resumed in ein neues Panel; Inline-Buttons schalten gegenseitig um —— Favorites-Ansicht [Archiv][Öffnen][Entfernen], Archive-Ansicht [Favorit][Öffnen][Entfernen], ein Klick auf Archiv/Favorit verschiebt die Session automatisch in die jeweils andere Ansicht. Rechtsklick auf eine bereits geschlossene Session kopiert den Befehl `claude -r <sid>`.
 
 **③ Vier-Lichter-Aggregat unten**　Ein kompakter Block in der Statusleiste 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + Ziffern — Gesamtzustand aller Sessions auf einen Blick, ohne den Tab zu wechseln; die vier Positionen sind fix, Ziffernwechsel verschiebt nichts.
 
-**④ ★ Ein-Klick-Favoriten-Button**　Der ★/☆-Button neben dem Token in der Statusleiste favorisiert/entfernt mit einem Klick die aktuell aktive CC-Session (bereits favorisiert zeigt goldenen ★, nicht favorisiert leeren ☆); wenn keine aktive CC-Session vorhanden ist, wird er automatisch ausgeblendet.
+**④ ★ Favoriten- / ○ Archiv-Button**　Zwei Buttons neben dem Token in der Statusleiste: ★/☆ favorisiert/entfernt mit einem Klick die aktuell aktive CC-Session (bereits favorisiert zeigt goldenen ★, nicht favorisiert leeren ☆); ○/● archiviert/entfernt mit einem Klick (bereits archiviert zeigt solide graues ●, nicht archiviert leeren grauen Ring ○). Favorit und Archiv schließen sich gegenseitig aus —— ein Klick auf das eine hebt das andere automatisch auf; wenn keine aktive CC-Session vorhanden ist, werden beide automatisch ausgeblendet.
 
 **⑤ Token / $ cost unten rechts**　Token-Verbrauch der aktuell aktiven Session + optionale USD-Schätzung + Streaming-Rate (tok/s); Klick öffnet das QuickPick-Konfigurationspanel (Statistikfenster / Anzeigemodus / Benachrichtigung / Ton / Kopieren / Zurücksetzen), das Panel folgt der VSCode-Oberflächensprache (zh/en/ja/de/es/fr/pt/ru).
 
@@ -109,9 +109,9 @@ Der Token-SBI unten rechts zeigt den Token-Verbrauch der aktiven Session + optio
 > { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
 > ```
 
-### 3. Favoriten (entspricht Funktion ②④)
+### 3. Favoriten / Archiv (entspricht Funktion ②④)
 
-CC-Favorites-Ansicht in der Seitenleiste + Tab-★-Markierung + ★-Button in der Statusleiste.
+CC-Favorites- + CC-Archive-Ansicht in der Seitenleiste (schließen sich gegenseitig aus) + Tab-★/●-Markierung + ★/○-Buttons in der Statusleiste. Archiv verhält sich exakt wie Favoriten, keine zusätzliche Konfiguration nötig.
 
 | Konfig-Item | Standard | Beschreibung |
 |---|---|---|

@@ -2,7 +2,7 @@
   "name": "cc-status-dot-companion",
   "displayName": "%ccsd.displayName%",
   "description": "%ccsd.description%",
-  "version": "0.5.39",
+  "version": "0.5.40",
   "publisher": "wangdong",
   "license": "MIT",
   "private": true,

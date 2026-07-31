@@ -29,13 +29,13 @@
 
 </div>
 
-**① Punto de cinco estados en la pestaña**　El icono de Claude de cada pestaña de sesión de CC cambia de color según su estado — 🟡 corriendo / 🟢 completado / 🔴 parpadeo rápido de interrupción / ⚪ inactivo / 🔵 esperando tu entrada. 🔵 Esperando tu entrada tiene dos tipos de disparador: (a) cuando CC abre un cuadro de autorización, cede el paso al punto azul nativo de CC (sin sobrescribirlo); (b) cuando la respuesta de CC contiene semántica de **"esperando tu decisión"** (`espero tu confirmación` / `let me know` / `your call` etc.) la pestaña se vuelve azul automáticamente (sobrescribe el amarillo-running / verde-done) — de un vistazo distingues "terminó de verdad" de "espera que le diga algo", sin mirar la pestaña adivinando. Las sesiones favoritas llevan un prefijo **★** en el título + una línea dorada en la parte inferior del icono. Visible a la vez en la barra de pestañas superior y en "Editores abiertos" de la izquierda, totalmente sincronizado en ambos lados.
+**① Punto de cinco estados en la pestaña**　El icono de Claude de cada pestaña de sesión de CC cambia de color según su estado — 🟡 corriendo / 🟢 completado / 🔴 parpadeo rápido de interrupción / ⚪ inactivo / 🔵 esperando tu entrada. 🔵 Esperando tu entrada tiene dos tipos de disparador: (a) cuando CC abre un cuadro de autorización, cede el paso al punto azul nativo de CC (sin sobrescribirlo); (b) cuando la respuesta de CC contiene semántica de **"esperando tu decisión"** (`espero tu confirmación` / `let me know` / `your call` etc.) la pestaña se vuelve azul automáticamente (sobrescribe el amarillo-running / verde-done) — de un vistazo distingues "terminó de verdad" de "espera que le diga algo", sin mirar la pestaña adivinando. Las sesiones favoritas llevan un prefijo **★** en el título + una línea dorada en la parte inferior del icono; las sesiones archivadas llevan un prefijo **●** + una línea gris en la parte inferior del icono (favoritos/archivo son mutuamente excluyentes: cada sesión solo puede estar en uno). Visible a la vez en la barra de pestañas superior y en "Editores abiertos" de la izquierda, totalmente sincronizado en ambos lados.
 
-**② Vista CC Favorites en la barra lateral**　El Explorador añade una vista CC Favorites, donde fijar juntos tus archivos y sesiones de uso frecuente; el icono de sesión open=bocadillo sólido / closed=bocadillo de solo contorno; un clic salta a ella o la reanuda (resume) en un panel nuevo; clic derecho sobre una sesión cerrada copia el comando `claude -r <sid>`.
+**② Vistas CC Favorites / CC Archive en la barra lateral**　El Explorador añade dos vistas, CC Favorites + CC Archive (mutuamente excluyentes: cada sesión está en una como mucho); la vista Favorites fija juntos tus sesiones y archivos de uso frecuente, y la vista Archive recoge las sesiones que no usas por ahora; el icono de sesión open=bocadillo sólido / closed=bocadillo de solo contorno; un clic salta a ella o la reanuda (resume) en un panel nuevo; los botones en línea conmutan entre ambas — vista Favorites [Archivo][Abrir][Quitar], vista Archive [Favorito][Abrir][Quitar], al pulsar Archivo/Favorito la sesión se mueve automáticamente a la otra vista; clic derecho sobre una sesión cerrada copia el comando `claude -r <sid>`.
 
 **③ 4 luces agregadas abajo**　Un único bloque en la barra de estado 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + conteo; el estado global de todas las sesiones de un vistazo, sin cambiar de pestaña; las 4 posiciones son fijas, los cambios en los números no desplazan la fila.
 
-**④ Botón ★ de un clic para marcar favorito**　El botón ★/☆ junto al contador de tokens en la barra de estado, con un clic marca/desmarca la sesión de CC activa como favorita (si ya es favorita muestra la estrella dorada sólida ★; si no, muestra un ☆ hueco); se oculta automáticamente cuando no hay sesión de CC activa.
+**④ Botones ★ favorito / ○ archivo**　Junto al contador de tokens en la barra de estado hay dos botones: ★/☆ marca/desmarca con un clic la sesión de CC activa como favorita (si ya es favorita muestra la estrella dorada sólida ★; si no, muestra un ☆ hueco); ○/● archiva/desarchiva con un clic (si está archivada muestra el círculo gris sólido ●; si no, muestra el aro gris hueco ○). Favoritos y archivo son mutuamente excluyentes — al pulsar uno se desmarca el otro automáticamente; se ocultan cuando no hay sesión de CC activa.
 
 **⑤ Token / coste $ en la esquina inferior derecha**　Uso de tokens de la sesión activa + estimación opcional en USD + velocidad de streaming (tok/s); un clic abre el panel de configuración QuickPick (ventana de estadísticas / modo de muestra / notificación / sonido / copiar / reiniciar); el panel sigue el idioma de la interfaz de VSCode (zh/en/ja/de/es/fr/pt/ru).
 
@@ -109,9 +109,9 @@ El SBI de tokens abajo a la derecha muestra el uso de tokens de la sesión activ
 > { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
 > ```
 
-### 3. Favoritos (corresponde a las funciones ②④)
+### 3. Favoritos / Archivo (corresponde a las funciones ②④)
 
-Vista CC Favorites en la barra lateral + marca ★ en la pestaña + botón ★ en la barra de estado.
+Vistas CC Favorites + CC Archive en la barra lateral (mutuamente excluyentes) + marcas ★/● en la pestaña + botones ★/○ en la barra de estado. El archivo funciona exactamente igual que los favoritos, sin configuración extra.
 
 | Opción | Por defecto | Descripción |
 |---|---|---|

@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.39";
+const INJECT_VERSION = "v0.5.40";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -427,6 +427,17 @@ const OUR_SVGS = [
     "claude-logo-done-fav.svg",
     "claude-logo-error-fav.svg",
     "claude-logo-pending-fav.svg",
+    // v0.5.39 — archived-session variants (grey #808080 underline at viewBox
+    //   bottom; mutex twin of the -fav gold set). Without these in the manifest,
+    //   installRuntimeFiles never copies them, the stale-sweep DELETES any prior
+    //   copy, and favOf()'s -arch.svg path resolves to a non-existent file →
+    //   archived tabs render a broken/blank icon. Same install/sweep/check paths
+    //   handle them automatically once listed (review high finding).
+    "claude-logo-idle-arch.svg",
+    "claude-logo-running-arch.svg",
+    "claude-logo-done-arch.svg",
+    "claude-logo-error-arch.svg",
+    "claude-logo-pending-arch.svg",
 ];
 
 /** Extension directories to search, highest version wins. */
@@ -1961,8 +1972,8 @@ function buildIIFE(resDir: string): string {
         // and avoids a 4th hardcoded path; rename STATE_DIR flows through.
         `var FAVF=pth.join(DIR,"favorites.json");`,
         // v0.5.40 archive.json is an INDEPENDENT file from favorites.json.
-        // Favorites (★) and archive (▼) are MUTUALLY EXCLUSIVE at the tab-prefix
-        // layer: a session is either ★, ▼, or bare — never both. Companion writes
+        // Favorites (★) and archive (●) are MUTUALLY EXCLUSIVE at the tab-prefix
+        // layer: a session is either ★, ●, or bare — never both. Companion writes
         // archive.json via its own atomic tmp+rename (separate from
         // writeFavAtomic); the IIFE only reads. Keyed single-entry cache
         // (__ccsdArchCache) mirrors __ccsdFavCache — two independent files, two
@@ -1979,24 +1990,26 @@ function buildIIFE(resDir: string): string {
         // favorites.json is one global file, not a per-sid sidecar.
         `function readFavSet(){try{var c=globalThis.__ccsdFavCache;if(!c)c=globalThis.__ccsdFavCache=Object.create(null);var mt=0,sz=0;try{var s=fs.statSync(FAVF);mt=s.mtimeMs;sz=s.size;}catch(_){return null;}var e=c.last;if(e&&e.mt===mt&&e.sz===sz&&mt>0)return e.set;if(sz<=0)return null;var j=null;try{j=JSON.parse(fs.readFileSync(FAVF,"utf8"));}catch(_){return null;}var set=Object.create(null);if(j&&Array.isArray(j.sessions)){for(var i=0;i<j.sessions.length;i++){var x=j.sessions[i];if(x&&typeof x.sid==="string")set[x.sid]=1;}}c.last={set:set,mt:mt,sz:sz};return set;}catch(_){return null;}}`,
         // v0.5.40 archive detection: reads the INDEPENDENT archive.json (ARCF),
-        // NOT favorites.json. Favorites (★) and archive (▼) are MUTUALLY
+        // NOT favorites.json. Favorites (★) and archive (●) are MUTUALLY
         // EXCLUSIVE — see ARCF above. Companion writes archive.json via its own
         // atomic tmp+rename (separate from writeFavAtomic), so (mt,sz) is an
         // independent content-change signal. Returns ALL sids in archive.json
         // (the file only contains archived sessions, so no archived===true filter
-        // is needed) to drive the ▼ (BLACK DOWN-POINTING TRIANGLE, ▼) tab prefix.
+        // is needed) to drive the ● (BLACK CIRCLE, U+25CF) tab prefix.
         // mtime+size cache via __ccsdArchCache mirrors __ccsdFavCache; worst-case
         // tick lag = TICK_MS=500ms which is imperceptible. Archive does NOT affect
-        // favOf (the ▼ prefix is the only archive visual; the gold underline stays
-        // for any favorited session). The tab-prefix ternary enforces mutual
-        // exclusion: __isFav?★:__isArch?▼:bare — a session is never both.
+        // favOf (the ● prefix is the only archive title visual; the gold underline
+        // stays for any favorited session). The tab-prefix ternary enforces mutual
+        // exclusion: __isFav?★:__isArch?●:bare — a session is never both. NOTE:
+        // the ● prefix MUST also be stripped by companion/extension.ts
+        // activeCcSidOrLoading label fallback (it strips ^[★●]\s) — keep in sync.
         `function readArchivedSet(){try{var c=globalThis.__ccsdArchCache;if(!c)c=globalThis.__ccsdArchCache=Object.create(null);var mt=0,sz=0;try{var s=fs.statSync(ARCF);mt=s.mtimeMs;sz=s.size;}catch(_){return null;}var e=c.last;if(e&&e.mt===mt&&e.sz===sz&&mt>0)return e.set;if(sz<=0)return null;var j=null;try{j=JSON.parse(fs.readFileSync(ARCF,"utf8"));}catch(_){return null;}var set=Object.create(null);if(j&&Array.isArray(j.sessions)){for(var i=0;i<j.sessions.length;i++){var x=j.sessions[i];if(x&&typeof x.sid==="string")set[x.sid]=1;}}c.last={set:set,mt:mt,sz:sz};return set;}catch(_){return null;}}`,
         // v0.5.0: remap a base-state svg path to its -fav variant if the
         // panel's sid is favorited. CC_DEFAULT (interrupted off-frame, no
         // state leaf) and unknown leaves pass through unchanged so the flash
         // sequence still alternates correctly. Uses the same ccuri memoization
         // downstream — new -fav path strings cache independently.
-        `function favOf(svgPath,sid){try{if(!svgPath||svgPath===CC_DEFAULT||!sid)return svgPath;var fset=readFavSet();var aset=readArchivedSet();var leaf=svgPath.split(pth.sep).pop();if(/^claude-logo-(idle|running|done|error|pending)\\.svg$/.test(leaf)){/*MUTEX: archived → grey -arch.svg; favorited → gold -fav.svg; neither → unchanged. Archived checked first (defense: if both somehow set, archive wins).*/if(aset&&aset[sid])return pth.join(RES,leaf.replace(/\\.svg$/,"-arch.svg"));if(fset&&fset[sid])return pth.join(RES,leaf.replace(/\\.svg$/,"-fav.svg"));}}catch(_){}return svgPath;}`,
+        `function favOf(svgPath,sid){try{if(!svgPath||svgPath===CC_DEFAULT||!sid)return svgPath;var fset=readFavSet();var aset=readArchivedSet();var leaf=svgPath.split(pth.sep).pop();if(/^claude-logo-(idle|running|done|error|pending)\\.svg$/.test(leaf)){/*MUTEX: favorited → gold -fav.svg; archived → grey -arch.svg; neither → unchanged. FAVORITED checked first (unified precedence: if a crash-mid-move / hand-edit leaves the sid in BOTH files, favorited wins — matches the tab-title prefix ternary and refreshFavStatusBar, so the icon never contradicts the ★ title / gold status-bar highlight).*/if(fset&&fset[sid])return pth.join(RES,leaf.replace(/\\.svg$/,"-fav.svg"));if(aset&&aset[sid])return pth.join(RES,leaf.replace(/\\.svg$/,"-arch.svg"));}}catch(_){}return svgPath;}`,
         `var DONE_TO_IDLE_MS=${DONE_TO_IDLE_MS};`,
         `/*§7.2 stale-running heuristic: v0.2.6 keys off 'since' (the *→running transition time), not mtime. Stop preserveSince path (cc-status.js:390-401) keeps cur.since on inflight>0 Stop heartbeats while writeJsonAtomic refreshes mtime — mtime stays fresh forever under CC's repeated Stop fire on drifted inflight payloads, so mtime-decay never fires. since-decay fires correctly because since is preserved (not refreshed) across the same path. Mirrors done>5min / interrupted>24h decay which already key off since.*/`,
         `var SBI_RUNNING_STALE_MS=${SBI_RUNNING_STALE_MS};`,
@@ -2490,12 +2503,16 @@ function buildIIFE(resDir: string): string {
         // own title until then). The `panelTab.title !== __want` gate avoids a
         // redundant write on every tick when the fav state is unchanged (VSCode
         // would otherwise re-render the tab label 2×/sec for no visible change).
-        // v0.5.40: ★ and ▼ are MUTUALLY EXCLUSIVE — a ternary, not prefix
-        // accumulation. __isFav?★:__isArch?▼:bare. The two sets are disjoint by
-        // companion-side contract; the ternary defends the prefix even if both
-        // files ever held the same sid (fav wins, matching user intent: a
-        // favorited session is never silently demoted to ▼).
-        `try{var __fset=readFavSet();var __aset=readArchivedSet();var __isFav=!(!__fset||!__fset[sid]);var __isArch=!(!__aset||!__aset[sid]);var __base=t.__ccsdTitle||"";if(__base){var __want=__isFav?("\\u2605 "+__base):(__isArch?("\\u25C6 "+__base):__base);if(t.panelTab.title!==__want)t.panelTab.title=__want;}}catch(_){}`,
+        // v0.5.42.2: ★ and ● are MUTUALLY EXCLUSIVE — a ternary, not prefix
+        // accumulation. __isFav?★:__isArch?●:bare. The archive marker is ●
+        // (BLACK CIRCLE, U+25CF) in the title — chosen to match the status-bar
+        // archive button ($(circle-filled) codicon): circle is the only full-
+        // size codicon shape (besides ★) with both hollow+filled variants, so
+        // the tab ● (filled circle, archived) is the SAME SHAPE as the status-
+        // bar archived circle. Mirrors how ★ marks favorites. The tab ICON
+        // (favOf) mirrors favorites: Claude logo + grey underline (-arch.svg)
+        // vs logo + gold underline (-fav.svg). Favorited wins the tiebreak.
+        `try{var __fset=readFavSet();var __aset=readArchivedSet();var __isFav=!(!__fset||!__fset[sid]);var __isArch=!(!__aset||!__aset[sid]);var __base=t.__ccsdTitle||"";if(__base){var __want=__isFav?("\\u2605 "+__base):(__isArch?("\\u25CF "+__base):__base);if(t.panelTab.title!==__want)t.panelTab.title=__want;}}catch(_){}`,
         `var st=null,since=null,err="",pend=false;`,
         /* rejected-by-design (R-CI-06): §H reads sid.json DIRECTLY (NOT via §F's
          * __ccsdAgCache). Intentional: §H = per-tab active display (latency-

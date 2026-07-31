@@ -1,6 +1,6 @@
 {
   "name": "vscode-claude-code-status-dot",
-  "version": "0.5.39",
+  "version": "0.5.40",
   "description": "5-state status dots on every Claude Code tab (idle/running/done/pending/interrupted) + bottom 4-light aggregate + per-session token usage & $ cost + favorites sidebar (★) + completion/interruption notifications — minimal, reversible VSCode patch with auto-repatch after CC updates. QuickPick config panel follows VSCode UI language (zh/en/ja/de/es/fr/pt/ru).",
   "type": "module",
   "license": "MIT",

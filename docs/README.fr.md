@@ -29,13 +29,13 @@
 
 </div>
 
-**① Point d'état à cinq états sur l'onglet**　L'icône Claude de chaque onglet de session CC change de couleur selon l'état — 🟡 en cours / 🟢 terminé / 🔴 clignotement rapide si interrompu / ⚪ inactif / 🔵 en attente de saisie. 🔵 en attente a deux types de déclencheurs : (a) CC affiche une boîte d'autorisation → cède la place au point bleu natif de CC (**sans le recouvrir**) ; (b) la réponse de CC contient une sémantique « attends ta décision / let me know / your call » → l'onglet passe automatiquement en bleu (**par-dessus running-jaune / done-vert**) — d'un coup d'œil, distinguez « vraiment terminé » de « attend que je dise quelque chose », sans scruter l'onglet pour deviner. Les onglets des sessions favorites portent un préfixe **★** dans le titre + une ligne dorée en bas de l'icône. Affiché à la fois dans la barre d'onglets supérieure et dans la vue « Open Editors », parfaitement synchronisé des deux côtés.
+**① Point d'état à cinq états sur l'onglet**　L'icône Claude de chaque onglet de session CC change de couleur selon l'état — 🟡 en cours / 🟢 terminé / 🔴 clignotement rapide si interrompu / ⚪ inactif / 🔵 en attente de saisie. 🔵 en attente a deux types de déclencheurs : (a) CC affiche une boîte d'autorisation → cède la place au point bleu natif de CC (**sans le recouvrir**) ; (b) la réponse de CC contient une sémantique « attends ta décision / let me know / your call » → l'onglet passe automatiquement en bleu (**par-dessus running-jaune / done-vert**) — d'un coup d'œil, distinguez « vraiment terminé » de « attend que je dise quelque chose », sans scruter l'onglet pour deviner. Les onglets des sessions favorites portent un préfixe **★** dans le titre + une ligne dorée en bas de l'icône ; les onglets des sessions archivées portent un préfixe **●** + une ligne grise en bas de l'icône (favoris / archivage mutuellement exclusifs — une même session ne peut figurer que dans l'un). Affiché à la fois dans la barre d'onglets supérieure et dans la vue « Open Editors », parfaitement synchronisé des deux côtés.
 
-**② Vue CC Favorites dans la barre latérale**　Une vue CC Favorites s'ajoute à l'Explorer pour épingler fichiers et sessions fréquents au même endroit ; l'icône de session open = bulle pleine / closed = bulle en contour, un clic y saute ou lance un resume vers un nouveau panel ; clic droit sur une session fermée permet de copier la commande `claude -r <sid>`.
+**② Vues CC Favorites / CC Archive dans la barre latérale**　Deux vues s'ajoutent à l'Explorer : CC Favorites + CC Archive (mutuellement exclusives : une session ne figure que dans une seule) ; la vue Favoris épingle les sessions/fichiers fréquents au même endroit, la vue Archive rassemble les sessions temporairement inutilisées. L'icône de session open = bulle pleine / closed = bulle en contour, un clic y saute ou lance un resume vers un nouveau panel ; boutons en ligne pour basculer entre les deux — vue Favoris [Archiver][Ouvrir][Retirer], vue Archive [Favori][Ouvrir][Retirer], cliquer sur Archiver/Favori la déplace automatiquement dans l'autre vue. Clic droit sur une session fermée permet de copier la commande `claude -r <sid>`.
 
 **③ Agrégat à 4 boules en bas**　Un bloc compact unique dans la barre d'état 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + compteurs, l'état global de toutes les sessions en un coup d'œil, sans changer d'onglet ; les 4 positions sont fixes, les chiffres qui changent ne décalent jamais la ligne.
 
-**④ ★ Bouton favori en un clic**　Le bouton ★/☆ à côté des tokens dans la barre d'état, favorise / défavorise la session CC active en un clic (déjà favorite → ★ dorée pleine, sinon → ☆ vide) ; masqué automatiquement quand aucune session CC n'est active.
+**④ ★ Boutons favori / archivage**　Deux boutons à côté des tokens dans la barre d'état : ★/☆ favorise / défavorise la session CC active en un clic (déjà favorite → ★ dorée pleine, sinon → ☆ vide) ; ○/● archive / désarchive en un clic (déjà archivée → ● gris plein, sinon → ○ anneau gris vide). Favoris et archivage mutuellement exclusifs — cliquer sur l'un désactive automatiquement l'autre ; masqués automatiquement quand aucune session CC n'est active.
 
 **⑤ Tokens / coût $ en bas à droite**　Usage de tokens de la session active + estimation optionnelle en USD + débit de streaming (tok/s) ; au clic, ouvre un panneau de configuration QuickPick (fenêtre de statistiques / mode d'affichage / notifications / son / copier / réinitialiser), le panneau suit la langue de l'interface VSCode (zh/en/ja/de/es/fr/pt/ru).
 
@@ -109,9 +109,9 @@ Le SBI de tokens en bas à droite affiche l'usage de tokens de la session active
 > { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
 > ```
 
-### 3. Favoris (fonctionnalité ②④)
+### 3. Favoris / Archive (fonctionnalité ②④)
 
-Vue CC Favorites dans la barre latérale + préfixe ★ sur l'onglet + bouton ★ dans la barre d'état.
+Vues CC Favorites + CC Archive dans la barre latérale (mutuellement exclusives) + marqueurs ★/● sur l'onglet + boutons ★/○ dans la barre d'état. L'Archive reproduit à l'identique les Favoris, aucune configuration supplémentaire nécessaire.
 
 | Clé | Défaut | Description |
 |---|---|---|

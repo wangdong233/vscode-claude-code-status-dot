@@ -29,13 +29,13 @@
 
 </div>
 
-**① Ponto de 5 estados na aba**　O ícone Claude de cada aba de sessão do CC muda de cor conforme o estado — 🟡 em execução / 🟢 concluído / 🔴 interrompido (pisca rápido) / ⚪ ocioso / 🔵 aguardando entrada. 🔵 aguardando entrada tem dois gatilhos: (a) o CC abre a caixa de autorização de permissão e cede o lugar ao ponto azul nativo do CC (sem sobrescrever); (b) a resposta do CC contém semântica de "aguardando sua decisão" — `te aguardo` / `você decide` / `let me know` / `your call` etc. — e a aba fica azul automaticamente (sobrescreve o amarelo-running / verde-done) — distinguindo num relance "realmente terminou" vs. "esperando eu dizer algo", sem precisar ficar adivinhando pela aba. A aba de sessão favoritada ganha prefixo **★** no título + linha dourada na parte inferior do ícone. Visível tanto na barra de abas do topo quanto na vista "Open Editors" do canto superior esquerdo, totalmente sincronizadas.
+**① Ponto de 5 estados na aba**　O ícone Claude de cada aba de sessão do CC muda de cor conforme o estado — 🟡 em execução / 🟢 concluído / 🔴 interrompido (pisca rápido) / ⚪ ocioso / 🔵 aguardando entrada. 🔵 aguardando entrada tem dois gatilhos: (a) o CC abre a caixa de autorização de permissão e cede o lugar ao ponto azul nativo do CC (sem sobrescrever); (b) a resposta do CC contém semântica de "aguardando sua decisão" — `te aguardo` / `você decide` / `let me know` / `your call` etc. — e a aba fica azul automaticamente (sobrescreve o amarelo-running / verde-done) — distinguindo num relance "realmente terminou" vs. "esperando eu dizer algo", sem precisar ficar adivinhando pela aba. A aba de sessão favoritada ganha prefixo **★** no título + linha dourada na parte inferior do ícone; a aba de sessão arquivada ganha prefixo **●** no título + linha cinza na parte inferior do ícone (favoritar e arquivar são mutuamente exclusivos — a mesma sessão só pode estar em um). Visível tanto na barra de abas do topo quanto na vista "Open Editors" do canto superior esquerdo, totalmente sincronizadas.
 
-**② Vista CC Favorites na barra lateral**　O Explorer ganha a nova vista CC Favorites, fixando arquivos/sessões usados com frequência num só lugar; o ícone da sessão mostra open=balão de chat sólido / closed=balão só com contorno; clique salta para a sessão ou faz resume abrindo num novo painel; clique direito numa sessão fechada permite copiar o comando `claude -r <sid>`.
+**② Vista CC Favorites / CC Archive na barra lateral**　O Explorer ganha duas novas vistas CC Favorites + CC Archive (mutuamente exclusivas: uma sessão só pode estar em uma); a vista de favoritos fixa arquivos/sessões usados com frequência num só lugar, a vista de arquivo guarda as sessões que você não está usando no momento. O ícone da sessão mostra open=balão de chat sólido / closed=balão só com contorno; clique salta para a sessão ou faz resume abrindo num novo painel; botões inline alternam entre as vistas — vista de favoritos [Arquivar][Abrir][Remover], vista de arquivo [Favoritar][Abrir][Remover], clicar em Arquivar/Favoritar remove automaticamente da outra vista. Clique direito numa sessão fechada permite copiar o comando `claude -r <sid>`.
 
 **③ Bloco agregado de 4 luzes na barra inferior**　Um bloco único na barra de status 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + contagem — o estado global de todas as sessões num relance, sem precisar alternar abas; as posições das 4 luzes são fixas, os números mudam sem deslocar a linha.
 
-**④ Botão ★ para favoritar num clique**　O botão ★/☆ ao lado dos tokens na barra de status, favorita/desfavorita a sessão do CC ativa num único clique (já favoritada mostra ★ dourada sólida, não favoritada mostra ☆ vazada); oculta-se automaticamente quando não há sessão do CC ativa.
+**④ Botão ★ favoritar / ○ arquivar**　Dois botões ao lado dos tokens na barra de status: ★/☆ favorita/desfavorita a sessão do CC ativa num único clique (já favoritada mostra ★ dourada sólida, não favoritada mostra ☆ vazada); ○/● arquiva/desarquiva num único clique (já arquivada mostra ● cinza sólida, não arquivada mostra ○ cinza vazada). Favoritar e arquivar são mutuamente exclusivos — clicar em um cancela automaticamente o outro; ocultam-se automaticamente quando não há sessão do CC ativa.
 
 **⑤ Tokens / $ custo no canto inferior direito**　Uso de tokens da sessão ativa + estimativa USD opcional + taxa de streaming (tok/s); clique abre o painel de configuração QuickPick (janela de estatística / modo de exibição / notificação / som / copiar / resetar); o painel segue o idioma da interface do VSCode (zh/en/ja/de/es/fr/pt/ru).
 
@@ -109,9 +109,9 @@ O SBI de tokens no canto inferior direito mostra o uso de tokens da sessão ativ
 > { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
 > ```
 
-### 3. Favoritos (corresponde aos recursos ②④)
+### 3. Favoritos / Arquivo (corresponde aos recursos ②④)
 
-Vista CC Favorites na barra lateral + marca ★ na aba + botão ★ na barra de status.
+Vistas CC Favorites + CC Archive na barra lateral (mutuamente exclusivas) + marcadores ★/● na aba + botões ★/○ na barra de status. O arquivo espelha os favoritos, sem necessidade de configuração extra.
 
 | Opção | Padrão | Descrição |
 |---|---|---|

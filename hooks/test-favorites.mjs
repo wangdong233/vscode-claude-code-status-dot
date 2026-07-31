@@ -694,11 +694,11 @@ check(
 );
 
 check(
-  'FAV.34 v0.5.3 favToggleTab resolves right-clicked tab via __ccsdSidToTitle + activeTabGroup.activeTab.label (F1)',
+  'FAV.34 v0.5.42 toggle resolves the active sid via the UNIFIED resolver (activeCcSidOrLoading — exact-title match against __ccsdSidToTitle)',
   /__ccsdSidToTitle/.test(companionSrc) &&
-    /activeTabGroup\?\.activeTab/.test(companionSrc) &&
-    /Object\.keys\(map\)\.find\(\(k\)\s*=>\s*map\[k\]\s*===\s*activeLabel\)/.test(companionSrc),
-  'must attempt exact-title match against the IIFE bridge before falling back to __ccsdActiveSid',
+    /Object\.keys\(titleMap\)\.find\(\(k\)\s*=>\s*candidates\.includes\(titleMap\[k\]/.test(companionSrc) &&
+    /function resolveActiveSid[\s\S]{0,400}?activeCcSidOrLoading/.test(companionSrc),
+  'v0.5.42: resolveActiveSid delegates to activeCcSidOrLoading (panelMap.active-first, then label-fallback matching __ccsdSidToTitle trying BOTH the raw label and the marker-stripped label — handles fav/arch tabs (stripped) and plain tabs whose title starts with a marker char). Fixes new-session click-mismatch; same-title disambiguation preserved; __ccsdLastActiveSid dropped.',
 );
 
 check(
@@ -981,9 +981,9 @@ check(
   'solid star (favorited) vs outline star (not favorited) — the visual signal',
 );
 check(
-  'FAV.40e v0.5.10 favorited star uses gold #F5A623 (aligned with -fav SVG underline)',
-  /#F5A623/.test(companionSrc),
-  'the filled star tint must match the existing gold-line favorite marker for visual consistency',
+  'FAV.40e v0.5.41 favorited ★ button uses gold #F5A623 text tint (original style restored, NOT a background highlight)',
+  /#F5A623/.test(companionSrc) && !/statusBarItem\.warningBackground/.test(companionSrc),
+  'v0.5.41: the active (favorited) button is a filled $(star-full) tinted gold #F5A623 via TEXT COLOR — the original favorites style. The v0.5.40 warningBackground-block version was rejected as "breaking the original style"; no backgroundColor is used. Inactive state is $(star-empty) outline.',
 );
 check(
   'FAV.40f v0.5.15 refreshFavStatusBar resolves the ACTIVE sid via activeCcSidOrLoading (strict, no lastActive fallback)',
@@ -1009,6 +1009,26 @@ check(
   'FAV.40j v0.5.10 status bar hidden when no active CC session',
   /refreshFavStatusBar[\s\S]{0,2000}?\.hide\(\)/.test(companionSrc),
   'no stray clickable star when there is no session to act on (toggleTab would just toast anyway)',
+);
+check(
+  'FAV.40k v0.5.40 TWO status-bar buttons — archStatusBar created alongside favStatusBar',
+  /let archStatusBar:\s*vscode\.StatusBarItem \| null = null/.test(companionSrc) &&
+    /archStatusBar\s*=\s*vscode\.window\.createStatusBarItem\(/.test(companionSrc),
+  'v0.5.40 redesign: 收藏 (★) and 归档 (◆) are TWO independent always-visible buttons — fixes the v0.5.39 single-mutex-button bug where clicking the archived glyph hid the slot (looked dead)',
+);
+check(
+  'FAV.40l v0.5.42.4 archive button = circle-LARGE pair, BOTH grey #808080 (idle color); shape carries state',
+  /archStatusBar\.text = archived \? "\$\(circle-large-filled\)" : "\$\(circle-large\)"/.test(companionSrc) &&
+    /archStatusBar\.color = "#808080";/.test(companionSrc) &&
+    !/archStatusBar\.color = archived/.test(companionSrc) &&
+    !/statusBarItem\.prominentBackground/.test(companionSrc),
+  'v0.5.42.4: both states grey #808080 (the idle 4-light "not lit" color — archive is subdued, not a loud color); the SHAPE carries the state — $(circle-large-filled) archived (实心灰圆) / $(circle-large) not-archived (灰边空心环). circle-large is full-size (matches ★); the plain $(circle) is the small dot variant. No backgroundColor. Tab title ● (U+25CF).',
+);
+check(
+  'FAV.40m v0.5.40 both buttons always shown when a CC session is active (neither → both outline/plain, NOT hidden)',
+  /archStatusBar\.command = "ccStatusDot\.fav\.toggleArchive"/.test(companionSrc) &&
+    /favStatusBar\.command = "ccStatusDot\.fav\.toggleTab"/.test(companionSrc),
+  'a session with NEITHER mark still shows both buttons (plain) so the user can click EITHER — the old design hid the slot, making the toggle unreachable',
 );
 
 // ===========================================================================
@@ -1108,7 +1128,7 @@ check(
 );
 check(
   'FAV.44b v0.5.15 refreshFavStatusBar shows spinner ($(loading~spin)) when active CC tab is loading',
-  /ui\.loading[\s\S]{0,500}?\$\(loading~spin\)/.test(companionSrc),
+  /ui\.loading[\s\S]{0,900}?\$\(loading~spin\)/.test(companionSrc),
   'a loading CC tab (sid not yet registered) shows a spinner, NOT the stale previous-session star — fixes the "star shows A while B loads" inconsistency',
 );
 check(
@@ -1118,7 +1138,7 @@ check(
 );
 check(
   'FAV.45a v0.5.16 activeCcSidOrLoading prefers __ccsdActiveSid to disambiguate same-title sessions',
-  /function\s+activeCcSidOrLoading[\s\S]{0,2500}?g\.__ccsdActiveSid/.test(companionSrc),
+  /function\s+activeCcSidOrLoading[\s\S]{0,3500}?g\.__ccsdActiveSid/.test(companionSrc),
   'same-title sessions (same cwd): the authoritative __ccsdActiveSid is checked before Object.keys().find() — otherwise display sid (this path) splits from write sid (resolveActiveSid), un-starring the wrong one',
 );
 check(
@@ -1137,6 +1157,32 @@ check(
   /ui\.loading[\s\S]{0,1500}?favStatusBar\.command = undefined/.test(companionSrc) &&
     /favStatusBar\.command = "ccStatusDot\.fav\.toggleTab"/.test(companionSrc),
   'loading 是 500ms tick 快照,用户点击时 loading 可能已过→toggleTab 误 toggle 新解析 sid(常是上个会话 B,取消其收藏);command=undefined 让 spinner 纯显示不可点击,根治误操作',
+);
+check(
+  'FAV.48 v0.5.42 readFavDoc + readArchiveDoc use an mtime+size cache (stat-first; skip read+parse when unchanged)',
+  /let favDocCache:\s*\{ doc: FavDoc; mt: number; sz: number \}/.test(companionSrc) &&
+    /let archiveDocCache:\s*\{ doc: FavDoc; mt: number; sz: number \}/.test(companionSrc) &&
+    /favDocCache\.mt === mt && favDocCache\.sz === sz/.test(companionSrc) &&
+    /archiveDocCache\.mt === mt && archiveDocCache\.sz === sz/.test(companionSrc),
+  'v0.5.42 perf fix: the 500ms status-bar poll re-read favorites.json/archive.json sync every tick even when unchanged. stat-first mtime+size cache (mirrors the IIFE readFavSet/__ccsdFavCache pattern) skips readFileSync+JSON.parse when the file is unchanged. Invalidation is automatic — writeFavAtomic/writeArchiveAtomic do tmp+rename which flips mtime+size, so the next stat misses and re-reads. Cache-on-success-only (corrupt/future-version branches return emptyFavDoc uncached).',
+);
+check(
+  'FAV.49 v0.5.43 fav/arch status-bar items use a NEGATIVE priority band (cluster w/ token SBI -9995, OUTSIDE VSCode editor-status)',
+  /const FAV_BAR_PRIORITY = -9993;/.test(companionSrc) &&
+    /const ARCH_BAR_PRIORITY = -9994;/.test(companionSrc) &&
+    /createStatusBarItem\(vscode\.StatusBarAlignment\.Right, FAV_BAR_PRIORITY\)/.test(companionSrc) &&
+    /createStatusBarItem\(vscode\.StatusBarAlignment\.Right, ARCH_BAR_PRIORITY\)/.test(companionSrc) &&
+    !/createStatusBarItem\(vscode\.StatusBarAlignment\.Right, 100\)/.test(companionSrc) &&
+    !/createStatusBarItem\(vscode\.StatusBarAlignment\.Right, 99\)/.test(companionSrc),
+  "v0.5.43: v0.5.42 had fav=100/arch=99 (positive) — VSCode's Ln/Col editor-status lives at fractional priority in (99,100) and interleaved BETWEEN them. Moved to negative private band -9993/-9994 (clustered w/ patch.ts TOK_SBI_PRIORITY=-9995): right-side order [Ln/Col positive]…[★ -9993][○ -9994][token -9995] — Ln/Col firmly LEFT of ★, ★/○ adjacent (no gap). Named constants (not magic 100/99) document the band contract.",
+);
+check(
+  'FAV.50 v0.5.43.1 label-fallback strips BOTH ★ AND ● AND tries the raw label too (archived tabs + plain tabs whose title starts with a marker both resolve)',
+  companionSrc.includes('replace(/^[★●]\\s/') &&
+    !companionSrc.includes('replace(/^★\\s/') &&
+    /candidates\.includes\(titleMap\[/.test(companionSrc) &&
+    /strippedLabel\s*!==\s*rawLabel\s*\?\s*\[strippedLabel,\s*rawLabel\]/.test(companionSrc),
+  'v0.5.43.1: strips ^[★●]\\s (both IIFE prefix markers) for fav/arch tabs, AND tries the RAW label so a PLAIN tab whose own title legitimately starts with "★ "/"● " still matches titleMap (03-review finding: a naive strip-only would eat the user real leading marker → loading → icons hide). candidates = [stripped, raw] when they differ, [raw] otherwise. Keep in sync with patch.ts tab-prefix ternary.',
 );
 
 // cleanup

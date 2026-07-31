@@ -585,6 +585,39 @@ if (patchTokens !== null && hookTokens !== null) {
   }
 }
 
+// --- v0.5.43: tab-title prefix emit set (IIFE) === label-strip char class (companion) ---
+// 03 §1.7.7 cross-boundary sync pair, MECHANIZED as a CI gate. The IIFE
+// (patch.ts tab-prefix ternary "__want=__isFav?...") paints "★"+title (fav) /
+// "●"+title (archived) on the tab; the companion (activeCcSidOrLoading label
+// fallback) strips ^[★●]\s to match the BARE title in titleMap. If the two char
+// sets drift (a marker added/changed in the IIFE but not the strip — the v0.5.42
+// ◆→● bug that hid icons on tab-close when the label fallback fired), this fails
+// CI. Add new prefix markers to BOTH the patch.ts ternary AND the companion strip.
+{
+  const cs = read('companion/extension.ts');
+  // EMIT (producer): the \\uXXXX escapes baked into the IIFE prefix ternary.
+  // patch.ts source carries two literal backslashes per escape (\\uXXXX inside
+  // the template literal), so \\\\ in the regex matches the two backslashes.
+  const tStart = patchSrc.indexOf('__want=__isFav?');
+  const ternary = tStart >= 0 ? patchSrc.slice(tStart, tStart + 300) : '';
+  const emitCodes = [...ternary.matchAll(/\\\\u([0-9A-Fa-f]{4})/g)].map((m) => m[1].toUpperCase()).sort();
+  // CONSUMER (strip char class): the [...] in companion's /^[...]\s/.
+  const sm = cs.match(/\.replace\(\/\^\[([^\]]+)\]\\s\//);
+  const stripClass = sm ? sm[1] : '';
+  const stripCodes = [...stripClass].map((ch) => ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')).sort();
+  const emitSet = [...new Set(emitCodes)].join(',');
+  const stripSet = [...new Set(stripCodes)].join(',');
+  check(
+    'v0.5.43 IIFE tab-prefix emit set === companion label-strip char class (03 §1.7.7 mechanized)',
+    emitSet.length > 0 && emitSet === stripSet,
+    'emit={' +
+      emitSet +
+      '} strip={' +
+      stripSet +
+      '}; drift hides icons on tab-close. Add new prefix markers to BOTH patch.ts ternary AND companion strip.',
+  );
+}
+
 console.log('');
 if (fail === 0) {
   console.log(`All ${pass} contract-sync checks passed.`);

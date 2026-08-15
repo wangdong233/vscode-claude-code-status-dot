@@ -1185,6 +1185,66 @@ check(
   'v0.5.43.1: strips ^[★●]\\s (both IIFE prefix markers) for fav/arch tabs, AND tries the RAW label so a PLAIN tab whose own title legitimately starts with "★ "/"● " still matches titleMap (03-review finding: a naive strip-only would eat the user real leading marker → loading → icons hide). candidates = [stripped, raw] when they differ, [raw] otherwise. Keep in sync with patch.ts tab-prefix ternary.',
 );
 
+// --- v0.5.45: COMP.* — crash-recovery reload-resilience (RC2/RC3) ---
+// (COMP.5 asserts patch.ts source — the no-op flag-write gate lives there.)
+const patchSrc = fs.readFileSync(path.join(ROOT, 'patch.ts'), 'utf8');
+// 2026-08-15 incident: VSCode window crashed → reload at 08:33:51.65 loaded
+// UNPATCHED CC 2.1.232 into EH memory; the companion's re-patch landed 2s
+// later (08:33:53.7); the reload toast auto-dismissed amid crash-restore
+// chaos → choice===undefined → OLD code scheduled NO retry (else-if "Later"
+// only) → window ran unpatched CC forever. Then CC installed 2.1.233 at
+// 08:39 mid-session with NOTHING watching for it. These assertions pin the
+// three fixes.
+check(
+  'COMP.1 v0.5.45 RC2 both post-patch prompt branches schedule the retry on ANY non-Reload resolution (undefined toast-timeout included)',
+  !/else if \(choice === "Later"\)\s*\{/.test(companionSrc) &&
+    (
+      companionSrc.match(
+        /\}\s*else\s*\{[\s\S]{0,600}?scheduleLaterRetry\(extDir\);[\s\S]{0,80}?updateReloadBar\(\);/g,
+      ) || []
+    ).length === 2,
+  'the OLD `else if (choice === "Later")` left undefined (toast auto-dismissed / Esc) with ZERO follow-up — the exact 08:33 stranding path. Both branches (warning + info) must fall through to scheduleLaterRetry + updateReloadBar on any non-Reload choice.',
+);
+check(
+  'COMP.2 v0.5.45.1 RC2 persistent reload-needed status bar exists (unmissable, click=reload, flavor-scoped + own-patch fallback)',
+  /function updateReloadBar\(\)/.test(companionSrc) &&
+    companionSrc.includes('reloadBar.command = "workbench.action.reloadWindow"') &&
+    companionSrc.includes('createStatusBarItem(vscode.StatusBarAlignment.Left') &&
+    /flag\.ts > EH_SINCE && !!target && flag\.extDir === target/.test(companionSrc) &&
+    /let signaled = ownPatchArmed;/.test(companionSrc) &&
+    /getExtension\("anthropic\.claude-code"\)/.test(companionSrc) &&
+    /__ccsdSbi === undefined/.test(companionSrc) &&
+    /const EH_SINCE = Date\.now\(\);/.test(companionSrc),
+  'a transient toast auto-dismisses; the bar stays until cleared. Conditions: (0a) ownPatchArmed (in-memory fallback when patch.js flag-write failed) OR (0b) flag.ts > EH_SINCE AND flag.extDir === detectTargetDir() (flavor scoping — mirrors the cross-window toast guard; a no-op npx re-run no longer bumps the flag either, see COMP.5); (1) CC extension isActive; (2) __ccsdSbi undefined (IIFE probe — self-hides after reload).',
+);
+check(
+  'COMP.3 v0.5.45.1 RC3 the 30s watcher tick re-runs detectAndPatch on a NOT-fresh DISK-highest target with inFlight + ranDirs guards ordered cheap-first',
+  /const curDir = detectTargetDir\(\);/.test(companionSrc) &&
+    /!\(ran && ran\.has\(curDir\)\) && ccPatchState\(curDir\) !== "fresh"/.test(companionSrc) &&
+    /if \(detectInFlight\) return;\s*detectInFlight = true;/.test(companionSrc) &&
+    /finally \{\s*detectInFlight = false;\s*\}/.test(companionSrc),
+  'v0.5.45 used discoverCcInThisFlavor() whose vscode.extensions.all primary path cannot see a mid-session CC install (the EH keeps the old entry until reload) — the 08:39 incident window was NOT detected. v0.5.45.1 targets detectTargetDir() (disk-highest in this flavor, parent-dir scan keeps v0.2.3 flavor scoping). ranDirs is checked BEFORE ccPatchState so a permanently-failed patch does not re-read the 2.78MB extension.js every 30s.',
+);
+check(
+  'COMP.4 v0.5.45 RC2 deactivate disposes the reload bar',
+  /if \(reloadBar\) \{\s*reloadBar\.dispose\(\);\s*reloadBar = null;\s*\}/.test(companionSrc),
+  'EH shutdown hygiene — the lazy StatusBarItem must not leak across reloads.',
+);
+check(
+  'COMP.5 v0.5.45.1 patch.js writes the repatch flag ONLY on a real disk write (mtime gate)',
+  /const mtimeBefore = fs\.existsSync\(extJsForMtime\) \? fs\.statSync\(extJsForMtime\)\.mtimeMs : 0;/.test(patchSrc) &&
+    /if \(mtimeAfter === mtimeBefore\) \{\s*log\("no disk change — skipping repatch flag write \(fresh no-op run\)"\);/.test(
+      patchSrc,
+    ),
+  'review finding #2 leg 2: a fresh no-op `npx` re-run ("already patched — skipping injection", zero disk writes) used to bump last-repatch.json anyway, arming the reload bar + cross-window toast in every healthy window whose CC was active but had not fired a session yet. The mtime gate (tmp+rename writes always advance mtime) suppresses the flag on no-op runs; ccPatchState fast path is unaffected (extension.js unmodified → old flag still satisfies it).',
+);
+check(
+  'COMP.6 v0.5.45.1 detectTargetDir: disk-highest CC in THIS flavor (parent-dir scan), used by both the tick and detectAndPatchInner',
+  /function detectTargetDir\(\): string \| null \{/.test(companionSrc) &&
+    /const extDir = detectTargetDir\(\);\n    if \(!extDir\) \{/.test(companionSrc),
+  'the EH-known dir (discoverCcInThisFlavor) stays as the flavor anchor: detectTargetDir scans its PARENT for the highest anthropic.claude-code-X.Y.Z — sees mid-session installs the EH cannot, without regressing v0.2.3 flavor scoping (the raw searchDirs() fallback spans all flavors). detectAndPatchInner targets the same dir so runPatcher (which patches disk-highest) and the guards agree.',
+);
+
 // cleanup
 try {
   fs.rmSync(tmpDir, { recursive: true, force: true });

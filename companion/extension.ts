@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.40";
+const MIN_PATCHER_VERSION = "0.5.45";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.40";
+    return effectiveConfig?.injectVersion ?? "v0.5.45";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -201,6 +201,33 @@ let repatchTimer: NodeJS.Timeout | null = null;
 /** Handle to the one-shot "Later" re-prompt timer (10 min after the user
  *  dismisses the post-patch reload prompt). Cleared on deactivate. */
 let laterRetryTimer: NodeJS.Timeout | null = null;
+
+/** v0.5.45 RC2/RC3: companion module-load timestamp. The reload-needed bar
+ *  only arms for patches that landed AFTER this EH started (a patch newer
+ *  than our own start proves the CC extension.js this EH loaded predates the
+ *  patch → in-memory CC code is stale). Patches older than our start were
+ *  already on disk when we activated, so this EH loaded the patched bytes —
+ *  no bar (prevents false nagging on normal starts). Captured at module load
+ *  (= activation), which precedes any patch runPatcher() could complete. */
+const EH_SINCE = Date.now();
+
+/** v0.5.45 RC2: persistent reload-needed StatusBarItem (lazy). Unlike the
+ *  post-patch toast (auto-dismisses in ~15s — the exact fragility that
+ *  stranded the 2026-08-15 08:33 crash-recovery window), a status-bar item
+ *  stays visible until the condition clears, and is CLICKABLE (command =
+ *  workbench.action.reloadWindow — the v0.5.21 lesson: StatusBarItem.command
+ *  makes display-state and click-action atomically bound). */
+let reloadBar: vscode.StatusBarItem | null = null;
+
+/** v0.5.45 RC3: re-entrancy guard so the 30s watcher tick never stacks a
+ *  second detectAndPatch while one is awaiting its user prompt. */
+let detectInFlight = false;
+
+/** v0.5.45.1 (review finding #3): set after THIS EH's own detectAndPatch
+ *  verified the marker landed (post-verify passed) — the reload bar's
+ *  in-memory fallback when last-repatch.json is missing/stale (patch.js
+ *  writes it best-effort and swallows failures). */
+let ownPatchArmed = false;
 
 /** Extension publisher.name prefix that CC's extension id always starts with.
  *  VS Code exposes the extension via vscode.extensions.all regardless of
@@ -294,6 +321,47 @@ function discoverCcInThisFlavor(): string | null {
         }
     }
     return best?.dir ?? null;
+}
+
+/** v0.5.45.1 (review HIGH finding): the tick/detect TARGET dir — the highest
+ *  CC version ON DISK in THIS flavor's extensions dir, not just what the EH
+ *  knows. Why: `vscode.extensions.all` (discoverCcInThisFlavor's primary
+ *  path) only lists extensions THIS extension host has loaded — a CC version
+ *  installed MID-SESSION (VS Code writes the new dir to disk and keeps the
+ *  running EH on the old one until reload) is INVISIBLE to it, and the
+ *  old-dir shadowing made the RC3 watcher useless in exactly the incident
+ *  window (2026-08-15 08:39: CC installed 2.1.233 while the EH still knew
+ *  2.1.232). Scanning the PARENT of the EH-known CC dir keeps v0.2.3's
+ *  flavor scoping (each flavor's extensions dir is scanned by that flavor's
+ *  own companion only — the raw searchDirs() fallback spans all flavors and
+ *  would regress it) while seeing not-yet-loaded installs. Falls back to
+ *  discoverCcInThisFlavor() when the EH knows no CC (unchanged legacy path)
+ *  and to the EH dir itself when the parent scan finds nothing new. */
+function detectTargetDir(): string | null {
+    const eh = discoverCcInThisFlavor();
+    if (!eh) return null; // EH knows no CC — the legacy all-flavor disk fallback inside discoverCcInThisFlavor already ran and found nothing
+    const parent = path.dirname(eh);
+    let best: { dir: string; version: number[] } | null = null;
+    try {
+        for (const name of fs.readdirSync(parent)) {
+            const m = name.match(/^anthropic\.claude-code-(\d+)\.(\d+)\.(\d+)/);
+            if (!m) continue;
+            const dir = path.join(parent, name);
+            if (!fs.existsSync(path.join(dir, "extension.js"))) continue;
+            const version = [Number(m[1]), Number(m[2]), Number(m[3])];
+            if (
+                !best ||
+                version[0] > best.version[0] ||
+                (version[0] === best.version[0] && version[1] > best.version[1]) ||
+                (version[0] === best.version[0] && version[1] === best.version[1] && version[2] > best.version[2])
+            ) {
+                best = { dir, version };
+            }
+        }
+    } catch {
+        /* parent unreadable — fall back to the EH-known dir below */
+    }
+    return best?.dir ?? eh;
 }
 
 /** v0.2.4 round-2 (ARCH-3): compare two `X.Y.Z` version strings numerically.
@@ -542,11 +610,31 @@ function runPatcher(): Promise<PatchResult> {
 /** Detect → patch → reload, gated by the per-extDir globalThis Set. Designed
  *  to be safe to call from activation on every startup. */
 async function detectAndPatch(): Promise<void> {
+    // v0.5.45 RC3: re-entrancy guard — the 30s watcher tick may invoke this
+    // while an earlier invocation is still awaiting its reload prompt; without
+    // the guard, ticks would stack prompts and re-run patch.js concurrently.
+    if (detectInFlight) return;
+    detectInFlight = true;
+    try {
+        await detectAndPatchInner();
+    } finally {
+        detectInFlight = false;
+    }
+}
+
+/** The body of detectAndPatch (v0.5.45 split it out for the inFlight guard
+ *  above without touching its logic — every branch below is byte-identical
+ *  to the pre-0.5.45 detectAndPatch except the RC2 else-branches). */
+async function detectAndPatchInner(): Promise<void> {
     const g = globalThis as Record<string, unknown>;
     const ranDirs = (g[ALREADY_RAN_KEY] as Set<string> | undefined) ?? new Set<string>();
     g[ALREADY_RAN_KEY] = ranDirs;
 
-    const extDir = discoverCcInThisFlavor();
+    // v0.5.45.1 (review HIGH): target the DISK-highest CC dir in this flavor
+    // (detectTargetDir), not just the EH-known one — a mid-session CC install
+    // is invisible to vscode.extensions.all, and the ranDirs/flavor guards
+    // below all still apply unchanged to whatever dir this resolves to.
+    const extDir = detectTargetDir();
     if (!extDir) {
         // No CC install visible from this VS Code flavor — nothing to do.
         // We do NOT cache this in ranDirs: if the user installs CC later in
@@ -586,6 +674,12 @@ async function detectAndPatch(): Promise<void> {
         return;
     }
 
+    // v0.5.45.1 (review finding #3): in-memory fallback for the reload bar —
+    // if the child patch.js failed to write last-repatch.json (best-effort
+    // swallow), flag-based recovery collapses to the 10-min retry alone. Arm
+    // our own signal after post-verify so the bar shows regardless of the flag.
+    ownPatchArmed = true;
+
     // Cross-platform shortcut for the prompt body — matches reloadHint() in
     // patch.ts (Cmd on macOS, Ctrl elsewhere).
     const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
@@ -600,8 +694,16 @@ async function detectAndPatch(): Promise<void> {
         );
         if (choice === "Reload Window") {
             await vscode.commands.executeCommand("workbench.action.reloadWindow");
-        } else if (choice === "Later") {
+        } else {
+            // v0.5.45 RC2 fix: "Later" OR undefined (toast auto-dismissed — the
+            // 2026-08-15 crash-recovery incident: the prompt fired at 08:33:53
+            // amid crash-restore chaos, auto-dismissed with choice===undefined,
+            // and the OLD `else if (choice === "Later")` scheduled NOTHING →
+            // the window ran unpatched-in-memory CC forever). Any non-Reload
+            // resolution now arms the 10-min re-prompt + the persistent
+            // reload-needed status bar (updateReloadBar shows on the next tick).
             scheduleLaterRetry(extDir);
+            updateReloadBar();
         }
         return;
     }
@@ -612,8 +714,71 @@ async function detectAndPatch(): Promise<void> {
     );
     if (choice === "Reload Window") {
         await vscode.commands.executeCommand("workbench.action.reloadWindow");
-    } else if (choice === "Later") {
+    } else {
+        // v0.5.45 RC2 fix: same as the warning branch above — undefined (toast
+        // auto-dismissed / Esc'd) must behave like "Later", NOT fall through
+        // with zero follow-up (the exact path that stranded the 08:33 window).
         scheduleLaterRetry(extDir);
+        updateReloadBar();
+    }
+}
+
+/** v0.5.45 RC2: show/hide the persistent "reload needed" status-bar item.
+ *  Shows ONLY when all three hold (each guards a false-positive class):
+ *   1. flag.ts > EH_SINCE — a patch landed on disk AFTER this EH started.
+ *      (Our own post-update re-patch, another window's patch, or the watcher's
+ *      mid-session new-version patch — all bump last-repatch.json's ts.)
+ *   2. The CC extension is ACTIVE in this EH — the stale in-memory code is
+ *      actually running. A window with no CC panels (extension inactive) has
+ *      nothing stale to reload; no nag.
+ *   3. globalThis.__ccsdSbi === undefined — the patched IIFE has NOT run in
+ *      this EH. Once the user reloads and CC's first panel fires, the IIFE
+ *      creates __ccsdSbi (the patcher↔companion probe contract — see
+ *      scheduleLaterRetry's JSDoc) and the bar self-hides on the next tick.
+ *  Click = workbench.action.reloadWindow. Called from the post-patch paths
+ *  and every 30s watcher tick, so it both appears without user action and
+ *  disappears without user action. */
+function updateReloadBar(): void {
+    try {
+        const need = (() => {
+            // v0.5.45.1 (review finding #2/#5): scope the FLAG to our own
+            // flavor's target dir — the cross-window toast in the same tick
+            // has exactly this guard (`if (flag.extDir !== extDir) return;`
+            // "Cross-flavor safety"), and the bar must not be looser: a
+            // stable window nagging about an insiders patch (or vice versa)
+            // would persist until that flavor's first session fires. The
+            // comparison uses detectTargetDir() (disk-highest in THIS
+            // flavor) because that is the dir a reload would actually load.
+            // v0.5.45.1 (review finding #3): ownPatchArmed is the in-memory
+            // fallback for a patch whose flag write failed (patch.js
+            // swallows writeRepatchFlag errors best-effort) — without it,
+            // flag-loss would collapse recovery to the 10-min toast alone.
+            let signaled = ownPatchArmed;
+            if (!signaled) {
+                const flag = readRepatchFlag();
+                const target = detectTargetDir();
+                signaled = !!flag && flag.ts > EH_SINCE && !!target && flag.extDir === target;
+            }
+            if (!signaled) return false;
+            const cc = vscode.extensions.getExtension("anthropic.claude-code");
+            if (!cc || !cc.isActive) return false;
+            return (globalThis as Record<string, unknown>).__ccsdSbi === undefined;
+        })();
+        if (!need) {
+            if (reloadBar) reloadBar.hide();
+            return;
+        }
+        if (!reloadBar) {
+            reloadBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+            reloadBar.name = "cc-status-dot reload";
+            reloadBar.text = "$(refresh) cc-status-dot: reload to activate patch";
+            reloadBar.tooltip =
+                "A cc-status-dot patch landed on disk after this window loaded the Claude Code extension, so the running code is stale. Click here (or Cmd+Shift+P → 'Developer: Reload Window') to activate the status dots.";
+            reloadBar.command = "workbench.action.reloadWindow";
+        }
+        reloadBar.show();
+    } catch {
+        /* never let bar bookkeeping break activation */
     }
 }
 
@@ -707,6 +872,28 @@ function startRepatchWatcher(extDir: string): void {
     g[PROMPTED_REPATCH_KEY] = prompted;
 
     repatchTimer = setInterval(() => {
+        // v0.5.45.1 (review HIGH): use detectTargetDir() — the DISK-highest CC
+        // dir in this flavor — because vscode.extensions.all cannot see a
+        // mid-session install (the EH keeps the old entry until reload), which
+        // made the v0.5.45 RC3 check useless in the exact incident window.
+        // v0.5.45.1 (review #4): check ranDirs BEFORE ccPatchState — after a
+        // permanently-failing patch the dir is already in ranDirs, and the
+        // state check would re-read the full 2.78MB extension.js every 30s
+        // forever. The ranDirs short-circuit keeps the steady-state tick at
+        // one readdir + one Set lookup.
+        try {
+            const curDir = detectTargetDir();
+            const ran = (globalThis as Record<string, unknown>)[ALREADY_RAN_KEY] as Set<string> | undefined;
+            if (curDir && !detectInFlight && !(ran && ran.has(curDir)) && ccPatchState(curDir) !== "fresh") {
+                void detectAndPatch();
+            }
+        } catch {
+            /* discovery failure — the next tick retries */
+        }
+        // v0.5.45 RC2: keep the persistent reload-needed bar in lockstep with
+        // reality (shows for post-start patches with stale in-memory CC, hides
+        // once the user reloads and the IIFE probe __ccsdSbi appears).
+        updateReloadBar();
         const flag = readRepatchFlag();
         if (!flag || flag.ts <= lastTs) return;
         lastTs = flag.ts;
@@ -1399,7 +1586,14 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
         // filter is needed here — an archived row is, by definition, NOT in
         // favorites.json.
         const sig = JSON.stringify({
-            s: doc.sessions.map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${s.label}|${s.state || ""}`).sort(),
+            // v0.5.44 BUG1 Layer 2: signature uses the LIVE bridge label so a
+            // rename of an already-favorited/archived session changes the
+            // signature → tree re-renders → getTreeItem shows the new title.
+            // Without this the dedup gate would block the re-render and the
+            // stored (stale) label would persist in the display.
+            s: doc.sessions
+                .map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${liveBridgeLabel(s.sid, s.label)}|${s.state || ""}`)
+                .sort(),
             f: doc.files.map((f) => `${f.fsPath}|${f.label}|${f.line || 0}`).sort(),
         });
         // v0.5.6 (Bug 4 dynamic add/remove text): the active sid can move
@@ -1525,7 +1719,12 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
         // session (open or closed)
         const s = element.session;
         const isOpen = element.kind === "sessionOpen";
-        const item = new vscode.TreeItem(s.label, vscode.TreeItemCollapsibleState.None);
+        // v0.5.44 BUG1 Layer 2: display the LIVE bridge label (reconciled each
+        // poll by refresh()'s signature change) so a rename of an already-stored
+        // favorite/archive surfaces in the tree within one poll cycle, without
+        // waiting for an un-star/re-star. Falls back to the stored s.label when
+        // the bridge is cold (session closed / not yet registered).
+        const item = new vscode.TreeItem(liveBridgeLabel(s.sid, s.label), vscode.TreeItemCollapsibleState.None);
         // v0.4.0 round-1 (MEDIUM): session nodes have NO resourceUri, so VSCode
         // cannot fall back to Uri identity — without an explicit id it uses
         // element-reference identity, which changes on every refresh, clearing
@@ -1639,8 +1838,18 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
         const open = openSidSet();
         // No archived filter — every row in archive.json is, by definition,
         // archived. The whole doc IS the archive.
+        // v0.5.44 BUG1 Layer 2 (review-caught asymmetry): the signature MUST use
+        // the LIVE bridge label — mirroring FavoritesProvider.refresh() — so a
+        // rename of an already-archived session (panel still open: archiving does
+        // NOT close it) changes the signature → tree re-renders → getTreeItem
+        // shows the new title. Pre-fix this used stored s.label, so a
+        // archived-then-renamed session kept showing its stale title indefinitely
+        // (the exact BUG1 class surviving in the sibling view). The reconcile is
+        // display-only — liveBridgeLabel never persists from the poll.
         const sig = JSON.stringify({
-            s: doc.sessions.map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${s.label}|${s.state || ""}`).sort(),
+            s: doc.sessions
+                .map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${liveBridgeLabel(s.sid, s.label)}|${s.state || ""}`)
+                .sort(),
         });
         if (sig === this.lastSig) return;
         this.lastSig = sig;
@@ -1672,7 +1881,11 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
         }
         const s = element.session;
         const isOpen = element.kind === "sessionOpen";
-        const item = new vscode.TreeItem(s.label, vscode.TreeItemCollapsibleState.None);
+        // v0.5.44 BUG1 Layer 2 (review-caught asymmetry): display the LIVE bridge
+        // label so a session renamed while archived surfaces in the Archive tree
+        // within one poll cycle (mirrors FavoritesProvider.getTreeItem). Falls
+        // back to the stored s.label when the bridge is cold.
+        const item = new vscode.TreeItem(liveBridgeLabel(s.sid, s.label), vscode.TreeItemCollapsibleState.None);
         // Stable id (sid-keyed, no kind suffix) so VSCode preserves selection
         // across open/closed transitions — same rationale as FavoritesProvider.
         item.id = "ccsdArchive:session:" + s.sid;
@@ -2030,6 +2243,38 @@ function buildFavSessionRow(sid: string): FavSession | null {
     return { sid, label, cwd, transcript_path, model, state, addedAt: now, lastSeenAt: now };
 }
 
+/** v0.5.44 BUG1 Layer 2: read the LIVE title for a sid from the IIFE bridge
+ *  (__ccsdSidToTitle, kept fresh by replA Layer 1a on every update_session_state
+ *  and replB Layer 1b on every rename_tab) and return it trimmed + clamped to
+ *  64 chars, falling back to `fallback` when the bridge has no entry (session
+ *  closed / bridge cold) or the entry is empty. Pure read — never persists.
+ *
+ *  Why this exists: a stored FavSession row's `label` is a write-once snapshot
+ *  frozen at toggle time. A user who renames a CC tab AFTER favoriting/archiving
+ *  would otherwise see the stale old title (the reported "收藏显示 Claude Code"
+ *  BUG1) until they manually un-star + re-star. The toggle handlers call this to
+ *  overwrite the copied row's label on every toggle, and the tree's refresh() /
+ *  getTreeItem call it to reconcile the DISPLAYED label on each poll (display-
+ *  only — the stored row is refreshed on the next toggle, never from the poll,
+ *  so a transient bridge title — e.g. CC's brief "Claude Code" default before
+ *  the real title lands — can never corrupt a good stored label). Mirrors
+ *  buildFavSessionRow's title-map read so there is ONE clamp/trim shape. */
+function liveBridgeLabel(sid: string, fallback: string): string {
+    if (!sid) return fallback;
+    try {
+        const g = globalThis as Record<string, unknown>;
+        const titleMap = g.__ccsdSidToTitle as Record<string, string> | undefined;
+        const bridgeTitle = titleMap && typeof titleMap === "object" ? titleMap[sid] : "";
+        if (typeof bridgeTitle === "string" && bridgeTitle.trim()) {
+            const t = bridgeTitle.trim();
+            return t.length > 64 ? t.slice(0, 63) + "…" : t;
+        }
+    } catch {
+        /* bridge unreadable — fall through to fallback */
+    }
+    return fallback;
+}
+
 /** Toggle a CC session in/out of favorites. v0.5.3 (F1 HIGH): accepts the
  *  resourceUri that VSCode's editor/title/context menu auto-passes (was
  *  dropped on the floor pre-fix, and the handler welded the right-clicked
@@ -2078,7 +2323,19 @@ function favToggleTab(resourceUri?: unknown): void {
     // file — a status-bar toggle before any prior fav/archive). Mirrors the
     // MOVE handlers (favArchiveSession copies {...src}).
     const existingArchRow = readArchiveDoc()?.sessions.find((s) => s.sid === sid);
-    const row = existingArchRow ? { ...existingArchRow } : buildFavSessionRow(sid);
+    // v0.5.44 BUG1 Layer 2: overwrite the copied row's label from the LIVE title
+    // bridge (replA Layer 1a / replB Layer 1b keep it fresh). Without this, an
+    // archive→fav toggle COPIES the archive row's stale label verbatim — so a
+    // session renamed while archived would re-surface as the old "Claude Code" /
+    // prior name in Favorites. buildFavSessionRow already reads the bridge, so
+    // the plain-session branch is naturally fresh; the overlay is the belt that
+    // also covers the existing-row copy branch. lastSeenAt bumps to now on every
+    // toggle (consistent with buildFavSessionRow). liveBridgeLabel falls back to
+    // the row's existing label when the bridge is cold, so a closed/just-resumed
+    // session is never blanked.
+    const row = existingArchRow
+        ? { ...existingArchRow, label: liveBridgeLabel(sid, existingArchRow.label), lastSeenAt: Date.now() }
+        : buildFavSessionRow(sid);
     const result = mutateFavDoc((doc) => {
         removed = false;
         const idx = doc.sessions.findIndex((s) => s.sid === sid);
@@ -2827,7 +3084,13 @@ function favToggleArchive(): void {
         // handlers. GATE the cross-file remove on (wrote || noop) — a failed
         // add must NOT strip the favorite row (silent data loss).
         const existingFavRow = readFavDoc()?.sessions.find((s) => s.sid === sid);
-        const row = existingFavRow ? { ...existingFavRow } : buildFavSessionRow(sid);
+        // v0.5.44 BUG1 Layer 2 (mirror of favToggleTab): overwrite the copied
+        // favorite row's label from the LIVE bridge so a session renamed while
+        // favorited lands in archive.json with its CURRENT title, not the stale
+        // snapshot. See favToggleTab for the full rationale.
+        const row = existingFavRow
+            ? { ...existingFavRow, label: liveBridgeLabel(sid, existingFavRow.label), lastSeenAt: Date.now() }
+            : buildFavSessionRow(sid);
         if (row) {
             const added = mutateArchiveDoc((doc) => {
                 if (doc.sessions.some((x) => x.sid === sid)) return { changed: false };
@@ -3206,6 +3469,11 @@ export function deactivate(): void {
     if (laterRetryTimer) {
         clearTimeout(laterRetryTimer);
         laterRetryTimer = null;
+    }
+    // v0.5.45 RC2: dispose the persistent reload-needed bar.
+    if (reloadBar) {
+        reloadBar.dispose();
+        reloadBar = null;
     }
     // v0.4.0: clear the Favorites tree refresh poller (set in registerFavorites).
     if (favoritesWatcher) {

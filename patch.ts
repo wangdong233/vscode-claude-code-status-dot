@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.40";
+const INJECT_VERSION = "v0.5.45";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -2607,7 +2607,7 @@ function buildIIFE(resDir: string): string {
         `},${TICK_MS});`,
         // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,
-        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);/*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}/*v0.5.35 ANCHOR_C teardown: release this panel's entry in the user-dialog set so a panel closed mid-consent/refusal dialog cannot false-stick the tab blue. Mirrors the __ps release above (single-writer __ccsdUserDialogSet is set in ANCHOR_C's try and deleted in its finally for normal exits; this is the safety-net for panel-close mid-dialog). Uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[t.__ccsdSid]}catch(_){}/*v0.4.0 FAV BRIDGE §Z: release this panel's entry in the sid→panel map so the companion's Favorites tree sees the session as closed (node grayed out, click degrades to Copy resume cmd). Symmetric to the §A preamble publish; uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdSidToPanel&&t.__ccsdSid)delete globalThis.__ccsdSidToPanel[t.__ccsdSid]}catch(_){}/*v0.5.3 FAV BRIDGE §Z: release this panel's entry in the sid→title map (symmetric to the sid→panel delete above + the §A title init).*/try{if(globalThis.__ccsdSidToTitle&&t.__ccsdSid)delete globalThis.__ccsdSidToTitle[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid="";if(globalThis.__ccsdLastActiveSid===t.__ccsdSid)globalThis.__ccsdLastActiveSid=""}})}catch(e){}`,
+        `try{t.panelTab.onDidDispose(function(){clearInterval(timer);t.__ccsdDisposed=true;/*v0.5.44 BUG2 regression guard: mark this panel disposed so Layer 1a (replA) / Layer 1b (replB) synchronous bridge writes NO-OP for any update_session_state / rename_tab still in-flight after teardown. Pre-Layer-1 the §A preamble's t.__ccsdDotStarted once-guard happened to block post-dispose re-registration; Layer 1a/1b write in the comma-chain BEFORE the once-guard, so without this flag a late event would re-add this panel's (now disposed) panelTab to __ccsdSidToPanel — a zombie entry. benign for activeCcSidOrLoading (.active is false on a disposed panel) but it would make companion openSidSet() (Object.keys) treat the closed session as open → wrong icon in the Favorites/Archive tree. The flag is read as !this.__ccsdDisposed in replA/replB.*/ /*v0.2.5 (problem 1 fix): release this panel's entry in the window-scoped pending set so a closed panel does not false-stick the bottom 🔵. v0.2.5 round-1 (HIGH) correction: delete uses t.__ccsdSid (IIFE parameter, in scope) — the per-panel tick declares its own var sid=t.__ccsdSid INSIDE the 500ms tick closure, which is a sibling of this onDidDispose closure, so that sid is NOT visible here. Referencing it (the prior code) threw ReferenceError — silently swallowed by the inner try/catch for the delete (set entry stuck), and NOT swallowed for the else-if below (escaped to VSCode's event dispatcher, __ccsdActiveSid stayed pointed at the closed session). Reading t.__ccsdSid directly closes over the IIFE parameter (always in scope) instead.*/try{if(globalThis.__ccsdPendingSet)delete globalThis.__ccsdPendingSet[t.__ccsdSid]}catch(_){}/*v0.5.35 ANCHOR_C teardown: release this panel's entry in the user-dialog set so a panel closed mid-consent/refusal dialog cannot false-stick the tab blue. Mirrors the __ps release above (single-writer __ccsdUserDialogSet is set in ANCHOR_C's try and deleted in its finally for normal exits; this is the safety-net for panel-close mid-dialog). Uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[t.__ccsdSid]}catch(_){}/*v0.4.0 FAV BRIDGE §Z: release this panel's entry in the sid→panel map so the companion's Favorites tree sees the session as closed (node grayed out, click degrades to Copy resume cmd). Symmetric to the §A preamble publish; uses t.__ccsdSid (IIFE parameter, always in scope — same reasoning as the __ccsdPendingSet delete above).*/try{if(globalThis.__ccsdSidToPanel&&t.__ccsdSid)delete globalThis.__ccsdSidToPanel[t.__ccsdSid]}catch(_){}/*v0.5.3 FAV BRIDGE §Z: release this panel's entry in the sid→title map (symmetric to the sid→panel delete above + the §A title init).*/try{if(globalThis.__ccsdSidToTitle&&t.__ccsdSid)delete globalThis.__ccsdSidToTitle[t.__ccsdSid]}catch(_){}globalThis.__ccsdPanelCount=(globalThis.__ccsdPanelCount||1)-1;if(globalThis.__ccsdPanelCount<=0){globalThis.__ccsdPanelCount=0;if(globalThis.__ccsdSbiTimer){clearInterval(globalThis.__ccsdSbiTimer);globalThis.__ccsdSbiTimer=null;}if(globalThis.__ccsdSbi){try{globalThis.__ccsdSbi.dispose()}catch(e){};globalThis.__ccsdSbi=null;globalThis.__ccsdSbiLastKey=null;}/*v0.2.4: also dispose the token SBI + its click command on last-panel-out*/if(globalThis.__ccsdTokSbi){try{globalThis.__ccsdTokSbi.dispose()}catch(e){};globalThis.__ccsdTokSbi=null;}if(globalThis.__ccsdActiveSid){globalThis.__ccsdActiveSid=""}if(globalThis.__ccsdLastActiveSid){globalThis.__ccsdLastActiveSid=""}}/*v0.2.4: if the disposed panel WAS the active one (but other panels remain), clear __ccsdActiveSid so the token SBI does not keep reading a closed session's <sid>.json. The next still-alive panel's 500ms tick will publish its own sid and repopulate the global (within 500ms — acceptable glitch window for the multi-panel case). v0.2.5 round-1 (HIGH): uses t.__ccsdSid (IIFE parameter, in scope) for the same reason as the delete above — the per-panel tick's var sid is NOT visible here.*/else if(globalThis.__ccsdActiveSid===t.__ccsdSid){globalThis.__ccsdActiveSid="";if(globalThis.__ccsdLastActiveSid===t.__ccsdSid)globalThis.__ccsdLastActiveSid=""}})}catch(e){}`,
         `})(this)`,
     ];
     // Join with "" (not "\n") to match the historical on-disk byte shape that
@@ -2772,6 +2772,30 @@ function injectFresh(extJs: string, src: string): void {
     const replA =
         'else if(e.request.type==="update_session_state")return ' +
         "this.__ccsdSid=e.request.sessionId,this.__ccsdTitle=e.request.title," +
+        // v0.5.44 BUG1+BUG2 Layer 1a: synchronously mirror sid→title AND sid→panel
+        // into the globalThis bridge HERE, on every update_session_state (the ONE
+        // event that carries sessionId) — NOT deferred to the §A preamble (which
+        // runs at most once per panel via the t.__ccsdDotStarted guard) nor to the
+        // §H 500ms tick. White-box root cause: for a resumed session rename_tab
+        // fires FIRST and carries no sessionId → t.__ccsdSid stays undefined →
+        // §A's `if(t.__ccsdSid)` gate skips registration AND, because §A then
+        // sets t.__ccsdDotStarted=true, the later update_session_state hits the
+        // `if(t.__ccsdDotStarted)return` early-exit so §A NEVER re-registers.
+        // Only the §H tick recovered it (≤500ms lag), and during that window
+        // activeCcSidOrLoading's panelMap.active scan missed the panel → loading
+        // sentinel → status bar + token counter freeze (BUG2). Writing here in
+        // the comma-chain (before iife) registers the panel the instant
+        // update_session_state fires, bypassing the once-guard entirely. The same
+        // write also keeps __ccsdSidToTitle fresh so buildFavSessionRow /
+        // liveBridgeLabel read the real title instead of a stale "Claude Code"
+        // default (BUG1). Purely additive + idempotent — §A and the §H tick write
+        // the same values; this segment just removes the once-guard + 500ms
+        // delay. `(globalThis.__ccsdX||(globalThis.__ccsdX=…))` lazily inits the
+        // maps (mirrors §A's own init) so order-of-fire never matters. try/ternary
+        // form keeps it a single comma-operand (no block — see the binding comment
+        // above) and no-ops safely when sessionId is absent (defensive; this
+        // handler always carries it).
+        '(e.request.sessionId&&!this.__ccsdDisposed?((globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[e.request.sessionId]=(e.request.title||""),(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[e.request.sessionId]=this.panelTab):0),' +
         // v0.2.4: also publish the active sid to globalThis so the token SBI
         // tick (window-scoped, outside this panel closure) picks it up.
         //
@@ -2825,6 +2849,21 @@ function injectFresh(extJs: string, src: string): void {
             // closed in that window → __ccsdPendingSet entry leaks. Idempotent
             // with replA (both write the same value when both fire).
             "if(e.request.sessionId)this.__ccsdSid=e.request.sessionId;" +
+            // v0.5.44 BUG1 Layer 1b: rename_tab carries the NEW title but NO
+            // sessionId, and fires repeatedly (truncation, user rename, panel
+            // title reassignment). If update_session_state has ALREADY fired for
+            // this panel (this.__ccsdSid is set), mirror the fresh title into the
+            // bridge NOW so the companion's buildFavSessionRow / liveBridgeLabel
+            // see the renamed label within the SAME event — vs waiting ≤500ms for
+            // the §H tick (which is the window where favoriting a just-renamed
+            // session snapshotted a stale "Claude Code" / old label, BUG1). Also
+            // re-publishes sid→panel idempotently (cheap; the stored panelTab
+            // reference is stable). No-op when this.__ccsdSid is still undefined
+            // (resumed session pre-update_session_state) — Layer 1a in replA
+            // covers it the moment update_session_state fires. Statement form
+            // (`;`-terminated) matches replB's style; gated on this.__ccsdSid so
+            // it never registers under an undefined key.
+            'if(this.__ccsdSid&&!this.__ccsdDisposed){(globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[this.__ccsdSid]=e.request.title||"";(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[this.__ccsdSid]=this.panelTab;}' +
             // v0.2.5 (problem 1 fix): mirror the per-panel __ccsdPending flag into
             // a window-scoped globalThis set so the §F 4-light aggregation (which
             // scans STATE_DIR files, not panel objects) can pick up the
@@ -5209,6 +5248,18 @@ function run(argv: string[]): void {
         // the ~300ms spawn in the steady state — see extension.ts).
         const { dir, version } = discoverExtension();
         log(`CC extension v${version}: ${dir}`);
+        // v0.5.45.1 (review finding #2 leg 2): capture the extension.js mtime
+        // BEFORE patchExtension so the flag below is written ONLY when this
+        // run actually modified the file. The fresh-skip path ("already
+        // patched — skipping injection") exits with ZERO disk writes, and a
+        // no-op `npx` re-run used to bump last-repatch.json's ts anyway —
+        // arming the companion's reload-needed bar (and the cross-window
+        // toast) in every healthy window whose CC was merely active. mtime is
+        // a reliable write signal here: injectFresh and the RES rewrite both
+        // write via tmp+rename (fresh timestamp), and nothing else touches
+        // the file between the two stats in this same synchronous run.
+        const extJsForMtime = path.join(dir, "extension.js");
+        const mtimeBefore = fs.existsSync(extJsForMtime) ? fs.statSync(extJsForMtime).mtimeMs : 0;
         patchExtension(dir);
         // After a successful patch, write the cross-window reload signal so
         // companion instances in OTHER still-running VS Code windows can detect
@@ -5219,6 +5270,11 @@ function run(argv: string[]): void {
         // the companion sets before spawning us — see companion/extension.ts).
         try {
             const extJsPath = path.join(dir, "extension.js");
+            const mtimeAfter = fs.existsSync(extJsPath) ? fs.statSync(extJsPath).mtimeMs : 0;
+            if (mtimeAfter === mtimeBefore) {
+                log("no disk change — skipping repatch flag write (fresh no-op run)");
+                return;
+            }
             const extSrc = fs.existsSync(extJsPath) ? fs.readFileSync(extJsPath, "utf8") : "";
             const markerN = countOccurrences(extSrc, INJECT_MARKER);
             const anchorB = markerN >= 2;

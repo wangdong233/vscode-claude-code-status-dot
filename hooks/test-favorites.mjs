@@ -1245,6 +1245,47 @@ check(
   'the EH-known dir (discoverCcInThisFlavor) stays as the flavor anchor: detectTargetDir scans its PARENT for the highest anthropic.claude-code-X.Y.Z — sees mid-session installs the EH cannot, without regressing v0.2.3 flavor scoping (the raw searchDirs() fallback spans all flavors). detectAndPatchInner targets the same dir so runPatcher (which patches disk-highest) and the guards agree.',
 );
 
+// --- v0.5.46: COMP.7 — closed-session stale-label fix (rename-persist) ---
+// 2026-08-19 incident: a favorited session renamed to "AIGC-诗集-江雪" showed
+// the NEW name while open (live bridge title) but reverted to the OLD stored
+// label on close (§Z onDidDispose deletes __ccsdSidToTitle[sid] → the display
+// falls back to the toggle-time-frozen row label). Root cause: the v0.5.44
+// reconcile is deliberately display-only, so a rename while favorited never
+// persists. Fix: persistClosedSessionLabels() — close-time snapshot with a
+// ≥2-consecutive-tick stability filter (CC's transient default title lives
+// well under one 2s tick; a genuine rename is stable for the whole open
+// duration).
+check(
+  'COMP.7 v0.5.46 close-time rename snapshot: persistClosedSessionLabels with ≥2-tick stability gate, label-diff guard, both-file apply, and map hygiene',
+  /function persistClosedSessionLabels\(forceAll = false\): void \{/.test(companionSrc) &&
+    /const lastSeenBridgeTitles = new Map<string, \{ title: string; seen: number \}>\(\);/.test(companionSrc) &&
+    /if \(prev && prev\.title === t\) prev\.seen \+= 1;/.test(companionSrc) &&
+    /if \(entry\.seen < 2\) continue; \/\/ transient\/unstable — never persist/.test(companionSrc) &&
+    /if \(!row \|\| row\.label === label\) return \{ changed: false \};/.test(companionSrc) &&
+    /row\.label = label;/.test(companionSrc) &&
+    /mutateFavDoc\(apply, true\);/.test(companionSrc) &&
+    /mutateArchiveDoc\(apply, true\);/.test(companionSrc) &&
+    /lastSeenBridgeTitles\.delete\(sid\); \/\/ closed — consume the entry either way/.test(companionSrc) &&
+    /persistClosedSessionLabels\(\);\s*\n\s*favoritesProvider\?\.refresh\(\);[\s\S]{0,300}archiveProvider\?\.refresh\(\);/.test(
+      companionSrc,
+    ),
+  'the stored row label was written only at toggle time; a rename while favorited/archived never persisted, so closing the panel (§Z bridge delete) reverted the tree to the pre-rename name. The fix snapshots the last bridge title that was stable for ≥2 consecutive 2s poll ticks into favorites.json/archive.json (whichever holds the sid; wrong file = no-op changed:false), bumps lastSeenAt, and deletes the tracking entry on the close-transition regardless of the gate (no unbounded map). liveBridgeLabel stays display-only — the anti-transient invariant of v0.5.44 is preserved by the stability gate instead of by never writing.',
+);
+
+check(
+  'COMP.8 v0.5.46.1 review amendments: source-side ★/● strip + deactivate forceAll flush + silent background writes + no lastSeenAt reorder',
+  /function stripTabMarkers\(title: string\): string \{/.test(companionSrc) &&
+    /return title\.replace\(\/\^\[★●\]\\s\/, ""\);/.test(companionSrc) &&
+    /function persistClosedSessionLabels\(forceAll = false\): void \{/.test(companionSrc) &&
+    /if \(!forceAll && live\.has\(sid\)\) continue;/.test(companionSrc) &&
+    /persistClosedSessionLabels\(true\);/.test(companionSrc) &&
+    /const t = stripTabMarkers\(bridgeTitle\)\.trim\(\);/.test(companionSrc) &&
+    /const bare = stripTabMarkers\(entry\.title\);/.test(companionSrc) &&
+    /silent = false[),]/.test(companionSrc) &&
+    /if \(!silent\)[\s\S]{0,80}void vscode\.window\.showErrorMessage/.test(companionSrc),
+  'review [2] MEDIUM: the §H panelTab.title fallback (patch.ts) could republish the PAINTED ★/● tab title into the bridge when t.__ccsdTitle was falsy (title-less update_session_state — real CC caller) and the close-time persist then durably wrote the prefixed label. Fixed at source (patch.ts §H strips the fallback) + defense-in-depth (stripTabMarkers in liveBridgeLabel + persist). review [1]+[3]: deactivate() now force-flushes (still-open panels snapshotted too — EH quit/reload cannot lose the rename). review [4]: background writes are silent (no user-action error toast from a poll). review [6]: the persist no longer bumps lastSeenAt (close never reordered the tree pre-v0.5.46). review [7]: the tick persists BEFORE refreshing (no one-tick old-label flash).',
+);
+
 // cleanup
 try {
   fs.rmSync(tmpDir, { recursive: true, force: true });

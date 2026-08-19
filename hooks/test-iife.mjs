@@ -401,7 +401,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.45 stamp', /\/\*cc-status-dot-injected:v0.5.45:/.test(iife));
+check('IIFE.21c banner carries v0.5.46 stamp', /\/\*cc-status-dot-injected:v0.5.46:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -2926,10 +2926,12 @@ check(
 );
 
 check(
-  'IIFE.162 v0.5.3 FAV BRIDGE §tick — __ccsdSidToTitle[sid] refreshed from t.__ccsdTitle/panelTab.title each tick',
+  'IIFE.162 v0.5.3 FAV BRIDGE §tick — __ccsdSidToTitle[sid] refreshed from t.__ccsdTitle each tick; panelTab.title fallback STRIPS the painted ★/● prefix (v0.5.46.1)',
   /globalThis\.__ccsdSidToTitle\[sid\]=__tt/.test(iife) &&
-    /var __tt=t\.__ccsdTitle\|\|\(t\.panelTab&&t\.panelTab\.title\)\|\|""/.test(iife),
-  'per-tick refresh picks up rename_tab title changes (t.__ccsdTitle kept fresh by replA/replB)',
+    /var __tt=t\.__ccsdTitle\|\|\(t\.panelTab&&t\.panelTab\.title\?t\.panelTab\.title\.replace\(\/\^\[★●\]\\s\/,""\):""\)/.test(
+      iife,
+    ),
+  'per-tick refresh picks up rename_tab title changes (t.__ccsdTitle kept fresh by replA/replB). v0.5.46.1 (review MEDIUM): the panelTab.title FALLBACK now strips the painted ★/● prefix before publishing — when a title-less update_session_state clobbers t.__ccsdTitle to falsy (real CC caller sends no title), the old fallback republished the PAINTED "★ X"/"● X" tab title into the bridge, violating the v0.5.9 "bare logical title" invariant and letting the companion close-time persist durably store the prefixed label. Same char class as the paint ternary + companion stripTabMarkers (contract-sync pinned).',
 );
 
 check(

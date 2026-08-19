@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.45";
+const MIN_PATCHER_VERSION = "0.5.46";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.45";
+    return effectiveConfig?.injectVersion ?? "v0.5.46";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1102,11 +1102,15 @@ let favDocCache: { doc: FavDoc; mt: number; sz: number } | null = null;
  *  across windows. Returns "ok" on success, "conflict" on mtime mismatch (no
  *  toast — caller retries via mutateFavDoc), or "error" on future-version
  *  refusal / fs failure (toast surfaced here). */
-function writeFavAtomic(doc: FavDoc, expectedMtime?: number): "ok" | "conflict" | "error" {
+function writeFavAtomic(doc: FavDoc, expectedMtime?: number, silent = false): "ok" | "conflict" | "error" {
     if (futureVersionLocked) {
-        void vscode.window.showErrorMessage(
-            `cc-status-dot: favorites.json was written by a newer companion. Adding, removing, or opening a favorite would overwrite it with an older schema — refusing. Upgrade the companion (or delete the file at ${FAV_FILE}) to make changes.`,
-        );
+        // v0.5.46.1 (review [4]): silent callers (the background close-time
+        // persist) skip the toast — a poll must never surface a user-action
+        // error message.
+        if (!silent)
+            void vscode.window.showErrorMessage(
+                `cc-status-dot: favorites.json was written by a newer companion. Adding, removing, or opening a favorite would overwrite it with an older schema — refusing. Upgrade the companion (or delete the file at ${FAV_FILE}) to make changes.`,
+            );
         return "error";
     }
     // Compare-and-swap: when the caller captured a read-time mtime, verify the
@@ -1277,7 +1281,7 @@ interface FavMutationResult {
  *  writer that lands between them can still be last-writer-wins. For
  *  favorites.json (low-frequency, human-triggered writes) this is amply
  *  sufficient; full fcntl/lockfile mutual exclusion is disproportionate. */
-function mutateFavDoc(mutate: (doc: FavDoc) => { changed: boolean }): FavMutationResult {
+function mutateFavDoc(mutate: (doc: FavDoc) => { changed: boolean }, silent = false): FavMutationResult {
     for (let attempt = 0; attempt < 2; attempt++) {
         const { doc: existing, mtime } = readFavDocWithMtime();
         // v0.5.42.1 (03 review cache-poisoning fix): CLONE the cached doc before
@@ -1297,7 +1301,7 @@ function mutateFavDoc(mutate: (doc: FavDoc) => { changed: boolean }): FavMutatio
             : emptyFavDoc();
         const res = mutate(doc);
         if (!res.changed) return { wrote: false, noop: true };
-        const outcome = writeFavAtomic({ ...doc, updatedAt: Date.now() }, mtime);
+        const outcome = writeFavAtomic({ ...doc, updatedAt: Date.now() }, mtime, silent);
         if (outcome === "ok") return { wrote: true, noop: false };
         if (outcome === "error") {
             favDocCache = null; // belt-and-suspenders: next read re-stats disk truth
@@ -1306,9 +1310,10 @@ function mutateFavDoc(mutate: (doc: FavDoc) => { changed: boolean }): FavMutatio
         // outcome === "conflict" → loop and re-read + re-mutate + re-write once
     }
     favDocCache = null; // conflict give-up: force re-read of disk truth
-    void vscode.window.showErrorMessage(
-        `cc-status-dot: Favorites changed in another window while saving; the toggle was not applied. Try again.`,
-    );
+    if (!silent)
+        void vscode.window.showErrorMessage(
+            `cc-status-dot: Favorites changed in another window while saving; the toggle was not applied. Try again.`,
+        );
     return { wrote: false, noop: false };
 }
 
@@ -1340,11 +1345,12 @@ let archiveDocCache: { doc: FavDoc; mt: number; sz: number } | null = null;
 
 /** Atomic write of archive.json — tmp + rename. Mirrors writeFavAtomic
  *  (future-version refusal + CAS mtime gate + error toast). */
-function writeArchiveAtomic(doc: FavDoc, expectedMtime?: number): "ok" | "conflict" | "error" {
+function writeArchiveAtomic(doc: FavDoc, expectedMtime?: number, silent = false): "ok" | "conflict" | "error" {
     if (futureVersionLockedArchive) {
-        void vscode.window.showErrorMessage(
-            `cc-status-dot: archive.json was written by a newer companion. Archiving/unarchiving would overwrite it with an older schema — refusing. Upgrade the companion (or delete the file at ${ARCHIVE_FILE}) to make changes.`,
-        );
+        if (!silent)
+            void vscode.window.showErrorMessage(
+                `cc-status-dot: archive.json was written by a newer companion. Archiving/unarchiving would overwrite it with an older schema — refusing. Upgrade the companion (or delete the file at ${ARCHIVE_FILE}) to make changes.`,
+            );
         return "error";
     }
     if (typeof expectedMtime === "number") {
@@ -1465,7 +1471,7 @@ function readArchiveDocWithMtime(): { doc: FavDoc | null; mtime: number } {
 /** Read-mutate-write archive.json under a CAS (mtime) guard, retrying once on
  *  conflict. Mirrors mutateFavDoc (closes the multi-window lost-update race for
  *  archive.json the same way mutateFavDoc does for favorites.json). */
-function mutateArchiveDoc(mutate: (doc: FavDoc) => { changed: boolean }): FavMutationResult {
+function mutateArchiveDoc(mutate: (doc: FavDoc) => { changed: boolean }, silent = false): FavMutationResult {
     for (let attempt = 0; attempt < 2; attempt++) {
         const { doc: existing, mtime } = readArchiveDocWithMtime();
         // v0.5.42.1 (03 review cache-poisoning fix): CLONE the cached doc before
@@ -1483,7 +1489,7 @@ function mutateArchiveDoc(mutate: (doc: FavDoc) => { changed: boolean }): FavMut
             : emptyFavDoc();
         const res = mutate(doc);
         if (!res.changed) return { wrote: false, noop: true };
-        const outcome = writeArchiveAtomic({ ...doc, updatedAt: Date.now() }, mtime);
+        const outcome = writeArchiveAtomic({ ...doc, updatedAt: Date.now() }, mtime, silent);
         if (outcome === "ok") return { wrote: true, noop: false };
         if (outcome === "error") {
             archiveDocCache = null; // belt-and-suspenders: next read re-stats disk truth
@@ -1492,9 +1498,10 @@ function mutateArchiveDoc(mutate: (doc: FavDoc) => { changed: boolean }): FavMut
         // outcome === "conflict" → loop and re-read + re-mutate + re-write once
     }
     archiveDocCache = null; // conflict give-up: force re-read of disk truth
-    void vscode.window.showErrorMessage(
-        `cc-status-dot: Archive changed in another window while saving; the toggle was not applied. Try again.`,
-    );
+    if (!silent)
+        void vscode.window.showErrorMessage(
+            `cc-status-dot: Archive changed in another window while saving; the toggle was not applied. Try again.`,
+        );
     return { wrote: false, noop: false };
 }
 
@@ -2259,6 +2266,14 @@ function buildFavSessionRow(sid: string): FavSession | null {
  *  so a transient bridge title — e.g. CC's brief "Claude Code" default before
  *  the real title lands — can never corrupt a good stored label). Mirrors
  *  buildFavSessionRow's title-map read so there is ONE clamp/trim shape. */
+/** v0.5.46.1: strip the IIFE-painted tab-title prefix (★ favorited / ●
+ *  archived). Keep the char class in sync with the paint ternary in patch.ts
+ *  and activeCcSidOrLoading's strip — pinned by test-contract-sync.mjs
+ *  (prefix emit set === strip char class). */
+function stripTabMarkers(title: string): string {
+    return title.replace(/^[★●]\s/, "");
+}
+
 function liveBridgeLabel(sid: string, fallback: string): string {
     if (!sid) return fallback;
     try {
@@ -2266,13 +2281,103 @@ function liveBridgeLabel(sid: string, fallback: string): string {
         const titleMap = g.__ccsdSidToTitle as Record<string, string> | undefined;
         const bridgeTitle = titleMap && typeof titleMap === "object" ? titleMap[sid] : "";
         if (typeof bridgeTitle === "string" && bridgeTitle.trim()) {
-            const t = bridgeTitle.trim();
+            // v0.5.46.1 (review [2]): strip a painted ★/● prefix — the §H
+            // fallback can publish the prefixed panelTab.title into the bridge.
+            const t = stripTabMarkers(bridgeTitle).trim();
             return t.length > 64 ? t.slice(0, 63) + "…" : t;
         }
     } catch {
         /* bridge unreadable — fall through to fallback */
     }
     return fallback;
+}
+
+/** v0.5.46: per-sid last bridge title + how many CONSECUTIVE poll ticks it has
+ *  been unchanged. Feeds persistClosedSessionLabels' stability filter. */
+const lastSeenBridgeTitles = new Map<string, { title: string; seen: number }>();
+
+/** v0.5.46 (rename-persist fix, the closed-session-stale-label bug): snapshot
+ *  the bridge title into the stored favorites.json/archive.json row when the
+ *  panel CLOSES.
+ *
+ *  ROOT CAUSE this closes: a stored row's label is written only at toggle
+ *  time (favToggleTab/favToggleArchive overwrite from the live bridge), and
+ *  the v0.5.44 display reconcile is deliberately display-only (liveBridgeLabel
+ *  never persists — an anti-transient design). So a session RENAMED while
+ *  favorited/archived never updates the stored label: while open the tree
+ *  shows the live bridge title (new name), but §Z onDidDispose DELETES
+ *  __ccsdSidToTitle[sid] on close → the display falls back to the frozen
+ *  stored label (old name) — the reported open=new / closed=old oscillation.
+ *
+ *  Why close-time + a ≥2-tick stability filter is safe where the poll-persist
+ *  was not: the v0.5.44 anti-transient concern was CC's brief default title
+ *  ("Claude Code") landing in the stored row before the real title arrives.
+ *  That transient lives well under one 2s poll tick; requiring the SAME title
+ *  in ≥2 consecutive ticks (≥2s stable) AND being the last title before the
+ *  close filters it out — while a genuine user rename is stable for the whole
+ *  remaining open duration. Persisting the last stable title at close is the
+ *  narrowest write that makes the stored row match what the user last saw.
+ *
+ *  Idempotent + mutex-safe: writes only when the row exists AND its label
+ *  differs; tries favorites.json then archive.json (a sid lives in at most
+ *  one — the wrong file is a no-op). Multi-window: only the window that
+ *  hosted the panel observes the close (the bridge is per-EH), so exactly one
+ *  window persists; others pick the change up via their mtime-cached read.
+ *  Map hygiene: entries are deleted on close-transition regardless of whether
+ *  the stability gate passed, so the map cannot grow unboundedly. */
+function persistClosedSessionLabels(forceAll = false): void {
+    try {
+        const g = globalThis as Record<string, unknown>;
+        const titleMap = g.__ccsdSidToTitle as Record<string, string> | undefined;
+        const live = new Set<string>();
+        if (titleMap && typeof titleMap === "object") {
+            for (const sid of Object.keys(titleMap)) {
+                live.add(sid);
+                const raw = titleMap[sid];
+                const t = typeof raw === "string" ? raw.trim() : "";
+                if (!t) continue;
+                const prev = lastSeenBridgeTitles.get(sid);
+                if (prev && prev.title === t) prev.seen += 1;
+                else lastSeenBridgeTitles.set(sid, { title: t, seen: 1 });
+            }
+        }
+        if (lastSeenBridgeTitles.size === 0) return;
+        for (const [sid, entry] of Array.from(lastSeenBridgeTitles)) {
+            // v0.5.46.1 (review [3]): forceAll (the deactivate flush) treats
+            // STILL-OPEN panels as closing too — the EH is going down, their
+            // stable titles are the best-known labels, and skipping them would
+            // lose the rename exactly when the user quits with the panel open.
+            if (!forceAll && live.has(sid)) continue; // still open — keep tracking
+            lastSeenBridgeTitles.delete(sid); // closed — consume the entry either way
+            if (entry.seen < 2) continue; // transient/unstable — never persist
+            // v0.5.46.1 (review [2]): strip the IIFE-painted ★/● tab prefix
+            // before persisting — the §H fallback path can publish the PAINTED
+            // panelTab.title into the bridge when t.__ccsdTitle is falsy (a
+            // title-less update_session_state clobbers it; verified real in CC
+            // 2.1.234's updateSessionState(e,t) caller). The IIFE-side fix
+            // strips at the source (patch.ts §H); this is defense-in-depth for
+            // the durable write. Same char class as activeCcSidOrLoading's strip.
+            const bare = stripTabMarkers(entry.title);
+            const label = bare.length > 64 ? bare.slice(0, 63) + "…" : bare;
+            const apply = (doc: { sessions: { sid: string; label: string }[] }): { changed: boolean } => {
+                const row = doc.sessions.find((s) => s.sid === sid);
+                if (!row || row.label === label) return { changed: false };
+                // v0.5.46.1 (review [6]): deliberately does NOT bump lastSeenAt —
+                // pre-v0.5.46 a close never reordered the tree (sorted by
+                // lastSeenAt desc), and a background persist silently floating
+                // a renamed-but-closed favorite to the top was a behavior change.
+                row.label = label;
+                return { changed: true };
+            };
+            // v0.5.46.1 (review [4]): silent — a background poll must never
+            // surface a user-action error toast; a failed write self-heals on
+            // the next open+close cycle.
+            mutateFavDoc(apply, true);
+            mutateArchiveDoc(apply, true);
+        }
+    } catch {
+        /* best-effort — next tick retries */
+    }
 }
 
 /** Toggle a CC session in/out of favorites. v0.5.3 (F1 HIGH): accepts the
@@ -3316,6 +3421,12 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
     // try/catch is zero-cost insurance against notification spam.
     favoritesWatcher = setInterval(() => {
         try {
+            // v0.5.46.1 (review [7]): persist BEFORE the refreshes — the close
+            // transition is observed here, and running it first means the very
+            // first post-close render already paints the NEW stored label
+            // (previously the refreshes ran first and flashed the old label
+            // for up to one full tick).
+            persistClosedSessionLabels();
             favoritesProvider?.refresh();
             // Keep the Archive view in lockstep with the same 2s tick so external
             // archive.json edits (multi-window, hand-edit) surface. Cheap —
@@ -3459,6 +3570,12 @@ export function activate(_ctx: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+    // v0.5.46.1 (review [1]+[3]): final rename-snapshot flush BEFORE tearing
+    // anything down. forceAll treats still-open panels as closing (the EH is
+    // going down), so a quit/reload within <2s of a panel close — or with the
+    // renamed panel still open — no longer loses the rename to the old label.
+    // Synchronous, idempotent (label-diff guard), silent, CAS-guarded.
+    persistClosedSessionLabels(true);
     // Clear the cross-window repatch poller + any pending Later retry so the
     // EH can shut down cleanly. Both timers are .unref()'d so they wouldn't
     // block shutdown anyway, but explicit clearance is good hygiene.

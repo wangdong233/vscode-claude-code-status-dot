@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.45";
+const INJECT_VERSION = "v0.5.46";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -2472,7 +2472,16 @@ function buildIIFE(resDir: string): string {
         // background tab via activeTab.label and (b) label favorites with the
         // real session title. Best-effort, wrapped in try/catch — a missing
         // title just leaves the bridge entry stale (companion falls back).
-        `try{if(globalThis.__ccsdSidToTitle&&sid){var __tt=t.__ccsdTitle||(t.panelTab&&t.panelTab.title)||"";if(__tt)globalThis.__ccsdSidToTitle[sid]=__tt;}}catch(_){}`,
+        // v0.5.46.1 (review MEDIUM): the panelTab.title FALLBACK must strip the
+        // painted ★/● prefix before publishing — restoring the v0.5.9 documented
+        // invariant "the bridge holds the un-starred logical title". When a
+        // title-less update_session_state clobbers t.__ccsdTitle to falsy (real:
+        // CC's updateSessionState(e,t) caller sends no title), the old fallback
+        // republished the PAINTED "★ X"/"● X" tab title into the bridge every
+        // 500ms, and v0.5.46's close-time persist then durably wrote the
+        // prefixed title as the stored label. Same char class as the paint
+        // ternary below + companion stripTabMarkers (contract-sync pinned).
+        `try{if(globalThis.__ccsdSidToTitle&&sid){var __tt=t.__ccsdTitle||(t.panelTab&&t.panelTab.title?t.panelTab.title.replace(/^[★●]\\s/,""):"");if(__tt)globalThis.__ccsdSidToTitle[sid]=__tt;}}catch(_){}`,
         `try{if(globalThis.__ccsdSidToPanel&&sid){globalThis.__ccsdSidToPanel[sid]=t.panelTab;}}catch(_){}`,
         // v0.5.9 tab-title star prefix. v0.5.8 injected a clickable star INTO
         // the CC webview HTML (Prong 1 prototype-setter monkey-patch + Prong 2

@@ -318,7 +318,7 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 4. **SBI click command 注册 try/catch**（v0.1.13 新增，v0.1.14/v0.1.15/v0.1.16/v0.1.17 沿用）：包住单次 `vs.commands.registerCommand` 调用——注册抛错（重复、API 暂态）只跳过，不传播到 SBI 创建或 SBI timer 创建。
 5. **per-tab setInterval** + **onDidDispose 注册** 各自的 try/catch（v0.1.9 起）。
 
-这 5 层互相独立：聚合链路上的任何失败都不会拖垮 per-tab 主链路，反之亦然；SBI 创建 / timer 创建失败也不会传播到 CC 的 `update_session_state` handler（否则会经逗号操作符链向上抛出，砖化会话状态追踪 + 跳过 per-tab setInterval + 跳过 onDidDispose 注册导致 panel 计数永久泄漏）。
+这 5 层互相独立：聚合链路上的任何失败都不会拖垮 per-tab 主链路，反之亦然；SBI 创建 / timer 创建失败也不会传播到 CC 的 `update_session_state` handler（v0.5.47 起：我们的语句以普通 statement 形式插在 CC 2.1.238 块状 consequent 的块首——任何一行抛错同样会沿语句执行向上传播进 CC 的请求分发，砖化会话状态追踪 + 跳过 per-tab setInterval + 跳过 onDidDispose 注册导致 panel 计数永久泄漏；pre-2.1.238 时期该传播经逗号操作符链，机制已随锚点改形退役）。
 
 **已知限制（诚实声明）**：
 

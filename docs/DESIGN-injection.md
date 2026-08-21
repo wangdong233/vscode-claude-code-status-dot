@@ -38,6 +38,9 @@ if(e.request.type==="rename_tab"){if(this.panelTab){this.panelTab.title=e.reques
 `e.request` 无 sessionId；`this` 无 sid 字段。直接逆向 `sessionPanels` Map 需要 manager 引用，从 `ts` 内部不可达。
 
 ### 3.3 可达方案（采用）：兄弟 handler 捕获 sid
+
+> **⚠️ v0.5.47 / CC 2.1.238 更新**：本节以下展示的 `update_session_state` 锚点是 **pre-2.1.238 逗号表达式形态**，已退役。2.1.238 起 CC 把该 handler 的 consequent 改为 **块 + zod 校验门**（`{let r=uNe(e.request);if(r)this.onSessionStateChanged?.(r.sessionId,r.state,r.title);return{...}}`），当前权威形态见 `patch.ts` 的 `ANCHOR_A` 注释。**改形要点**：块状 consequent 内插入语句是安全的（旧行「block 会孤儿化尾部 else」的约束只适用于替换单表达式 consequent，不适用于在既有块内插入）；我们在块首插入（zod 门之前），保证 stash 总是触发且读取未截断的原始字段；iife 表达式语句须以 `;` 终结（旧逗号链接续不需要）。
+
 `update_session_state` handler 与 `rename_tab` handler **同属一个 `ts` 实例**（同一 panel），且其 `e.request` **含 sessionId**：
 ```js
 else if(e.request.type==="update_session_state")return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}
@@ -53,7 +56,7 @@ webview 发送方（偏移 3133735）：`{type:"update_session_state",sessionId:
 ### 4.1 推荐方案：**单锚点 patch**（update_session_state 捕获 sid + 启动定时器）
 仅改 1 处，定时器每 500ms 重绘并覆盖 CC 的赋值（CC 的 rename_tab 稀疏触发，500ms 内必被重断言）。
 
-**Anchor A（match 串，需 escape 引号）：**
+**Anchor A（match 串，需 escape 引号）——⚠️ pre-2.1.238 形态，现行形态见 patch.ts ANCHOR_A（块 + zod 门，语句插入）：**
 ```
 else if(e.request.type==="update_session_state")return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}
 ```

@@ -618,6 +618,30 @@ if (patchTokens !== null && hookTokens !== null) {
   );
 }
 
+// --- v0.5.47 §GC-skip-set: companion-owned STATE_DIR basenames ⊆ hook GC skip ---
+// Review round-1 (gc-safety): the 2026-08-21 archive.json data loss happened
+// because v0.5.40 added a SECOND companion-owned file to STATE_DIR without
+// updating the hook's GC skip (favorites.json-only since v0.4.0 round-2).
+// §GC.favorites/§GC.archive are per-name behavioral pins; this check is the
+// SET-LEVEL guard — it enumerates every companion non-<sid> STATE_DIR file
+// (the `path.join(FAV_STATE_DIR, "<name>")` literals in extension.ts) and
+// asserts each basename appears in the hook's GC skip line, so introducing
+// file #3 without the skip fails HERE, not in production 7 days later.
+{
+  const companion = read('companion/extension.ts');
+  const basenames = [...companion.matchAll(/path\.join\(FAV_STATE_DIR,\s*"([^"{}$]+)"\)/g)].map((m) => m[1]);
+  const unique = [...new Set(basenames)];
+  check(
+    '§GC-skip-set companion-owned STATE_DIR basenames are all skipped by the hook GC (' +
+      unique.length +
+      ' found: ' +
+      unique.join(', ') +
+      ')',
+    unique.length > 0 && unique.every((n) => new RegExp(`name === '${n}'`).test(hookSrc)),
+    'a companion STATE_DIR file missing from the hook GC skip will be silently REAPED 7 days after its last write (the 2026-08-21 archive.json incident class). Add the basename to the skip line in hooks/cc-status.js — or, if the file is intentionally reap-able, exclude the literal from this enumeration contractually.',
+  );
+}
+
 console.log('');
 if (fail === 0) {
   console.log(`All ${pass} contract-sync checks passed.`);

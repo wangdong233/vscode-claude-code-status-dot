@@ -4010,5 +4010,72 @@ checkPending(
   }
 }
 
+// §GC.archive v0.5.47 (CRITICAL — the 2026-08-21 incident): archive.json was
+// introduced in v0.5.40 into STATE_DIR with the same companion-owned shape as
+// favorites.json, but the v0.4.0-round-2 GC skip listed ONLY favorites.json —
+// so once archive.json's mtime passed 7d, a UserPromptSubmit sweep parsed it
+// (no .state/.since fields), found preserved=false + drifted=false, and
+// REAPED it: the user's entire CC-Archive collection was silently deleted.
+// This twin of §GC.favorites plants a STALE archive.json and asserts it
+// SURVIVES the sweep. Lockstep: basename "archive.json" === companion
+// ARCHIVE_FILE — behavioral pin, same rationale as §GC.favorites.
+{
+  const home = newTempHome();
+  const dir = path.join(home, '.claude', 'cc-tab-status');
+  fs.mkdirSync(dir, { recursive: true });
+  const archPath = path.join(dir, 'archive.json');
+  const staleDoc = {
+    version: 1,
+    updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+    sessions: [
+      {
+        sid: 'cafebabe-1234-5678-9abc-def012345678',
+        label: 'stale-but-archived',
+        cwd: '/Users/example/proj',
+        addedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+        lastSeenAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      },
+    ],
+    files: [],
+  };
+  fs.writeFileSync(archPath, JSON.stringify(staleDoc, null, 2), 'utf8');
+  const staleAt = Date.now() / 1000 - 8 * 24 * 60 * 60;
+  fs.utimesSync(archPath, staleAt, staleAt);
+  const r = spawnSync(process.execPath, [SCRIPT], {
+    input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'gc-trigger-arch', prompt: 'hi' }),
+    env: Object.assign({}, process.env, { HOME: home, USERPROFILE: home, CC_STATUS_GC_INTERVAL_MS: '0' }),
+    encoding: 'utf8',
+  });
+  let survived = false;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(fs.readFileSync(archPath, 'utf8'));
+    survived = parsed && parsed.sessions && parsed.sessions.length === 1;
+  } catch {
+    survived = false;
+  }
+  if (r.status !== 0 || (r.stderr && r.stderr.trim())) {
+    fail++;
+    console.log(
+      '  FAIL  §GC.archive child crash exit=' +
+        r.status +
+        ' stderr=' +
+        JSON.stringify((r.stderr || '').trim().slice(0, 200)),
+    );
+  } else if (survived) {
+    pass++;
+    console.log('  PASS  §GC.archive STALE archive.json survives GC sweep (2026-08-21 data-loss regression guard)');
+  } else {
+    fail++;
+    console.log(
+      '  FAIL  §GC.archive archive.json was reaped by GC — data-loss regression (survived=' +
+        survived +
+        ' parsed=' +
+        JSON.stringify(parsed).slice(0, 200) +
+        ')',
+    );
+  }
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

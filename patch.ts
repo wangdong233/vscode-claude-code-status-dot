@@ -144,7 +144,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in CHANGELOG.md; SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.46";
+const INJECT_VERSION = "v0.5.47";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -186,7 +186,7 @@ const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
  *  --status now surfaces this const so the user can self-check after a CC
  *  upgrade; install does NOT hard-gate (preserves forward compat — a future CC
  *  that keeps the anchor bytes identical still installs cleanly). */
-const LAST_VERIFIED_CC = "2.1.204";
+const LAST_VERIFIED_CC = "2.1.238";
 
 /** Length (hex chars) of the content-hash suffix appended to the writer hook
  *  banner (`cc-status-dot-hook:vX.Y.Z:HASH`). Mirrors STAMP_HASH_LEN — same
@@ -1412,18 +1412,30 @@ const I18N_DICT: Record<string, I18NEntry> = {
 };
 
 // ---------------------------------------------------------------------------
-// --- Anchor strings (verified byte-exact against CC 2.1.204) ---------------
+// --- Anchor strings (verified byte-exact against CC 2.1.238) ---------------
 
 /**
- * Anchor A — the `update_session_state` handler. Same `ts` (per-panel) instance
- * as rename_tab, and its request carries sessionId. We splice side effects into
- * the return expression via the comma operator (NOT a block — a block would
- * orphan the trailing `else` and brick the extension; see injectFresh for the
- * full syntactic constraint) to (1) stash this.__ccsdSid and (2) start the
- * redraw timer before the original return. Exact, must match ONCE.
+ * Anchor A — the `update_session_state` handler. Same `vs` (per-panel) class
+ * as rename_tab, and its request carries sessionId. v0.5.47 (CC 2.1.238): CC
+ * hardened this handler — the consequent is now a BLOCK that routes the raw
+ * request through a zod schema (uNe/Ihr: sessionId + state enum + optional
+ * title truncated to 200 chars) and gates CC's own callback on if(r), while
+ * the response return stays unconditional:
+ *   `else if(e.request.type==="update_session_state"){let r=uNe(e.request);
+ *    if(r)this.onSessionStateChanged?.(r.sessionId,r.state,r.title);
+ *    return{type:"update_session_state_response"}}`
+ * Our side effects are spliced as STATEMENTS at the BLOCK START (before
+ * `let r=uNe(`) — the pre-2.1.238 "no block or the trailing else orphans"
+ * constraint does NOT apply to inserting inside an existing block consequent
+ * (the else binds via the block). The block-start seam preserves the old
+ * semantics exactly: our stashes ALWAYS fire (not gated on schema success)
+ * and read the RAW untruncated e.request.sessionId / e.request.title. Exact,
+ * must match ONCE — keep the else-if prefix + the `}}` tail (a shorter form
+ * aliases the generic SDK-side switch handler at ~offset 2609115 which has
+ * no panelTab/onSessionStateChanged).
  */
 const ANCHOR_A =
-    'else if(e.request.type==="update_session_state")return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}';
+    'else if(e.request.type==="update_session_state"){let r=uNe(e.request);if(r)this.onSessionStateChanged?.(r.sessionId,r.state,r.title);return{type:"update_session_state_response"}}';
 
 /**
  * Anchor B — inside the `rename_tab` handler, just after the title is set and
@@ -2740,6 +2752,135 @@ function currentHookBodyHash(): string | null {
     }
 }
 
+/** v0.5.47: module-level replC builder (same hoist rationale as
+ *  buildReplA/buildReplB — the --self-test-strip round-trip splices Anchor C
+ *  with the EXACT production string). Pure constant. */
+function buildReplC(): string {
+    return 'try{var __csd=this.__ccsdSid;if(__csd){var __ud=globalThis.__ccsdUserDialogSet||(globalThis.__ccsdUserDialogSet=Object.create(null));__ud[__csd]=true}var __ccsdUdRes=await this.sendRequest(e,{type:"user_dialog_request",dialogKind:t.dialogKind,payload:t.payload,toolUseID:t.toolUseID},r);return __ccsdUdRes.result}finally{try{if(__csd&&globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[__csd]}catch(_){}}';
+}
+
+/** v0.5.47: module-level replB builder (same hoist rationale as
+ *  buildReplA — the --self-test-strip round-trip splices with the EXACT
+ *  production strings). Pure function of the iife string. */
+function buildReplB(iife: string): string {
+    return (
+        "this.panelTab.title=e.request.title;this.__ccsdTitle=e.request.title;this.__ccsdPending=!!e.request.hasPendingPermissions;" +
+        // v0.5.35 FIX: the v0.2.5 premise "rename_tab carries sessionId" is FALSE
+        // (verified: webview renameTab producer sends {title,hasPendingPermissions,
+        // hasUnseenCompletion}, NO sessionId). The unconditional this.__ccsdSid=
+        // e.request.sessionId CLEARED the real sid (set undefined) on every rename_tab
+        // — at done CC sends rename_tab(hasUnseenCompletion), clearing sid -> §H read
+        // undefined -> grey (Heisenbug: CCSD_DEBUG appendFileSync slowed the tick,
+        // shifting it past the cleared window -> masked). GUARD: only write if present
+        // (no-op for rename_tab). Symmetric intent with replA (line ~2136)
+        // (the set sync below already uses it) and can fire BEFORE the first
+        // update_session_state — e.g. VS Code restart restoring a persisted
+        // panel, or CC reattaching a session tab title before the full
+        // session-state handshake completes. Without this stash t.__ccsdSid
+        // stays undefined until update_session_state eventually fires, so
+        // onDidDispose's `delete globalThis.__ccsdPendingSet[t.__ccsdSid]`
+        // degrades to a no-op `delete __ps[undefined]` if the panel is
+        // closed in that window → __ccsdPendingSet entry leaks. Idempotent
+        // with replA (both write the same value when both fire).
+        "if(e.request.sessionId)this.__ccsdSid=e.request.sessionId;" +
+        // v0.5.44 BUG1 Layer 1b: rename_tab carries the NEW title but NO
+        // sessionId, and fires repeatedly (truncation, user rename, panel
+        // title reassignment). If update_session_state has ALREADY fired for
+        // this panel (this.__ccsdSid is set), mirror the fresh title into the
+        // bridge NOW so the companion's buildFavSessionRow / liveBridgeLabel
+        // see the renamed label within the SAME event — vs waiting ≤500ms for
+        // the §H tick (which is the window where favoriting a just-renamed
+        // session snapshotted a stale "Claude Code" / old label, BUG1). Also
+        // re-publishes sid→panel idempotently (cheap; the stored panelTab
+        // reference is stable). No-op when this.__ccsdSid is still undefined
+        // (resumed session pre-update_session_state) — Layer 1a in replA
+        // covers it the moment update_session_state fires. Statement form
+        // (`;`-terminated) matches replB's style; gated on this.__ccsdSid so
+        // it never registers under an undefined key.
+        'if(this.__ccsdSid&&!this.__ccsdDisposed){(globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[this.__ccsdSid]=e.request.title||"";(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[this.__ccsdSid]=this.panelTab;}' +
+        // v0.2.5 (problem 1 fix): mirror the per-panel __ccsdPending flag into
+        // a window-scoped globalThis set so the §F 4-light aggregation (which
+        // scans STATE_DIR files, not panel objects) can pick up the
+        // authoritative hasPendingPermissions signal WITHOUT waiting for the
+        // Notification hook → cc-status.js spawn → atomic write → next 500ms
+        // reader tick chain. The set is keyed by e.request.sessionId (the
+        // same sid the aggregation loop extracts via files[i].slice(0,-5)).
+        // try/catch(_): the outer event parameter is `e` — using `catch(e)`
+        // here would shadow it for any subsequent reference in this handler.
+        // onDidDispose (§Z) deletes the entry on panel close; a CC crash
+        // leaving a stale entry is bounded by the same decay chain
+        // (running>30min mtime→idle) that governs the file-pending branch.
+        // v0.2.5 round-2 (LOW): let (block-scoped) instead of var — var
+        // hoists __ps to the rename_tab handler function top, leaking the
+        // binding past the try block into the trailing iife + `;let r;…`
+        // tail. No bug today (the tail does not reference __ps), but a
+        // footgun for any future edit at the end of replB. let keeps the
+        // binding local to the try block; behavior inside the try is
+        // identical to var.
+        "try{let __ps=globalThis.__ccsdPendingSet||(globalThis.__ccsdPendingSet=Object.create(null));if(this.__ccsdSid){if(e.request.hasPendingPermissions){__ps[this.__ccsdSid]=true}else{delete __ps[this.__ccsdSid]}}}catch(_){}" +
+        iife +
+        ";let r;if(e.request.hasPendingPermissions)"
+    );
+}
+
+/** v0.5.47: module-level replA builder (hoisted out of injectFresh so the
+ *  --self-test-strip round-trip can splice with the EXACT production strings
+ *  — the strip patterns and this builder are now lockstep-tested together;
+ *  see the LIFECYCLE-LOCKSTEP comment in stripIifeInPlace). Pure function of
+ *  the iife string; behavior byte-identical to the former inline const. */
+function buildReplA(iife: string): string {
+    return (
+        'else if(e.request.type==="update_session_state"){' +
+        "this.__ccsdSid=e.request.sessionId;this.__ccsdTitle=e.request.title;" +
+        // v0.5.44 BUG1+BUG2 Layer 1a (v0.5.47 statement form): synchronously
+        // mirror sid→title AND sid→panel into the globalThis bridge HERE, on
+        // every update_session_state (the ONE event that carries sessionId) —
+        // NOT deferred to the §A preamble (which runs at most once per panel
+        // via the t.__ccsdDotStarted guard) nor to the §H 500ms tick.
+        // White-box root cause: for a resumed session rename_tab fires FIRST
+        // and carries no sessionId → t.__ccsdSid stays undefined → §A's
+        // `if(t.__ccsdSid)` gate skips registration AND, because §A then sets
+        // t.__ccsdDotStarted=true, the later update_session_state hits the
+        // `if(t.__ccsdDotStarted)return` early-exit so §A NEVER re-registers.
+        // Only the §H tick recovered it (≤500ms lag), and during that window
+        // activeCcSidOrLoading's panelMap.active scan missed the panel →
+        // loading sentinel → status bar + token counter freeze (BUG2). Writing
+        // here (before the zod gate) registers the panel the instant
+        // update_session_state fires, bypassing the once-guard entirely. The
+        // same write also keeps __ccsdSidToTitle fresh so buildFavSessionRow /
+        // liveBridgeLabel read the real title instead of a stale "Claude Code"
+        // default (BUG1). Purely additive + idempotent — §A and the §H tick
+        // write the same values. `(globalThis.__ccsdX||(globalThis.__ccsdX=…))`
+        // lazily inits the maps (mirrors §A's own init) so order-of-fire never
+        // matters; the !__ccsdDisposed guard prevents post-teardown in-flight
+        // events from re-adding zombie panel entries.
+        'if(e.request.sessionId&&!this.__ccsdDisposed){(globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[e.request.sessionId]=(e.request.title||"");(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[e.request.sessionId]=this.panelTab;}' +
+        // v0.2.4: also publish the active sid to globalThis so the token SBI
+        // tick (window-scoped, outside this panel closure) picks it up.
+        //
+        // v0.2.4 (business-logic HIGH fix): gate the publish on this panel
+        // being the currently-active one (this.panelTab.active===true). The
+        // prior unconditional publish meant ANY panel's update_session_state
+        // event — including background panels CC heartbeats state-refresh —
+        // overwrote __ccsdActiveSid, then the per-panel tick (500ms later)
+        // overwrote it back to the active panel. Two CC panels A(active)+B
+        // (background) therefore oscillated the token SBI between sessions
+        // every 500ms. With the gate the event-driven path and the
+        // tick-driven path agree: only the active panel publishes.
+        "if(this.panelTab&&this.panelTab.active===true)globalThis.__ccsdActiveSid=e.request.sessionId;" +
+        iife +
+        // (the iife is `(function(t){…})(this)` — an expression statement; the
+        // `;` below terminates it. The pre-2.1.238 form chained it with the
+        // comma operator instead, so no semicolon was needed there.)
+        ";" +
+        // CC 2.1.238 original block body, preserved verbatim (zod gate →
+        // validated callback → unconditional response). Our stashes above read
+        // the RAW fields, so the 200-char title truncation in the parsed r.*
+        // does not affect __ccsdTitle / the bridge.
+        'let r=uNe(e.request);if(r)this.onSessionStateChanged?.(r.sessionId,r.state,r.title);return{type:"update_session_state_response"}}'
+    );
+}
+
 /** Validate anchors, back up once, and write the IIFE into extension.js.
  *  `src` is the CURRENT unpatched content of extension.js (must NOT contain
  *  INJECT_MARKER — pre-v0.1.3 originals never do; restoreExtension yields one
@@ -2771,62 +2912,17 @@ function injectFresh(extJs: string, src: string): void {
 
     const iife = buildIIFE(RUNTIME_RES_DIR);
 
-    // Anchor A: splice side effects into the return expression via the comma operator.
-    // IMPORTANT: we must NOT wrap the consequent in a block. The original chain is
-    //   `else if(update_session_state)return ...,{...};else if(show_notification){...}`
-    // where the trailing `;` ends the ReturnStatement and the following `else` still
-    // binds to this if. If we replaced the consequent with `{...}` the `};` would
-    // complete the IfStatement and orphan the next `else` → SyntaxError. Keeping the
-    // consequent as a single `return a,b,c,d` expression preserves the binding.
-    const replA =
-        'else if(e.request.type==="update_session_state")return ' +
-        "this.__ccsdSid=e.request.sessionId,this.__ccsdTitle=e.request.title," +
-        // v0.5.44 BUG1+BUG2 Layer 1a: synchronously mirror sid→title AND sid→panel
-        // into the globalThis bridge HERE, on every update_session_state (the ONE
-        // event that carries sessionId) — NOT deferred to the §A preamble (which
-        // runs at most once per panel via the t.__ccsdDotStarted guard) nor to the
-        // §H 500ms tick. White-box root cause: for a resumed session rename_tab
-        // fires FIRST and carries no sessionId → t.__ccsdSid stays undefined →
-        // §A's `if(t.__ccsdSid)` gate skips registration AND, because §A then
-        // sets t.__ccsdDotStarted=true, the later update_session_state hits the
-        // `if(t.__ccsdDotStarted)return` early-exit so §A NEVER re-registers.
-        // Only the §H tick recovered it (≤500ms lag), and during that window
-        // activeCcSidOrLoading's panelMap.active scan missed the panel → loading
-        // sentinel → status bar + token counter freeze (BUG2). Writing here in
-        // the comma-chain (before iife) registers the panel the instant
-        // update_session_state fires, bypassing the once-guard entirely. The same
-        // write also keeps __ccsdSidToTitle fresh so buildFavSessionRow /
-        // liveBridgeLabel read the real title instead of a stale "Claude Code"
-        // default (BUG1). Purely additive + idempotent — §A and the §H tick write
-        // the same values; this segment just removes the once-guard + 500ms
-        // delay. `(globalThis.__ccsdX||(globalThis.__ccsdX=…))` lazily inits the
-        // maps (mirrors §A's own init) so order-of-fire never matters. try/ternary
-        // form keeps it a single comma-operand (no block — see the binding comment
-        // above) and no-ops safely when sessionId is absent (defensive; this
-        // handler always carries it).
-        '(e.request.sessionId&&!this.__ccsdDisposed?((globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[e.request.sessionId]=(e.request.title||""),(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[e.request.sessionId]=this.panelTab):0),' +
-        // v0.2.4: also publish the active sid to globalThis so the token SBI
-        // tick (window-scoped, outside this panel closure) picks it up.
-        //
-        // v0.2.4 (business-logic HIGH fix): gate the publish on this panel
-        // being the currently-active one (this.panelTab.active===true). The
-        // prior unconditional publish meant ANY panel's update_session_state
-        // event — including background panels CC heartbeats state-refresh —
-        // overwrote __ccsdActiveSid, then the per-panel tick (500ms later)
-        // overwrote it back to the active panel. Two CC panels A(active)+B
-        // (background) therefore oscillated the token SBI between sessions
-        // every 500ms — exactly the oscillation v0.2.4 set out to fix, but
-        // only the per-panel tick path was gated (line ~1452 of buildIIFE);
-        // this event-driven publish path was missed. With the gate the
-        // event-driven path and the tick-driven path agree: only the active
-        // panel publishes. The `(...)` wrapping preserves the comma-expression
-        // form so the trailing `,{type:...}` still binds to the return
-        // statement (cannot switch to a block — see the comment at the top
-        // of injectFresh re: the minified `else if(...)return a,b,c` shape).
-        "(this.panelTab&&this.panelTab.active===true?(globalThis.__ccsdActiveSid=e.request.sessionId):0)," +
-        iife +
-        ',this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}';
-
+    // Anchor A (v0.5.47, CC 2.1.238 shape): the consequent is now a BLOCK with
+    // a zod gate. We splice our side effects as STATEMENTS at the BLOCK START —
+    // inserting inside an existing block consequent can never orphan the
+    // trailing `else` (the old comma-operator constraint applied only to
+    // REPLACING a single-expression consequent). The original block body
+    // (`let r=uNe(...)...return{...}}`) is preserved VERBATIM after our
+    // statements, so CC's validated callback + unconditional response behave
+    // exactly as shipped. Block-start (not inside if(r)) keeps our stashes
+    // always-fire + reading the RAW untruncated e.request fields, matching the
+    // pre-2.1.238 semantics.
+    const replA = buildReplA(iife);
     let next = src.replace(ANCHOR_A, replA);
     if (!next.includes(INJECT_MARKER)) fail("Anchor A replacement did not apply. No files were modified.");
 
@@ -2838,63 +2934,7 @@ function injectFresh(extJs: string, src: string): void {
         // stashed value would otherwise go stale. notify() appends
         // "["+__ccsdTitle+"]" to the notification body, so keeping it fresh
         // matters for the message shown to the user.
-        const replB =
-            "this.panelTab.title=e.request.title;this.__ccsdTitle=e.request.title;this.__ccsdPending=!!e.request.hasPendingPermissions;" +
-            // v0.5.35 FIX: the v0.2.5 premise "rename_tab carries sessionId" is FALSE
-            // (verified: webview renameTab producer sends {title,hasPendingPermissions,
-            // hasUnseenCompletion}, NO sessionId). The unconditional this.__ccsdSid=
-            // e.request.sessionId CLEARED the real sid (set undefined) on every rename_tab
-            // — at done CC sends rename_tab(hasUnseenCompletion), clearing sid -> §H read
-            // undefined -> grey (Heisenbug: CCSD_DEBUG appendFileSync slowed the tick,
-            // shifting it past the cleared window -> masked). GUARD: only write if present
-            // (no-op for rename_tab). Symmetric intent with replA (line ~2136)
-            // (the set sync below already uses it) and can fire BEFORE the first
-            // update_session_state — e.g. VS Code restart restoring a persisted
-            // panel, or CC reattaching a session tab title before the full
-            // session-state handshake completes. Without this stash t.__ccsdSid
-            // stays undefined until update_session_state eventually fires, so
-            // onDidDispose's `delete globalThis.__ccsdPendingSet[t.__ccsdSid]`
-            // degrades to a no-op `delete __ps[undefined]` if the panel is
-            // closed in that window → __ccsdPendingSet entry leaks. Idempotent
-            // with replA (both write the same value when both fire).
-            "if(e.request.sessionId)this.__ccsdSid=e.request.sessionId;" +
-            // v0.5.44 BUG1 Layer 1b: rename_tab carries the NEW title but NO
-            // sessionId, and fires repeatedly (truncation, user rename, panel
-            // title reassignment). If update_session_state has ALREADY fired for
-            // this panel (this.__ccsdSid is set), mirror the fresh title into the
-            // bridge NOW so the companion's buildFavSessionRow / liveBridgeLabel
-            // see the renamed label within the SAME event — vs waiting ≤500ms for
-            // the §H tick (which is the window where favoriting a just-renamed
-            // session snapshotted a stale "Claude Code" / old label, BUG1). Also
-            // re-publishes sid→panel idempotently (cheap; the stored panelTab
-            // reference is stable). No-op when this.__ccsdSid is still undefined
-            // (resumed session pre-update_session_state) — Layer 1a in replA
-            // covers it the moment update_session_state fires. Statement form
-            // (`;`-terminated) matches replB's style; gated on this.__ccsdSid so
-            // it never registers under an undefined key.
-            'if(this.__ccsdSid&&!this.__ccsdDisposed){(globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[this.__ccsdSid]=e.request.title||"";(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[this.__ccsdSid]=this.panelTab;}' +
-            // v0.2.5 (problem 1 fix): mirror the per-panel __ccsdPending flag into
-            // a window-scoped globalThis set so the §F 4-light aggregation (which
-            // scans STATE_DIR files, not panel objects) can pick up the
-            // authoritative hasPendingPermissions signal WITHOUT waiting for the
-            // Notification hook → cc-status.js spawn → atomic write → next 500ms
-            // reader tick chain. The set is keyed by e.request.sessionId (the
-            // same sid the aggregation loop extracts via files[i].slice(0,-5)).
-            // try/catch(_): the outer event parameter is `e` — using `catch(e)`
-            // here would shadow it for any subsequent reference in this handler.
-            // onDidDispose (§Z) deletes the entry on panel close; a CC crash
-            // leaving a stale entry is bounded by the same decay chain
-            // (running>30min mtime→idle) that governs the file-pending branch.
-            // v0.2.5 round-2 (LOW): let (block-scoped) instead of var — var
-            // hoists __ps to the rename_tab handler function top, leaking the
-            // binding past the try block into the trailing iife + `;let r;…`
-            // tail. No bug today (the tail does not reference __ps), but a
-            // footgun for any future edit at the end of replB. let keeps the
-            // binding local to the try block; behavior inside the try is
-            // identical to var.
-            "try{let __ps=globalThis.__ccsdPendingSet||(globalThis.__ccsdPendingSet=Object.create(null));if(this.__ccsdSid){if(e.request.hasPendingPermissions){__ps[this.__ccsdSid]=true}else{delete __ps[this.__ccsdSid]}}}catch(_){}" +
-            iife +
-            ";let r;if(e.request.hasPendingPermissions)";
+        const replB = buildReplB(iife);
         next = next.replace(ANCHOR_B, replB);
         if (countOccurrences(next, INJECT_MARKER) < 2) {
             fail("Anchor B replacement did not apply. No files were modified.");
@@ -2932,8 +2972,7 @@ function injectFresh(extJs: string, src: string): void {
         // if(this.__ccsdSid) guard inside the try prevented the set, so a
         // never-set sid yields no-op delete on an unused key. The sendRequest
         // call + args + .result return are preserved byte-for-byte.
-        const replC =
-            'try{var __csd=this.__ccsdSid;if(__csd){var __ud=globalThis.__ccsdUserDialogSet||(globalThis.__ccsdUserDialogSet=Object.create(null));__ud[__csd]=true}var __ccsdUdRes=await this.sendRequest(e,{type:"user_dialog_request",dialogKind:t.dialogKind,payload:t.payload,toolUseID:t.toolUseID},r);return __ccsdUdRes.result}finally{try{if(__csd&&globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[__csd]}catch(_){}}';
+        const replC = buildReplC();
         next = next.replace(ANCHOR_C, replC);
         if (!next.includes("__ccsdUserDialogSet")) {
             fail("Anchor C replacement did not apply. No files were modified.");
@@ -2997,12 +3036,17 @@ function bakedResPath(content: string): string | null {
  *  to wait for the next CC update to reset extension.js to fresh).
  *
  *  Strategy: at each anchor we injected a single contiguous segment —
- *    anchor A: `this.__ccsdSid=…,this.__ccsdTitle=…,` + IIFE + `,`
+ *    anchor A (v0.5.47 block form, CC 2.1.238): `this.__ccsdSid=…;this.
+ *              __ccsdTitle=…;` + bridge/publish statements + IIFE + `;`
+ *              (at the BLOCK START, before CC's `let r=uNe(…)`)
+ *    anchor A (legacy pre-2.1.238 comma form): stash + segments + IIFE + `,`
  *              (between `return ` and `this.onSessionStateChanged`)
- *    anchor B: `this.__ccsdTitle=…;this.__ccsdPending=…;` + IIFE + `;`
- *              (between `…title=…;` and `let r`)
+ *    anchor B: `this.__ccsdTitle=…;this.__ccsdPending=…;` + stashes + IIFE +
+ *              `;` (between `…title=…;` and `let r`)
+ *    anchor C: replC's try/finally wrapper — INVERTED by segC (restore the
+ *              pristine ANCHOR_C bytes; not a plain removal).
  *  We match each segment as ONE regex (stash + IIFE + trailing separator) so
- *  removing it leaves the original byte sequence intact. The IIFE banner is
+ *  removing it leaves the original byte sequence intact (C: restored). The IIFE banner is
  *  `/*cc-status-dot-injected:…*\/(function(t){…})(this)` and the body has no
  *  internal `})(this)` (setInterval/arrows close with `},N)` or `})`), so
  *  non-greedy `[\s\S]*?` to the first `})(this)` is safe.
@@ -3021,43 +3065,67 @@ function stripIifeInPlace(content: string): string | null {
     // CC code), so a failed match here means the on-disk form is something we
     // don't recognize — bail to the safe RES-rewrite path.
     //
-    // v0.2.4 form note: replA now includes a `globalThis.__ccsdActiveSid=`
-    // assignment between __ccsdTitle and the IIFE banner — the regex below
-    // accepts BOTH the legacy (pre-v0.2.4) and the new form by making the
-    // globalThis assignment optional via `(?:globalThis\\.__ccsdActiveSid=[^,]*,)?`.
-    //
-    // v0.2.4 form note: replA's publish is now gated as
-    //   `(this.panelTab&&this.panelTab.active===true?(globalThis.__ccsdActiveSid=e.request.sessionId):0),`
-    // (business-logic HIGH fix — multi-panel oscillation). The optional
-    // middle group is widened from the literal `globalThis.__ccsdActiveSid=
-    // e.request.sessionId,` form to `[^,]*,` "any comma-free segment then a
-    // comma" — this still anchors on the leading __ccsdTitle= and the
-    // following `/*cc-status-dot-injected:…*/` banner, and accepts all
-    // historical and future single-segment (no embedded comma) publish
-    // expressions. A future replA that embeds a comma in this slot would
-    // break stripIifeInPlace — the post-strip INJECT_MARKER-free + compile
-    // checks below are the safety net.
+    // (Historical v0.2.4 form notes retired in v0.5.47 round-3 — they
+    // described the pre-widening optional-group / `[^,]*,` comma-free middle
+    // which no longer exists in any pattern below. The current contract for
+    // BOTH segA forms and segB: a single non-greedy [\s\S]*? middle from the
+    // (injection-unique) stash pair to the FIRST IIFE banner — absorbing all
+    // historical and future middle statements, embedded commas included. The
+    // --self-test-strip round-trip, whose legacy fixture embeds commas in the
+    // middle, pins this mechanically.)
+    // v0.5.47 LIFECYCLE-LOCKSTEP: the v0.5.47 ANCHOR_A rewrite (CC 2.1.238
+    // block/zod-gate form) changed the emitted replA from a comma-chain to
+    // semicolon-terminated statements + if-blocks — the legacy segA below
+    // stopped matching (empirically 0 hits on the live v0.5.47 file, review
+    // round-1 MEDIUM), silently killing the stale+no-.bak recovery path. The
+    // block-form pattern anchors on the (still unique) leading stash pair and
+    // strips through the iife's `})(this);` terminator; the widened
+    // [\s\S]*? absorbs whatever statements future replA revisions insert
+    // between the stash and the banner (the banner is always the first one
+    // after the stash). The legacy comma form stays as a fallback for
+    // pre-2.1.238-era injected files (middle widened round-2: v0.5.44-v0.5.46
+    // emitted TWO comma-terminated middle segments — Layer-1a + the publish
+    // ternary — which the old one-segment (?:[^,]*?,)? could never match; the
+    // widened form covers all comma-era revisions). segB's middle is likewise widened to
+    // [\s\S]*? — it had been DEAD since v0.5.33 (replB gained the guarded
+    // sid stash between __ccsdPending and the try-block). The post-strip
+    // INJECT_MARKER-free + assertCompiles checks remain the safety net; the
+    // --self-test-strip round-trip now pins patterns↔builders mechanically.
+    const segA_block =
+        /this\.__ccsdSid=e\.request\.sessionId;this\.__ccsdTitle=e\.request\.title;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
     const segA =
-        /this\.__ccsdSid=e\.request\.sessionId,this\.__ccsdTitle=e\.request\.title,(?:[^,]*?,)?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\),/g;
+        /this\.__ccsdSid=e\.request\.sessionId,this\.__ccsdTitle=e\.request\.title,[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\),/g;
     // Anchor B segment: stash fields + (v0.2.5: optional pending-set sync) +
     // IIFE + trailing semicolon. The leading
     // `this.__ccsdTitle=…;this.__ccsdPending=…` pair is unique to our injection.
-    // v0.2.5 widened the form: between the __ccsdPending assignment and the
-    // IIFE banner, replB now emits a try{...}catch(_){} block that maintains
-    // globalThis.__ccsdPendingSet. The block has no nested IIFE marker and no
-    // `})(this)` form, so the same non-greedy match to the first `})(this);`
-    // still captures the whole segment. Pre-v0.2.5 strips are accepted via the
-    // optional `(?:try\{[\s\S]*?\}catch\(_\)\{\})?` group (matches the v0.2.5
-    // try-block OR nothing, never crosses the IIFE banner).
+    // v0.5.47: the middle is a plain non-greedy [\s\S]*? to the FIRST IIFE
+    // banner after the (injection-unique) stash pair — it absorbs everything
+    // replB has ever emitted between them (the v0.2.5 pending-set try/catch,
+    // the v0.5.35 guarded sid stash, the v0.5.44 Layer-1b bridge block) and
+    // whatever future revisions add; the historical optional-group forms are
+    // retired (see the segA note above).
     const segB =
-        /this\.__ccsdTitle=e\.request\.title;this\.__ccsdPending=!!e\.request\.hasPendingPermissions;(?:try\{[\s\S]*?\}catch\(_\)\{\})?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
+        /this\.__ccsdTitle=e\.request\.title;this\.__ccsdPending=!!e\.request\.hasPendingPermissions;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
 
     // Pre-check: at least one segment must match, otherwise this isn't ours.
-    if (!segA.test(content) && !segB.test(content)) return null;
+    if (!segA_block.test(content) && !segA.test(content) && !segB.test(content)) return null;
+    segA_block.lastIndex = 0;
     segA.lastIndex = 0;
     segB.lastIndex = 0;
 
-    let out = content.replace(segA, "").replace(segB, "");
+    // v0.5.47 round-2 [2]: ALSO invert Anchor C. The C splice (replC) wraps
+    // ANCHOR_C's sendRequest in a try/finally maintaining __ccsdUserDialogSet
+    // and carries NO banner, so the marker-free check cannot see it — without
+    // this inversion a strip-recovered file keeps the FROZEN old replC while
+    // getting a fresh IIFE (they couple only through the shared globalThis
+    // contract), and injectFresh's post-strip cCount===0 would misreport
+    // "consent/refusal fix INACTIVE". segC restores the pristine byte-exact
+    // ANCHOR_C (replace, not remove — C's original bytes were consumed by
+    // replC at inject time). Widened middles absorb future replC tweaks; the
+    // --self-test-strip round-trip now splices C too, pinning this inversion.
+    const segC =
+        /try\{var __csd=this\.__ccsdSid;if\(__csd\)\{[\s\S]*?return __ccsdUdRes\.result\}finally\{try\{[\s\S]*?catch\(_\)\{\}\}/g;
+    let out = content.replace(segA_block, "").replace(segA, "").replace(segB, "").replace(segC, ANCHOR_C);
 
     // Sanity check the result compiles (anchor shape preserved). If anything
     // looks off, return null so the caller falls through to the safe RES
@@ -5033,6 +5101,95 @@ function reloadHint(): void {
 // ---------------------------------------------------------------------------
 // Self-test I/O — fixture corpus for the pure patcher functions.
 //
+// v0.5.47 --self-test-strip: INJECT→STRIP round-trip regression (review
+// round-1 MEDIUM — stripIifeInPlace's patterns had drifted from the emitted
+// replA/replB forms TWICE (segB dead since v0.5.33, segA dead since the
+// v0.5.47 block-form rewrite) with ZERO test coverage, silently killing the
+// stale+no-.bak recovery path. This pins the LIFECYCLE-LOCKSTEP contract
+// mechanically: a scaffold carrying the pristine anchors is spliced with the
+// EXACT production builders (buildReplA/buildReplB over the real buildIIFE
+// output), verified patched+compilable, then stripped — and the result must
+// equal the pristine scaffold BYTE-FOR-BYTE. Any future replA/replB form
+// change that forgets the strip patterns fails here (and in
+// hooks/test-strip-roundtrip.mjs which spawns this subcommand).
+function runSelfTestStrip(): void {
+    // Scaffold: valid JS embedding ANCHOR_A (as an else-if after a dummy if)
+    // and ANCHOR_B (inside a block; the trailing `if(...)` is completed with a
+    // body so the scaffold compiles — in real CC code the same `if` continues
+    // with CC's icon ladder, which we do not need for the round-trip).
+    const scaffold =
+        "async function processRequest(e,t){" +
+        'if(e.request.type==="noop")return null;' +
+        ANCHOR_A +
+        "}" +
+        "async function renameTab(e){if(this.panelTab){" +
+        ANCHOR_B +
+        "r=1;}}" +
+        // v0.5.47 round-2 [2]: Anchor C in the round-trip — replC's inversion
+        // (segC) is now pinned too; without C in the scaffold the "byte-exact"
+        // claim silently blessed an incomplete strip.
+        "async function requestUserDialog(e,t,r){if(!ok)return null;" +
+        ANCHOR_C +
+        "}";
+    const iife = buildIIFE(RUNTIME_RES_DIR);
+    // Splice EXACTLY as injectFresh does (same replace order, same builders).
+    let patched = scaffold.replace(ANCHOR_A, buildReplA(iife));
+    patched = patched.replace(ANCHOR_B, buildReplB(iife));
+    patched = patched.replace(ANCHOR_C, buildReplC());
+    // v0.5.47 round-2 [1]: LEGACY comma-form fixture — v0.5.44-v0.5.46 emitted
+    // TWO comma-terminated middle segments (Layer-1a ternary + publish
+    // ternary) which the pre-round-2 legacy segA could never match. This
+    // synthetic region pins the widened legacy pattern so the comma-era
+    // recovery path cannot silently die again.
+    const legacyRegion =
+        'async function legacy(e){if(e.request.type==="x")return null;else if(e.request.type==="update_session_state")return this.__ccsdSid=e.request.sessionId,this.__ccsdTitle=e.request.title,(a,(b,c)),(d),/*cc-status-dot-injected:v0.5.46:test*/(function(t){})(this),this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"};return null}';
+    const legacyPristine =
+        'async function legacy(e){if(e.request.type==="x")return null;else if(e.request.type==="update_session_state")return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"};return null}';
+    const legacyStripped = stripIifeInPlace(legacyRegion);
+    let failures: string[] = [];
+    if (legacyStripped !== legacyPristine) {
+        failures.push(
+            "legacy comma-form region did not strip to pristine (segA legacy pattern dead for v0.5.44-46 forms — keep the widened middle in lockstep)",
+        );
+    }
+    if (!isExtensionPatched(patched)) failures.push("spliced output carries no INJECT_MARKER");
+    try {
+        assertCompiles(patched, "self-test-strip patched scaffold");
+    } catch (e) {
+        failures.push("patched scaffold does not compile: " + String(e).slice(0, 200));
+    }
+    const stripped = stripIifeInPlace(patched);
+    if (stripped === null) {
+        failures.push(
+            "stripIifeInPlace returned null (patterns no longer match the emitted form — update the segA_block/segA/segB/segC patterns in lockstep with buildReplA/buildReplB/buildReplC)",
+        );
+    } else if (stripped !== scaffold) {
+        failures.push(
+            "strip round-trip is not byte-exact (length " + stripped.length + " vs pristine " + scaffold.length + ")",
+        );
+    }
+    if (stripped === null) {
+        // v0.5.47 debug aid: dump the spliced region heads so pattern drift is
+        // diagnosable from the failure output alone.
+        const idx = patched.indexOf("this.__ccsdSid=e.request.sessionId");
+        console.error(
+            "[cc-status-dot][self-test-strip] A-region head: " +
+                JSON.stringify(patched.slice(Math.max(0, idx - 40), idx + 260)),
+        );
+        const idxB = patched.indexOf("this.__ccsdPending=!!");
+        console.error(
+            "[cc-status-dot][self-test-strip] B-region head: " + JSON.stringify(patched.slice(idxB, idxB + 260)),
+        );
+    }
+    if (failures.length > 0) {
+        for (const f of failures) console.error("[cc-status-dot][self-test-strip] FAIL: " + f);
+        process.exit(1);
+    }
+    console.log(
+        "[cc-status-dot][self-test-strip] OK: inject→strip round-trip byte-exact over " + patched.length + " chars",
+    );
+}
+
 // Invoked via `--self-test-io`. Emits a JSON array of { name, pass, expected,
 // actual } rows; hooks/test-patcher-io.mjs parses the array and asserts every
 // row pass===true. Closes the e2e-review HIGH gap: wireHooks /
@@ -5201,6 +5358,10 @@ function run(argv: string[]): void {
     if (args.includes("--check-iife")) {
         // Dev: dump the injected IIFE string for syntax verification (node --check).
         console.log(buildIIFE(RUNTIME_RES_DIR));
+        return;
+    }
+    if (args.includes("--self-test-strip")) {
+        runSelfTestStrip();
         return;
     }
     if (args.includes("--self-test-io")) {

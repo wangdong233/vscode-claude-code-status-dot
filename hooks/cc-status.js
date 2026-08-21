@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.1:5dcab6fd*/
+/*cc-status-dot-hook:v0.2.1:a0d29107*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -1914,7 +1914,17 @@ async function main() {
           // basename; test-contract-sync.mjs §STATE_DIR pins the dir equality,
           // and the literal "favorites.json" is pinned by test-favorites.mjs
           // FAV.4 (form-only) + this new §GC.favorites test (behavioral).
-          if (name === 'favorites.json') continue;
+          // v0.5.47 (CRITICAL data-loss fix — the 2026-08-21 archive.json
+          // incident): archive.json (v0.5.40) lives in STATE_DIR with the SAME
+          // companion-owned shape but was NEVER added to this skip when it was
+          // introduced — the GC parsed it, found preserved=false +
+          // drifted=false, and REAPED it once its mtime passed 7d. The entire
+          // CC-Archive collection was silently deleted on a UserPromptSubmit
+          // sweep; favorites.json survived only because a v0.5.46
+          // close-time-persist had happened to touch it that morning (luck,
+          // not protection). Skip BOTH companion-owned files; the §GC.favorites
+          // test now has an §GC.archive twin pinning this.
+          if (name === 'favorites.json' || name === 'archive.json') continue;
           // v0.2.7 (Q1 fix): isTokens MUST be tested BEFORE isJson — the file
           // `<sid>.tokens.json` ends with `.json` so the bare isJson check would
           // otherwise match it, then JSON.parse would treat it as a state file

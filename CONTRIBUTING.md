@@ -54,7 +54,7 @@ CC 每次 minified 代码漂移都可能导致 anchor 对不上。规则：
   - `patch.ts`：`OUR_SVGS`、`HOOK_EVENTS`、`buildIIFE` 的状态分支。
   - `hooks/cc-status.js`：`deriveStatus` 的 case。
   - `resources/`：新增 / 改名 SVG 文件。
-  - `README.md` / `README.en.md` / `docs/USAGE.md` / `CHANGELOG.md` / `package.json`。
+  - `README.md` / `README.en.md` / `docs/USAGE.md` / `companion/CHANGELOG.md (archived at 0.5.9)` / `package.json`。
 - 中英文 README 保持同步。
 - 改 `extension.js` 相关逻辑时，确保 `--revert` 路径仍能干净还原。
 - **不要引入**已被架构审查否决的概念（见 [`docs/AUDIT.md`](docs/AUDIT.md) F-6）：watchdog、VSCode 通知 / `showInformationMessage`、`src/` 目录、独立 VSCode 扩展、`status-dot/` 目录、`write-state.js`。

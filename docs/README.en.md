@@ -27,7 +27,7 @@
 
 **① Tab five-state status dots**　Every CC session tab's Claude icon changes color by state — 🟡 running / 🟢 done / 🔴 interrupted fast-flash / ⚪ idle / 🔵 awaiting input. 🔵 awaiting input has two triggers: (a) when CC pops a permission dialog, it yields to CC's native blue dot (never overrides it); (b) when CC's reply carries an "awaiting your decision" semantic (`let me know` / `your call` / `please confirm` / `等你确认` etc.), the tab automatically turns blue (overriding the running-yellow / done-green) — so at a glance you can tell whether it's truly done or waiting on you to say something, no need to stare at the tab guessing. Favorited session tabs get a **★** prefix on the title + a gold line under the icon; archived session tabs get a **●** prefix + a grey line under the icon (favorites and archives are mutually exclusive — a session is in at most one). Shown in both the top tab bar and the left-side "Open Editors" view, synced on both sides.
 
-**② Sidebar CC Favorites / CC Archive views**　Two new views in the Explorer sidebar — CC Favorites + CC Archive (mutually exclusive: a session lives in at most one); the Favorites view pins frequently-used sessions/files together, the Archive view stashes sessions you don't need for now. Session icons show open = solid chat bubble / closed = outline bubble, click to jump to it or resume into a new panel; inline buttons toggle between them — Favorites view [Archive][Open][Remove], Archive view [Favorite][Open][Remove], clicking Archive/Favorite moves it to the other view automatically. Right-click a closed session to copy the `claude -r <sid>` command.
+**② Sidebar CC Favorites / CC Archive views**　Two new views in the Explorer sidebar — CC Favorites + CC Archive (mutually exclusive: a session lives in at most one); the Favorites view pins frequently-used sessions/files together, the Archive view stashes sessions you don't need for now. Session icons show open = solid chat bubble / closed = outline bubble, click to jump to it or resume into a new panel; inline buttons toggle between them — Favorites view [Archive][Open][Remove], Archive view [Favorite][Open][Remove], clicking Archive/Favorite moves it to the other view automatically. Right-click a closed session to copy the `claude -r <sid>` command. Rows in both views can be **drag-reordered** — drop on a row to insert before it, drop past the last row to move to the end. Once you drag, that list switches to manual order (new entries still appear at the top); no-op drops never touch disk.
 
 **③ Bottom 4-light aggregate**　A single block on the status bar — 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + counts — every session's overall status at a glance, no tab-switching needed; the 4 light slots are fixed in place, counts changing never shifts the layout.
 
@@ -77,39 +77,43 @@ Want it back to stock? `npx vscode-claude-code-status-dot --revert`.
 
 System notifications + sound when a session finishes or gets interrupted (macOS top-right dropdown / Win·Linux bottom-right toast, fires in both foreground and background).
 
-| Option | Default | Description |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | Master notification switch |
-| `ccStatusDot.notifyWhenFocused` | `true` | Also fire when VSCode is focused; set `false` to notify only when in the background |
-| `ccStatusDot.notifySound` | `"Glass"` | macOS notification sound (shared by done & interrupted; `""` for silent; options: Basso/Ping/Hero, etc.) |
+| Option                          | Default   | Description                                                                                              |
+| ------------------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.notify`            | `true`    | Master notification switch                                                                               |
+| `ccStatusDot.notifyWhenFocused` | `true`    | Also fire when VSCode is focused; set `false` to notify only when in the background                      |
+| `ccStatusDot.notifySound`       | `"Glass"` | macOS notification sound (shared by done & interrupted; `""` for silent; options: Basso/Ping/Hero, etc.) |
 
 ### 2. Token stats & costs (feature ⑤)
 
 The bottom-right token SBI shows the currently active session's token usage + optional $ estimate + streaming rate; workflow subagent tokens are included (won't be "invisible").
 
-| Option | Default | Description |
-|---|---|---|
-| `ccStatusDot.tokenStatsWindow` | `"all"` | Time window: `all` = cumulative (whole session, never resets); `5min/10min/1h/24h/3d/7d/30d` = rolling windows (old turns slide out when they expire, looks like the count "resetting") |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | Display mode: `token` (tokens only) / `cost` ($ only) / `both` (both) |
-| `ccStatusDot.rateDisplayMode` | `"numeric"` | Streaming rate rendering: `off` / `numeric` (e.g. `1.2k/s`) / `sparkline` (▁▂▃▄▅▆▇█ mini-chart) / `both`; switch to `off` on a crowded status bar |
-| `ccStatusDot.tokenSbiVisible` | `true` | Show / hide the token SBI |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | Update tokens with live deltas while streaming; set `false` on perf-sensitive machines |
-| `ccStatusDot.showCost` | `true` | Show `$` (unknown models auto-hide; requires a matching `token-rates.json` entry) |
-| `ccStatusDot.warnThresholdUsd` | `0` | Cross-threshold cost notification (`0` = disabled; positive number = USD threshold, fires once per crossing) |
+| Option                              | Default     | Description                                                                                                                                                                             |
+| ----------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`     | Time window: `all` = cumulative (whole session, never resets); `5min/10min/1h/24h/3d/7d/30d` = rolling windows (old turns slide out when they expire, looks like the count "resetting") |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`    | Display mode: `token` (tokens only) / `cost` ($ only) / `both` (both)                                                                                                                   |
+| `ccStatusDot.rateDisplayMode`       | `"numeric"` | Streaming rate rendering: `off` / `numeric` (e.g. `1.2k/s`) / `sparkline` (▁▂▃▄▅▆▇█ mini-chart) / `both`; switch to `off` on a crowded status bar                                       |
+| `ccStatusDot.tokenSbiVisible`       | `true`      | Show / hide the token SBI                                                                                                                                                               |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`      | Update tokens with live deltas while streaming; set `false` on perf-sensitive machines                                                                                                  |
+| `ccStatusDot.showCost`              | `true`      | Show `$` (unknown models auto-hide; requires a matching `token-rates.json` entry)                                                                                                       |
+| `ccStatusDot.warnThresholdUsd`      | `0`         | Cross-threshold cost notification (`0` = disabled; positive number = USD threshold, fires once per crossing)                                                                            |
 
 > **Custom model pricing**: `~/.claude/cc-status-dot/token-rates.json` is a hot-reload pricing table (covers Anthropic's official prices by default; unmatched models like GLM auto-hide the `$`). Add a glob to display `$`:
 >
 > ```jsonc
-> { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
+> {
+>   "_default": null,
+>   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
+>   "glm-*": { "in": 0.5, "out": 1.5 },
+> }
 > ```
 
 ### 3. Favorites / Archive (features ②④)
 
 Sidebar CC Favorites + CC Archive views (mutually exclusive) + tab ★/● markers + status-bar ★/○ buttons. Archive mirrors Favorites — no extra config.
 
-| Option | Default | Description |
-|---|---|---|
-| `ccStatusDot.fav.includeInExplorerContextMenu` | `true` | Show "Add/Remove CC Favorite" in the Explorer right-click menu; set `false` if the menu gets crowded |
+| Option                                         | Default | Description                                                                                          |
+| ---------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.fav.includeInExplorerContextMenu` | `true`  | Show "Add/Remove CC Favorite" in the Explorer right-click menu; set `false` if the menu gets crowded |
 
 ---
 
@@ -148,7 +152,6 @@ vscode-claude-code-status-dot        # run the command directly after install
 - **Emoji font-stack dependency**: the bottom status bar dots are emoji glyphs (🟢🟡🔵🔴⚪) that depend on the system emoji font stack — macOS (Apple Color Emoji) / Windows 10+ (Segoe UI Emoji) / mainstream Linux (Noto Color Emoji) render them in color; Win7 / some headless Linux / emoji-font-less remote SSH environments may render them as monochrome glyphs or tofu boxes. A deliberate tradeoff (user aesthetic preference > cross-platform uniformity).
 
 ---
-
 
 ## 🏗️ How it works + docs
 

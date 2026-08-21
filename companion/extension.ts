@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.47";
+const MIN_PATCHER_VERSION = "0.5.48";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.47";
+    return effectiveConfig?.injectVersion ?? "v0.5.48";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -1016,6 +1016,11 @@ interface FavSession {
     state?: string;
     addedAt: number;
     lastSeenAt: number;
+    /** v0.5.48: manual display order (dense 0..n-1, whole-list re-stamped on
+     *  every successful drag). Absent = never dragged / added after the last
+     *  drag → renders in the recency cluster ABOVE the manual block. Positional
+     *  within ONE file — always stripped on cross-file mutex moves. */
+    order?: number;
 }
 
 interface FavFile {
@@ -1023,6 +1028,8 @@ interface FavFile {
     label: string;
     line?: number;
     workspace?: string;
+    /** v0.5.48: manual display order — same semantics as FavSession.order. */
+    order?: number;
     addedAt: number;
 }
 
@@ -1521,7 +1528,12 @@ function isValidFavSession(x: unknown): x is FavSession {
         (s.cwd === undefined || typeof s.cwd === "string") &&
         (s.transcript_path === undefined || typeof s.transcript_path === "string") &&
         (s.model === undefined || typeof s.model === "string") &&
-        (s.state === undefined || typeof s.state === "string")
+        (s.state === undefined || typeof s.state === "string") &&
+        // v0.5.48: manual order must be a FINITE number when present — a
+        // hand-edited `order: NaN` is typeof "number" yet poisons
+        // Array.prototype.sort with implementation-defined ordering, the
+        // exact crash-class the optional-field guards above exist to prevent.
+        (s.order === undefined || (typeof s.order === "number" && Number.isFinite(s.order)))
     );
 }
 
@@ -1537,8 +1549,96 @@ function isValidFavFile(x: unknown): x is FavFile {
         // `"line": "abc"` / `"workspace": 42` is rejected here instead of
         // crashing path.basename(42) in favBrowse.
         (f.line === undefined || typeof f.line === "number") &&
-        (f.workspace === undefined || typeof f.workspace === "string")
+        (f.workspace === undefined || typeof f.workspace === "string") &&
+        (f.order === undefined || (typeof f.order === "number" && Number.isFinite(f.order)))
     );
+}
+
+/** v0.5.48 DnD: sort bucket for the manual-order merge — rows WITHOUT a
+ *  finite order belong to the "recency cluster" ABOVE the manual block
+ *  (-Infinity), rows WITH one sort ASC by it. Written as an explicit
+ *  comparator (never `oa - ob`) so ±Infinity never enters arithmetic. */
+function favOrderBucket(r: { order?: number }): number {
+    return typeof r.order === "number" && Number.isFinite(r.order) ? r.order : -Infinity;
+}
+
+/** v0.5.48 DnD: THE single session comparator — used by BOTH getChildren
+ *  (render) and the drop handler (write). If the write path ever sorts
+ *  differently from the render path, the tree visibly snaps back on the
+ *  next 2s render — this shared implementation is the contract. Unordered
+ *  rows keep the historical recency tiebreak (bit-identical display for
+ *  files that have never been dragged). */
+function compareFavSessions(a: FavSession, b: FavSession): number {
+    const oa = favOrderBucket(a);
+    const ob = favOrderBucket(b);
+    if (oa < ob) return -1;
+    if (oa > ob) return 1;
+    return b.lastSeenAt - a.lastSeenAt;
+}
+
+/** v0.5.48 DnD: THE single file comparator (same contract as
+ *  compareFavSessions; historical tiebreak = addedAt desc). */
+function compareFavFiles(a: FavFile, b: FavFile): number {
+    const oa = favOrderBucket(a);
+    const ob = favOrderBucket(b);
+    if (oa < ob) return -1;
+    if (oa > ob) return 1;
+    return b.addedAt - a.addedAt;
+}
+
+/** v0.5.48 DnD: reorder `rows` so every row whose keyOf is in `keys` moves to
+ *  the insertion point and the FINAL display order is densely re-stamped
+ *  (order = 0..n-1). Runs INSIDE the mutateFavDoc/mutateArchiveDoc CAS
+ *  callback, so `rows` is always the fresh doc's array (a concurrent add
+ *  survives the CAS retry). Returns changed=false for a true no-op (same key
+ *  sequence) — no disk write, no toast. `where` semantics: target node =
+ *  insert BEFORE it (the stable API exposes only onto-node drops; before-X
+ *  is the only total mapping covering above-row-0), undefined target = end. */
+function reorderFavRows<T extends { order?: number }>(
+    rows: T[],
+    keyOf: (r: T) => string,
+    cmp: (a: T, b: T) => number,
+    keys: Set<string>,
+    where: { at: "head" } | { at: "end" } | { at: "before"; key: string },
+): boolean {
+    const sorted = rows.slice().sort(cmp);
+    const moved = sorted.filter((r) => keys.has(keyOf(r)));
+    if (moved.length === 0) return false; // keys vanished mid-drag (row deleted) — no-op
+    const rest = sorted.filter((r) => !keys.has(keyOf(r)));
+    // (idx = 0 initializer: every branch overwrites it, and keeping the
+    // body annotation-free lets the behavioral test eval it verbatim.)
+    let idx = 0;
+    if (where.at === "head") idx = 0;
+    else if (where.at === "end") idx = rest.length;
+    else if (keys.has(where.key)) {
+        // v0.5.48.1 (review MEDIUM ×3): drop onto a row that is ITSELF being
+        // dragged (grab-wiggle-release over the own row is an ordinary abort
+        // gesture; the workbench delivers target=source-row unfiltered — the
+        // dragged row is excluded from `rest`, so findIndex would return -1
+        // and the vanished-target clamp would TELEPORT the row to the end,
+        // durably corrupting the manual order). "Insert X before X" is a
+        // positional no-op by definition.
+        return false;
+    } else {
+        const t = rest.findIndex((r) => keyOf(r) === where.key);
+        idx = t >= 0 ? t : rest.length; // target vanished mid-drag — clamp to end
+    }
+    const next = [...rest.slice(0, idx), ...moved, ...rest.slice(idx)];
+    // No-op check on the final key sequence BEFORE stamping: dropping a row
+    // back where it already sits must not churn mtime or fire a re-render.
+    if (next.every((r, i) => keyOf(r) === keyOf(sorted[i]))) return false;
+    next.forEach((r, i) => {
+        // Dense re-stamp. The row objects are NOT clones — mutateFavDoc's
+        // clone-before-mutate only spreads the top level + slices the ARRAYS,
+        // so rows stay SHARED with favDocCache. In-place stamping is safe for
+        // the same reason the persistClosedSessionLabels row.label write is:
+        // EVERY mutate outcome invalidates the cache (ok → tmp+rename flips
+        // mtime+size; error → explicit cache null; conflict → re-read), so a
+        // stamped-but-unwritten row can never be served from the cache.
+        r.order = i;
+    });
+    rows.splice(0, rows.length, ...next);
+    return true;
 }
 
 /** Discriminated tree-node union. contextValue follows the design's
@@ -1599,9 +1699,12 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
             // Without this the dedup gate would block the re-render and the
             // stored (stale) label would persist in the display.
             s: doc.sessions
-                .map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${liveBridgeLabel(s.sid, s.label)}|${s.state || ""}`)
+                .map(
+                    (s) =>
+                        `${s.sid}|${open.has(s.sid) ? 1 : 0}|${liveBridgeLabel(s.sid, s.label)}|${s.state || ""}|${s.order ?? ""}`,
+                )
                 .sort(),
-            f: doc.files.map((f) => `${f.fsPath}|${f.label}|${f.line || 0}`).sort(),
+            f: doc.files.map((f) => `${f.fsPath}|${f.label}|${f.line || 0}|${f.order ?? ""}`).sort(),
         });
         // v0.5.6 (Bug 4 dynamic add/remove text): the active sid can move
         // between CC tabs WITHOUT the doc signature changing (user switches
@@ -1798,13 +1901,13 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
         // is needed.
         const sessions: FavNode[] = doc.sessions
             .slice()
-            .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+            .sort(compareFavSessions)
             .map((s) =>
                 open.has(s.sid) ? { kind: "sessionOpen", session: s } : { kind: "sessionClosed", session: s },
             );
         const files: FavNode[] = doc.files
             .slice()
-            .sort((a, b) => b.addedAt - a.addedAt)
+            .sort(compareFavFiles)
             .map((f) => ({ kind: "file", file: f }));
         const all = [...sessions, ...files];
         // v0.4.0 round-3 (MEDIUM setContext spam fix): the empty-state
@@ -1855,7 +1958,10 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
         // display-only — liveBridgeLabel never persists from the poll.
         const sig = JSON.stringify({
             s: doc.sessions
-                .map((s) => `${s.sid}|${open.has(s.sid) ? 1 : 0}|${liveBridgeLabel(s.sid, s.label)}|${s.state || ""}`)
+                .map(
+                    (s) =>
+                        `${s.sid}|${open.has(s.sid) ? 1 : 0}|${liveBridgeLabel(s.sid, s.label)}|${s.state || ""}|${s.order ?? ""}`,
+                )
                 .sort(),
         });
         if (sig === this.lastSig) return;
@@ -1947,7 +2053,7 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
         const sessions: FavNode[] = doc.sessions
             .filter((s) => !favSids.has(s.sid))
             .slice()
-            .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+            .sort(compareFavSessions)
             .map((s) =>
                 open.has(s.sid) ? { kind: "sessionOpen", session: s } : { kind: "sessionClosed", session: s },
             );
@@ -2439,7 +2545,15 @@ function favToggleTab(resourceUri?: unknown): void {
     // the row's existing label when the bridge is cold, so a closed/just-resumed
     // session is never blanked.
     const row = existingArchRow
-        ? { ...existingArchRow, label: liveBridgeLabel(sid, existingArchRow.label), lastSeenAt: Date.now() }
+        ? {
+              ...existingArchRow,
+              label: liveBridgeLabel(sid, existingArchRow.label),
+              lastSeenAt: Date.now(),
+              // v0.5.48: order is positional within ONE file — strip on the mutex
+              // move so the row lands in the destination's recency cluster
+              // instead of tie-ing with its own dense stamps.
+              order: undefined,
+          }
         : buildFavSessionRow(sid);
     const result = mutateFavDoc((doc) => {
         removed = false;
@@ -3095,7 +3209,7 @@ function favArchiveSession(node: FavNode): void {
         if (doc.sessions.some((x) => x.sid === sid)) return { changed: false };
         // Copy the row verbatim (sid/label/cwd/transcript_path/model/state/
         // addedAt/lastSeenAt).
-        doc.sessions.push({ ...src });
+        doc.sessions.push({ ...src, order: undefined }); // v0.5.48: strip positional order on cross-file move
         return { changed: true };
     });
     if (added.wrote || added.noop) {
@@ -3127,7 +3241,7 @@ function favUnarchiveSession(node: FavNode): void {
     // rationale. noop reconciles a prior both-files state.
     const added = mutateFavDoc((doc) => {
         if (doc.sessions.some((x) => x.sid === sid)) return { changed: false };
-        doc.sessions.push({ ...src });
+        doc.sessions.push({ ...src, order: undefined }); // v0.5.48: strip positional order on cross-file move
         return { changed: true };
     });
     if (added.wrote || added.noop) {
@@ -3194,7 +3308,12 @@ function favToggleArchive(): void {
         // favorited lands in archive.json with its CURRENT title, not the stale
         // snapshot. See favToggleTab for the full rationale.
         const row = existingFavRow
-            ? { ...existingFavRow, label: liveBridgeLabel(sid, existingFavRow.label), lastSeenAt: Date.now() }
+            ? {
+                  ...existingFavRow,
+                  label: liveBridgeLabel(sid, existingFavRow.label),
+                  lastSeenAt: Date.now(),
+                  order: undefined, // v0.5.48: positional — strip on cross-file move
+              }
             : buildFavSessionRow(sid);
         if (row) {
             const added = mutateArchiveDoc((doc) => {
@@ -3267,12 +3386,137 @@ function archiveNodeHandler(label: string, fn: (node: FavNode) => void): (node?:
  *  detectAndPatch's fire-and-forget is set up. detectAndPatch is never
  *  blocked by Favorites I/O. The view auto-activates on first reveal — the
  *  user does not need a CC tab open to favorite files. */
+// =============================================================================
+// v0.5.48 — Tree drag-and-drop manual reordering (CC Favorites / CC Archive)
+// =============================================================================
+// API contract (companion/node_modules/@types/vscode index.d.ts
+// TreeDragAndDropController, stable since 1.66): dropMimeTypes gates what
+// handleDrop sees — listing ONLY this tree's own mime (application/vnd.code
+// .tree.<viewid-lowercase>) makes same-view reorder work while CROSS-view
+// drags are structurally rejected by the workbench (the other controller
+// never lists our mime, so handleDrop is never called there). The stable API
+// has NO insertion-gap affordance — the only positional input is
+// `target: FavNode | undefined` — so the mapping is: target node = insert
+// BEFORE it (the only total mapping covering above-row-0), undefined target
+// (drop past the last row / on the view background) = append at END.
+// handleDrag stashes ONLY keys (kind + sid/fsPath) — the drop side re-reads
+// the doc inside the CAS callback, so stale row bodies can never resurrect.
+const FAV_TREE_DND_MIME = "application/vnd.code.tree.ccstatusdot.favorites";
+const ARCHIVE_TREE_DND_MIME = "application/vnd.code.tree.ccstatusdot.archive";
+
+/** handleDrag payload. `v` guards the shape for the asString() fallback path
+ *  (cross-extension drags could hand us arbitrary JSON under our mime). */
+type FavDragPayload = { v: 1; items: { kind: "session" | "file"; key: string }[] };
+
+/** v0.5.48.1: module-level payload validator (hoisted out of handleDrop — a
+ *  pure function, and the §9k behavioral tests extract+exercise it so the
+ *  version/items validation cannot silently rot). */
+function parseFavDragPayload(x: unknown): FavDragPayload | null {
+    if (!x || typeof x !== "object") return null;
+    const o = x as { v?: unknown; items?: unknown };
+    if (o.v !== 1 || !Array.isArray(o.items)) return null;
+    for (const it of o.items) {
+        if (!it || typeof it !== "object") return null;
+        const e = it as { kind?: unknown; key?: unknown };
+        if ((e.kind !== "session" && e.kind !== "file") || typeof e.key !== "string" || !e.key) return null;
+    }
+    return { v: 1, items: o.items as FavDragPayload["items"] };
+}
+
+class FavTreeDragController implements vscode.TreeDragAndDropController<FavNode> {
+    readonly dropMimeTypes: readonly string[];
+    readonly dragMimeTypes: readonly string[] = []; // own tree mime auto-added per the d.ts
+
+    constructor(private readonly view: "favorites" | "archive") {
+        this.dropMimeTypes = [view === "favorites" ? FAV_TREE_DND_MIME : ARCHIVE_TREE_DND_MIME];
+    }
+
+    handleDrag(source: readonly FavNode[], dataTransfer: vscode.DataTransfer): void {
+        try {
+            const items = source.map((n) =>
+                n.kind === "file"
+                    ? { kind: "file" as const, key: n.file.fsPath }
+                    : { kind: "session" as const, key: n.session.sid },
+            );
+            dataTransfer.set(
+                this.dropMimeTypes[0],
+                new vscode.DataTransferItem({ v: 1, items } satisfies FavDragPayload),
+            );
+        } catch {
+            /* a failed drag stash must never surface UI — the drop simply won't find the payload */
+        }
+    }
+
+    async handleDrop(target: FavNode | undefined, dataTransfer: vscode.DataTransfer): Promise<void> {
+        try {
+            const item = dataTransfer.get(this.dropMimeTypes[0]);
+            if (!item) return; // not our payload (mime scoping should prevent this; defensive)
+            // v0.5.48.1 (review §1.2.1/§1.2.2): the payload is EXTERNAL-input-
+            // shaped (the asString() fallback can hand us arbitrary JSON under
+            // our mime) — validated by the module-level parseFavDragPayload
+            // (version discriminator AND every item; malformed = silent no-op,
+            // never a crash, never a bogus reorder — reorderFavRows also
+            // no-ops on unknown keys, belt and braces).
+            let payload: FavDragPayload | null = parseFavDragPayload(item.value);
+            if (!payload) {
+                try {
+                    payload = parseFavDragPayload(JSON.parse(await item.asString()));
+                } catch {
+                    payload = null;
+                }
+            }
+            if (!payload) return;
+            // The Archive view renders SESSIONS only — file items are a no-op
+            // there (its `files` array is vestigial). Favorites accepts both.
+            const kinds = new Set(payload.items.map((i) => i.kind));
+            const mutate =
+                this.view === "favorites"
+                    ? (cb: (doc: FavDoc) => { changed: boolean }) => mutateFavDoc(cb)
+                    : (cb: (doc: FavDoc) => { changed: boolean }) => mutateArchiveDoc(cb);
+            let wroteAny = false;
+            for (const kind of kinds) {
+                if (this.view === "archive" && kind === "file") continue;
+                const keys = new Set(payload.items.filter((i) => i.kind === kind).map((i) => i.key));
+                if (keys.size === 0) continue;
+                // Cross-kind clamp (favorites renders sessions above files):
+                // dragging a file onto a session node → head of the files
+                // block; dragging a session onto a file node → end of the
+                // sessions block. Monotone, deterministic, no cross-kind
+                // reordering ever occurs.
+                let where: { at: "head" } | { at: "end" } | { at: "before"; key: string };
+                if (target === undefined) {
+                    where = { at: "end" };
+                } else if (target.kind === "file") {
+                    where = kind === "file" ? { at: "before", key: target.file.fsPath } : { at: "end" };
+                } else {
+                    where = kind === "session" ? { at: "before", key: target.session.sid } : { at: "head" };
+                }
+                const res = mutate((doc) =>
+                    kind === "session"
+                        ? { changed: reorderFavRows(doc.sessions, (r) => r.sid, compareFavSessions, keys, where) }
+                        : { changed: reorderFavRows(doc.files, (r) => r.fsPath, compareFavFiles, keys, where) },
+                );
+                if (res.wrote) wroteAny = true;
+            }
+            // Silent on success (VSCode renders the move; stable item ids keep
+            // the selection). d.ts contract: the extension must fire
+            // onDidChangeTreeData — forceRefresh does that (and bypasses the
+            // signature dedup), matching the Bug-1 belt-and-braces precedent.
+            if (wroteAny) (this.view === "favorites" ? favoritesProvider : archiveProvider)?.forceRefresh();
+        } catch {
+            /* best-effort — a failed reorder must never crash the EH */
+        }
+    }
+}
+
 function registerFavorites(ctx: vscode.ExtensionContext): void {
     favoritesProvider = new FavoritesProvider();
     const tree = vscode.window.createTreeView("ccStatusDot.favorites", {
         treeDataProvider: favoritesProvider,
         showCollapseAll: false,
         canSelectMany: false,
+        // v0.5.48: manual drag reordering (same-view only via mime scoping).
+        dragAndDropController: new FavTreeDragController("favorites"),
     });
     ctx.subscriptions.push(tree);
 
@@ -3285,6 +3529,7 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
         treeDataProvider: archiveProvider,
         showCollapseAll: false,
         canSelectMany: false,
+        dragAndDropController: new FavTreeDragController("archive"), // v0.5.48
     });
     ctx.subscriptions.push(archiveTree);
 

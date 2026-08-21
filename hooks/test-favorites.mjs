@@ -1286,6 +1286,169 @@ check(
   'review [2] MEDIUM: the §H panelTab.title fallback (patch.ts) could republish the PAINTED ★/● tab title into the bridge when t.__ccsdTitle was falsy (title-less update_session_state — real CC caller) and the close-time persist then durably wrote the prefixed label. Fixed at source (patch.ts §H strips the fallback) + defense-in-depth (stripTabMarkers in liveBridgeLabel + persist). review [1]+[3]: deactivate() now force-flushes (still-open panels snapshotted too — EH quit/reload cannot lose the rename). review [4]: background writes are silent (no user-action error toast from a poll). review [6]: the persist no longer bumps lastSeenAt (close never reordered the tree pre-v0.5.46). review [7]: the tick persists BEFORE refreshing (no one-tick old-label flash).',
 );
 
+// --- v0.5.48: FAV.51-57 — tree drag-and-drop manual reordering (DnD) ---
+check(
+  'FAV.51 FavSession + FavFile declare optional order?: number (manual display order)',
+  /order\?: number;/.test(companionSrc) && companionSrc.includes('v0.5.48: manual display order'),
+  'sparse per-row order; absent = recency cluster ABOVE the manual block (pre-drag display bit-identical to the recency sort).',
+);
+check(
+  'FAV.52 validators accept optional FINITE order (NaN-poisons-sort guard) in both files via the shared validators',
+  /\(s\.order === undefined \|\| \(typeof s\.order === "number" && Number\.isFinite\(s\.order\)\)\)/.test(
+    companionSrc,
+  ) &&
+    /\(f\.order === undefined \|\| \(typeof f\.order === "number" && Number\.isFinite\(f\.order\)\)\)/.test(
+      companionSrc,
+    ),
+  'typeof NaN === "number" would poison Array.sort with implementation-defined ordering — Number.isFinite is required. readFavDoc AND readArchiveDoc both filter through these validators, so one clause covers both files.',
+);
+check(
+  'FAV.53 shared comparators used at ALL FOUR order-sensitive sites (3 getChildren sorts + the drop write path)',
+  /function compareFavSessions\(a: FavSession, b: FavSession\): number/.test(companionSrc) &&
+    /function compareFavFiles\(a: FavFile, b: FavFile\): number/.test(companionSrc) &&
+    (companionSrc.match(/\.sort\(compareFavSessions\)/g) || []).length === 2 &&
+    (companionSrc.match(/\.sort\(compareFavFiles\)/g) || []).length === 1 &&
+    /reorderFavRows\(doc\.sessions, \(r\) => r\.sid, compareFavSessions, keys, where\)/.test(companionSrc) &&
+    /reorderFavRows\(doc\.files, \(r\) => r\.fsPath, compareFavFiles, keys, where\)/.test(companionSrc) &&
+    /kind === "session"\s*\?\s*\{ changed: reorderFavRows\(doc\.sessions, \(r\) => r\.sid, compareFavSessions, keys, where\) \}\s*:\s*\{ changed: reorderFavRows\(doc\.files, \(r\) => r\.fsPath, compareFavFiles, keys, where\) \},/.test(
+      companionSrc,
+    ),
+  'write path MUST sort identically to the render path — a private comparator in the drop handler makes the tree visibly snap back on the next 2s render. Bucket compare written explicitly (never oa - ob) so ±Infinity never enters arithmetic.',
+);
+check(
+  'FAV.54 both tree views pass dragAndDropController; dropMimeTypes scoped to OWN tree mime only (structural same-view-only)',
+  /class FavTreeDragController implements vscode\.TreeDragAndDropController<FavNode>/.test(companionSrc) &&
+    companionSrc.includes('const FAV_TREE_DND_MIME = "application/vnd.code.tree.ccstatusdot.favorites";') &&
+    companionSrc.includes('const ARCHIVE_TREE_DND_MIME = "application/vnd.code.tree.ccstatusdot.archive";') &&
+    (companionSrc.match(/dragAndDropController: new FavTreeDragController\("(favorites|archive)"\),/g) || []).length ===
+      2 &&
+    /createTreeView\("ccStatusDot\.favorites",\s*\{[\s\S]{0,220}?dragAndDropController: new FavTreeDragController\("favorites"\)/.test(
+      companionSrc,
+    ) &&
+    /createTreeView\("ccStatusDot\.archive",\s*\{[\s\S]{0,220}?dragAndDropController: new FavTreeDragController\("archive"\)/.test(
+      companionSrc,
+    ) &&
+    /this\.dropMimeTypes = \[view === "favorites" \? FAV_TREE_DND_MIME : ARCHIVE_TREE_DND_MIME\];/.test(companionSrc) &&
+    /readonly dragMimeTypes: readonly string\[\] = \[\];/.test(companionSrc),
+  'the d.ts contract: same-tree drops need your own mime in dropMimeTypes; listing ONLY the own mime structurally rejects cross-view drags (favorites→archive stays the explicit archive commands — a mutex MOVE, semantically distinct from reorder). R7 (HIGH): the two registrations are additionally pinned as PAIRED (view id → matching ctor arg) — the count-only pin survived an arg swap (favorites tree fed an archive controller → mutex forces moved.length===0 → silent DnD death in BOTH trees + cross-view affordance reopened). R6: dragMimeTypes is now PINNED empty too — advertising the archive mime would reopen the cross-view drop-affordance door this check claims closed (accepted-then-silently-ignored drop, not data routing).',
+);
+check(
+  'FAV.55 drop writes through the CAS mutators, dense re-stamps order, forceRefreshes the affected view only, silent on success',
+  /function reorderFavRows<T extends \{ order\?: number \}>\(/.test(companionSrc) &&
+    /next\.forEach\(\(r, i\) => \{[\s\S]{0,700}?r\.order = i;/.test(companionSrc) &&
+    /if \(next\.every\(\(r, i\) => keyOf\(r\) === keyOf\(sorted\[i\]\)\)\) return false;/.test(companionSrc) &&
+    /if \(wroteAny\) \(this\.view === "favorites" \? favoritesProvider : archiveProvider\)\?\.forceRefresh\(\);/.test(
+      companionSrc,
+    ) &&
+    !/showStatusBarMessage[\s\S]{0,120}reorder/.test(companionSrc),
+  'reorder runs INSIDE the mutate callback (CAS retry-safe, concurrent adds survive); true no-op (same key sequence) returns changed:false — no write, no churn; the no-op-check-before-stamp ordering is load-bearing. VSCode renders the move (stable item ids keep selection); the mutator conflict toast still surfaces on CAS exhaustion (silent=false default kept).',
+);
+check(
+  'FAV.56 refresh() signatures include order in BOTH providers (cross-window reorder pickup)',
+  /\|\$\{s\.order \?\? ""\}/.test(companionSrc) &&
+    (companionSrc.match(/\|\$\{s\.order \?\? ""\}`/g) || []).length === 2 &&
+    /\|\$\{f\.order \?\? ""\}/.test(companionSrc),
+  'the .sort()ed signature tuples are otherwise ORDER-BLIND — without order in the tuple other windows would never re-render on a reorder (the 2s tick is the only cross-window path).',
+);
+check(
+  'FAV.57 ALL FOUR cross-file mutex-move sites strip order AFTER the spread (positional within ONE file)',
+  (companionSrc.match(/\.\.\.src, order: undefined \}/g) || []).length === 2 &&
+    /\.\.\.existingArchRow,[\s\S]{0,400}?order: undefined,/.test(companionSrc) &&
+    /\.\.\.existingFavRow,[\s\S]{0,400}?order: undefined,/.test(companionSrc) &&
+    (companionSrc.match(/order: undefined/g) || []).length === 4,
+  '{...row} copies would carry a meaningless stale position into the destination file, tie-ing with its own dense stamps — moved rows land in the destination recency cluster (semantically re-added, consistent with new-row UX). R7: the count-only pin survived a key-order flip ({ order: undefined, ...src } — spread OVERWRITES the strip → stale order lands in the destination MANUAL cluster) — the three per-site regexes now pin strip-AFTER-spread at every site (2 simple {...src} pushes + the 2 multi-property existingArchRow/existingFavRow forms).',
+);
+
+// --- v0.5.48.1 FAV.58: parseFavDragPayload source pin (mirror in §9k) ---
+check(
+  'FAV.58 parseFavDragPayload: entry guard + version discriminator + per-item validation literal-pinned (kills mirror mutations)',
+  /function parseFavDragPayload\(x: unknown\): FavDragPayload \| null \{/.test(companionSrc) &&
+    /if \(!x \|\| typeof x !== "object"\) return null;/.test(companionSrc) &&
+    /if \(o\.v !== 1 \|\| !Array\.isArray\(o\.items\)\) return null;/.test(companionSrc) &&
+    /if \(!it \|\| typeof it !== "object"\) return null;/.test(companionSrc) &&
+    /if \(\(e\.kind !== "session" && e\.kind !== "file"\) \|\| typeof e\.key !== "string" \|\| !e\.key\) return null;/.test(
+      companionSrc,
+    ) &&
+    /for \(const it of o\.items\) \{/.test(companionSrc) &&
+    /return \{ v: 1, items: o\.items as FavDragPayload\["items"\] \};/.test(companionSrc),
+  'the function body cannot be eval-extracted (TS casts), so its §9k behavioral coverage runs an inline mirror — this pin literal-matches every guard branch in the SOURCE (entry null/non-object guard, version check, item shape checks) so a mutation of the real body fails here even if the mirror drifts. R3: the entry guard was added to the pin after an empirical mutation (deleting extension.ts:3415) survived the whole suite.',
+);
+
+// --- v0.5.48.1 FAV.59: handleDrop (target,kind)→where mapping source pin ---
+// handleDrop cannot be eval-extracted (vscode + method context), so — exactly
+// like FAV.58 — the mapping is pinned by literal instead. This closes the R3
+// finding that swapping the cross-kind clamp branches ({at:"head"} ↔
+// {at:"end"}) or dropping the archive file-skip survived the entire suite.
+// R4 added the target.kind discriminator line (mutating "file"→"session"
+// survived the full suite) — the pin now covers all FIVE mapping lines.
+check(
+  'FAV.59 handleDrop: archive-session-only routing + cross-kind clamp mapping literal-pinned',
+  /if \(this\.view === "archive" && kind === "file"\) continue;/.test(companionSrc) &&
+    /if \(target === undefined\) \{\s*where = \{ at: "end" \};/.test(companionSrc) &&
+    /else if \(target\.kind === "file"\) \{/.test(companionSrc) &&
+    /where = kind === "file" \? \{ at: "before", key: target\.file\.fsPath \} : \{ at: "end" \};/.test(companionSrc) &&
+    /where = kind === "session" \? \{ at: "before", key: target\.session\.sid \} : \{ at: "head" \};/.test(
+      companionSrc,
+    ),
+  'the five where-mapping lines in handleDrop (incl. the target.kind discriminator — R4: mutating it to "session" survived the full suite, sending every drop down the wrong branch into silent no-ops) — swapping head↔end in either clamp, dropping the archive file-skip, or flipping the discriminator must fail here.',
+);
+
+// --- v0.5.48.1 FAV.60: handleDrop mutate-selection pin (R4 HIGH) ---
+// Swapping mutateFavDoc ↔ mutateArchiveDoc made favorites-tree drags write
+// archive.json (wrong persistence file — data-integrity class) and survived
+// the ENTIRE npm test. The single full-literal regex kills the swap in either
+// direction (either name moving breaks the literal).
+check(
+  'FAV.60 handleDrop: view→doc-mutator selection literal-pinned (favorites→mutateFavDoc, archive→mutateArchiveDoc)',
+  /this\.view === "favorites"\s*\?\s*\(cb: \(doc: FavDoc\) => \{ changed: boolean \}\) => mutateFavDoc\(cb\)\s*:\s*\(cb: \(doc: FavDoc\) => \{ changed: boolean \}\) => mutateArchiveDoc\(cb\);/.test(
+    companionSrc,
+  ),
+  "a swap reorders against the WRONG persistence file (favorites drags mutate archive.json and vice versa) — silently lost reorders + mirrored keys corrupting the other file's order; at R4 time nothing else pinned this ternary (FAV.53 then pinned only the two dispatch call-texts independently; R5 extended FAV.53 to pin the dispatch condition+pairing as ONE literal, FAV.55 pins the forceRefresh ternary at the other this-view site).",
+);
+
+// --- v0.5.48.1 FAV.61: handleDrag payload construction pin (R4 preemptive) ---
+// The stash side of DnD: a swapped key mapping (file rows stashing session
+// sids) or a payload-shape drift makes every drop a silent no-op — masked
+// downstream by parseFavDragPayload rejection + reorderFavRows unknown-key
+// no-op (belt and braces), so the stash side needs its own pin.
+check(
+  'FAV.61 handleDrag: node→{kind,key} mapping + v1 payload construction literal-pinned',
+  /n\.kind === "file"\s*\?\s*\{ kind: "file" as const, key: n\.file\.fsPath \}\s*:\s*\{ kind: "session" as const, key: n\.session\.sid \},/.test(
+    companionSrc,
+  ) &&
+    /new vscode\.DataTransferItem\(\{ v: 1, items \} satisfies FavDragPayload\)/.test(companionSrc) &&
+    /dataTransfer\.set\(\s*this\.dropMimeTypes\[0\],\s*new vscode\.DataTransferItem\(\{ v: 1, items \} satisfies FavDragPayload\),\s*\);/.test(
+      companionSrc,
+    ) &&
+    /const items = source\.map\(\(n\) =>/.test(companionSrc),
+  'R5: the payload-literal pin alone survived a severed set() call ([0]→[1] stashes under an undefined mime → every drop no-ops) — the third regex pins the FULL stash call. R6 (HIGH): severing the INPUT operand (source.map→[].map) stashes {v:1,items:[]} which parse ACCEPTS — every drag in both trees silently no-ops, feature death with a green suite — the fourth regex pins that the dragged SELECTION feeds the stash.',
+);
+
+// --- v0.5.48.1 FAV.62: handleDrop plumbing pin (R5 #3) ---
+// The line-audit found the dispatch-chain plumbing between validation and the
+// pinned mapping lines unpinned: get-mime, accept-guard, kinds Set, kind
+// loop, keys Set, size guard, wrote accumulation. Each is unique in the
+// source (grep -cF = 1), so full-literal pins are safe. handleDrop is not
+// eval-extractable, so — like FAV.58-61 — literals are the only gate.
+check(
+  'FAV.62 handleDrop plumbing: get-mime/accept-guard/kinds/keys/loop/wrote literal-pinned',
+  /const item = dataTransfer\.get\(this\.dropMimeTypes\[0\]\);\s*if \(!item\) return;/.test(companionSrc) &&
+    /if \(!payload\) return;/.test(companionSrc) &&
+    /const kinds = new Set\(payload\.items\.map\(\(i\) => i\.kind\)\);/.test(companionSrc) &&
+    /for \(const kind of kinds\) \{/.test(companionSrc) &&
+    /const keys = new Set\(payload\.items\.filter\(\(i\) => i\.kind === kind\)\.map\(\(i\) => i\.key\)\);/.test(
+      companionSrc,
+    ) &&
+    /if \(keys\.size === 0\) continue;/.test(companionSrc) &&
+    /let wroteAny = false;/.test(companionSrc) &&
+    /if \(res\.wrote\) wroteAny = true;/.test(companionSrc) &&
+    /parseFavDragPayload\(item\.value\)/.test(companionSrc) &&
+    /if \(!payload\) \{\s*try \{\s*payload = parseFavDragPayload\(JSON\.parse\(await item\.asString\(\)\)\);/.test(
+      companionSrc,
+    ),
+  'R5 line-audit: mutating any of these (wrong get mime, dropped accept-guard, inverted keys filter, skipped loop/guard) silently kills all or partial reorders with a green suite — the plumbing between the pinned parse (FAV.58) and the pinned mapping (FAV.59) is exactly where the R4/R5 surviving mutants lived. R6: +validator call site (a raw-cast bypass leaves FAV.58 matching dead code) and +asString fallback (the external-input channel the v0.5.48.1 hardening exists for).',
+);
+
 // cleanup
 try {
   fs.rmSync(tmpDir, { recursive: true, force: true });

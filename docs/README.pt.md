@@ -31,7 +31,7 @@
 
 **① Ponto de 5 estados na aba**　O ícone Claude de cada aba de sessão do CC muda de cor conforme o estado — 🟡 em execução / 🟢 concluído / 🔴 interrompido (pisca rápido) / ⚪ ocioso / 🔵 aguardando entrada. 🔵 aguardando entrada tem dois gatilhos: (a) o CC abre a caixa de autorização de permissão e cede o lugar ao ponto azul nativo do CC (sem sobrescrever); (b) a resposta do CC contém semântica de "aguardando sua decisão" — `te aguardo` / `você decide` / `let me know` / `your call` etc. — e a aba fica azul automaticamente (sobrescreve o amarelo-running / verde-done) — distinguindo num relance "realmente terminou" vs. "esperando eu dizer algo", sem precisar ficar adivinhando pela aba. A aba de sessão favoritada ganha prefixo **★** no título + linha dourada na parte inferior do ícone; a aba de sessão arquivada ganha prefixo **●** no título + linha cinza na parte inferior do ícone (favoritar e arquivar são mutuamente exclusivos — a mesma sessão só pode estar em um). Visível tanto na barra de abas do topo quanto na vista "Open Editors" do canto superior esquerdo, totalmente sincronizadas.
 
-**② Vista CC Favorites / CC Archive na barra lateral**　O Explorer ganha duas novas vistas CC Favorites + CC Archive (mutuamente exclusivas: uma sessão só pode estar em uma); a vista de favoritos fixa arquivos/sessões usados com frequência num só lugar, a vista de arquivo guarda as sessões que você não está usando no momento. O ícone da sessão mostra open=balão de chat sólido / closed=balão só com contorno; clique salta para a sessão ou faz resume abrindo num novo painel; botões inline alternam entre as vistas — vista de favoritos [Arquivar][Abrir][Remover], vista de arquivo [Favoritar][Abrir][Remover], clicar em Arquivar/Favoritar remove automaticamente da outra vista. Clique direito numa sessão fechada permite copiar o comando `claude -r <sid>`.
+**② Vista CC Favorites / CC Archive na barra lateral**　O Explorer ganha duas novas vistas CC Favorites + CC Archive (mutuamente exclusivas: uma sessão só pode estar em uma); a vista de favoritos fixa arquivos/sessões usados com frequência num só lugar, a vista de arquivo guarda as sessões que você não está usando no momento. O ícone da sessão mostra open=balão de chat sólido / closed=balão só com contorno; clique salta para a sessão ou faz resume abrindo num novo painel; botões inline alternam entre as vistas — vista de favoritos [Arquivar][Abrir][Remover], vista de arquivo [Favoritar][Abrir][Remover], clicar em Arquivar/Favoritar remove automaticamente da outra vista. Clique direito numa sessão fechada permite copiar o comando `claude -r <sid>`. As linhas das duas visões podem ser **reordenadas arrastando** — soltar sobre uma linha insere antes dela, soltar após a última move para o fim. Após o primeiro arrasto, a lista passa a ordem manual (novas entradas continuam aparecendo no topo); soltamentos sem mudança não gravam em disco.
 
 **③ Bloco agregado de 4 luzes na barra inferior**　Um bloco único na barra de status 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + contagem — o estado global de todas as sessões num relance, sem precisar alternar abas; as posições das 4 luzes são fixas, os números mudam sem deslocar a linha.
 
@@ -83,38 +83,42 @@ O ponto da aba fica 🟡 amarelo imediatamente, vira 🟢 verde quando termina (
 
 Quando termina / é interrompido, salta notificação do sistema + som (canto superior direito no macOS / toast no canto inferior direito no Win·Linux, dispara em primeiro e segundo plano).
 
-| Opção | Padrão | Descrição |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | Chave geral das notificações |
-| `ccStatusDot.notifyWhenFocused` | `true` | Também notifica em primeiro plano; `false` = só em segundo plano |
-| `ccStatusDot.notifySound` | `"Glass"` | Som da notificação do sistema no macOS (compartilhado entre done e interrupção; `""` silencia; opções: Basso/Ping/Hero etc.) |
+| Opção                           | Padrão    | Descrição                                                                                                                    |
+| ------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.notify`            | `true`    | Chave geral das notificações                                                                                                 |
+| `ccStatusDot.notifyWhenFocused` | `true`    | Também notifica em primeiro plano; `false` = só em segundo plano                                                             |
+| `ccStatusDot.notifySound`       | `"Glass"` | Som da notificação do sistema no macOS (compartilhado entre done e interrupção; `""` silencia; opções: Basso/Ping/Hero etc.) |
 
 ### 2. Estatísticas de tokens e custo (corresponde ao recurso ⑤)
 
 O SBI de tokens no canto inferior direito mostra o uso de tokens da sessão ativa + estimativa $ opcional + taxa de streaming; tokens de subagentes do workflow também entram na conta (não ficam "invisíveis").
 
-| Opção | Padrão | Descrição |
-|---|---|---|
-| `ccStatusDot.tokenStatsWindow` | `"all"` | Janela de tempo: `all` = cumulativo (sessão inteira, não zera); `5min/10min/1h/24h/3d/7d/30d` = janelas móveis (turns antigos saem ao expirar, parece que "zera") |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | Modo de exibição: `token` só tokens / `cost` só $ / `both` ambos |
-| `ccStatusDot.rateDisplayMode` | `"numeric"` | Apresentação da taxa de streaming: `off` / `numeric` (ex. `1.2k/s`) / `sparkline` (mini-gráfico `▁▂▃▄▅▆▇█`) / `both`; se a barra estiver lotada, troque para `off` |
-| `ccStatusDot.tokenSbiVisible` | `true` | Mostrar / ocultar o SBI de tokens |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | Atualização incremental em tempo real dos tokens durante o streaming; em máquinas sensíveis a desempenho, defina `false` |
-| `ccStatusDot.showCost` | `true` | Mostra `$` (modelos desconhecidos são ocultados automaticamente, requer entrada correspondente em `token-rates.json`) |
-| `ccStatusDot.warnThresholdUsd` | `0` | Notificação ao cruzar limite de custo (`0` = desativado; número positivo = limite USD, dispara uma vez por cruzamento) |
+| Opção                               | Padrão      | Descrição                                                                                                                                                          |
+| ----------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`     | Janela de tempo: `all` = cumulativo (sessão inteira, não zera); `5min/10min/1h/24h/3d/7d/30d` = janelas móveis (turns antigos saem ao expirar, parece que "zera")  |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`    | Modo de exibição: `token` só tokens / `cost` só $ / `both` ambos                                                                                                   |
+| `ccStatusDot.rateDisplayMode`       | `"numeric"` | Apresentação da taxa de streaming: `off` / `numeric` (ex. `1.2k/s`) / `sparkline` (mini-gráfico `▁▂▃▄▅▆▇█`) / `both`; se a barra estiver lotada, troque para `off` |
+| `ccStatusDot.tokenSbiVisible`       | `true`      | Mostrar / ocultar o SBI de tokens                                                                                                                                  |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`      | Atualização incremental em tempo real dos tokens durante o streaming; em máquinas sensíveis a desempenho, defina `false`                                           |
+| `ccStatusDot.showCost`              | `true`      | Mostra `$` (modelos desconhecidos são ocultados automaticamente, requer entrada correspondente em `token-rates.json`)                                              |
+| `ccStatusDot.warnThresholdUsd`      | `0`         | Notificação ao cruzar limite de custo (`0` = desativado; número positivo = limite USD, dispara uma vez por cruzamento)                                             |
 
 > **Preços personalizados por modelo**: `~/.claude/cc-status-dot/token-rates.json` é uma tabela de preços com recarga quente (por padrão cobre os preços oficiais da Anthropic; modelos não correspondidos como GLM ocultam `$` automaticamente). Adicione um glob para mostrar `$`:
 >
 > ```jsonc
-> { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
+> {
+>   "_default": null,
+>   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
+>   "glm-*": { "in": 0.5, "out": 1.5 },
+> }
 > ```
 
 ### 3. Favoritos / Arquivo (corresponde aos recursos ②④)
 
 Vistas CC Favorites + CC Archive na barra lateral (mutuamente exclusivas) + marcadores ★/● na aba + botões ★/○ na barra de status. O arquivo espelha os favoritos, sem necessidade de configuração extra.
 
-| Opção | Padrão | Descrição |
-|---|---|---|
+| Opção                                          | Padrão | Descrição                                                                                                                                      |
+| ---------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ccStatusDot.fav.includeInExplorerContextMenu` | `true` | Mostra "Adicionar/Remover dos favoritos do CC" no menu de contexto do Explorer; se o menu estiver sobrecarregado, defina `false` para desligar |
 
 ---
@@ -154,7 +158,6 @@ vscode-claude-code-status-dot        # depois de instalar, rode o comando direto
 - **Dependência da pilha de fontes emoji**: os pontos da barra inferior são glifos emoji (🟢🟡🔵🔴⚪) e dependem da pilha de fontes emoji do sistema — macOS (Apple Color Emoji) / Windows 10+ (Segoe UI Emoji) / Linux mainstream (Noto Color Emoji) renderizam colorido normalmente; Win7 / alguns Linux headless / ambientes SSH remotos sem fontes emoji podem renderizar como glifos em preto-e-branco ou blocos de tofu. Essa é uma escolha estética deliberada (pontos emoji > blocos de cor padronizados multiplataforma).
 
 ---
-
 
 ## 🏗️ Arquitetura + documentação
 

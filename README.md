@@ -31,7 +31,7 @@
 
 **① Tab 五态状态点**　每个 CC 会话 tab 的 Claude 图标按状态变色——🟡 运行中 / 🟢 完成 / 🔴 中断快闪 / ⚪ 空闲 / 🔵 待输入。🔵 待输入有两类触发：(a) CC 弹权限授权框时让位给 CC 原生蓝点（不覆盖）；(b) CC 回复含"等你确认 / let me know / your call"等**待你决策**语义时 tab 自动转蓝（覆盖原 running-黄 / done-绿）——一眼区分"真跑完"还是"等我说啥"，不用盯着 tab 猜。收藏会话 tab 标题加 **★** 前缀 + 图标底部金线；归档会话 tab 标题加 **●** 前缀 + 图标底部灰线（收藏/归档互斥，同一会话只居其一）。顶部 tab 栏 + 左侧"打开的编辑器"都显示，两边同步。
 
-**② 侧边栏 CC 收藏 / CC 归档视图**　Explorer 侧边新增 CC Favorites + CC Archive 两个视图（互斥：一个会话只在一个里）；收藏视图把常用会话/文件 pin 在一起，归档视图收纳暂时不用的会话。会话图标 open=实心气泡 / closed=轮廓气泡，点击即跳转或 resume 到新 panel；行内按钮互切——收藏视图 [归档][打开][移除]，归档视图 [收藏][打开][移除]，点归档/收藏即自动从另一视图移除。右键已闭会话可复制 `claude -r <sid>` 命令。
+**② 侧边栏 CC 收藏 / CC 归档视图**　Explorer 侧边新增 CC Favorites + CC Archive 两个视图（互斥：一个会话只在一个里）；收藏视图把常用会话/文件 pin 在一起，归档视图收纳暂时不用的会话。会话图标 open=实心气泡 / closed=轮廓气泡，点击即跳转或 resume 到新 panel；行内按钮互切——收藏视图 [归档][打开][移除]，归档视图 [收藏][打开][移除]，点归档/收藏即自动从另一视图移除。右键已闭会话可复制 `claude -r <sid>` 命令。两个视图的条目均可**拖拽排序**——拖到某行上方即插入其前，拖到列表末尾空处即移到最后；一旦拖过，该列表转为手动顺序（新收藏/归档的条目仍出现在列表顶部），拖回原位等无变化操作不写盘。
 
 **③ 底部 4 灯聚合**　状态栏一个整体块 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + 计数，所有会话整体状态一眼看完，不用切 tab；4 灯位置固定，数字变化不位移。
 
@@ -85,38 +85,42 @@ tab 图标立刻变 🟡 黄，跑完变 🟢 绿并弹通知；CC 弹权限授�
 
 跑完 / 中断时弹系统通知 + 提示音（macOS 屏幕右上角 / Win·Linux 右下角 toast，前台后台都弹）。
 
-| 配置项 | 默认 | 说明 |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | 通知总开关 |
-| `ccStatusDot.notifyWhenFocused` | `true` | 前台时也弹；设 `false` 仅后台时通知 |
-| `ccStatusDot.notifySound` | `"Glass"` | macOS 通知声音（done 与中断共用；`""` 静音；可选 Basso/Ping/Hero 等） |
+| 配置项                          | 默认      | 说明                                                                  |
+| ------------------------------- | --------- | --------------------------------------------------------------------- |
+| `ccStatusDot.notify`            | `true`    | 通知总开关                                                            |
+| `ccStatusDot.notifyWhenFocused` | `true`    | 前台时也弹；设 `false` 仅后台时通知                                   |
+| `ccStatusDot.notifySound`       | `"Glass"` | macOS 通知声音（done 与中断共用；`""` 静音；可选 Basso/Ping/Hero 等） |
 
 ### 2. Token 统计与费用（对应功能⑤）
 
 右下角 token SBI 显示当前激活会话的 token 用量 + 可选 $ 估算 + 流式速率；workflow 子代理 token 也算进来（不会"隐形"）。
 
-| 配置项 | 默认 | 说明 |
-|---|---|---|
-| `ccStatusDot.tokenStatsWindow` | `"all"` | 时间窗口：`all` = 累积（整个会话不清零）；`5min/10min/1h/24h/3d/7d/30d` = 滚动窗口（旧 turn 到期滑出，像"清零"） |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | 显示模式：`token` 仅 token / `cost` 仅 $ / `both` 两者 |
-| `ccStatusDot.rateDisplayMode` | `"numeric"` | 流式速率呈现：`off` / `numeric`（如 `1.2k/s`）/ `sparkline`（▁▂▃▄▅▆▇█ 迷你图）/ `both`；状态栏拥挤可切 `off` |
-| `ccStatusDot.tokenSbiVisible` | `true` | 显示 / 隐藏 token SBI |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | 流式输出时实时增量更新 token；性能敏感机器可设 `false` |
-| `ccStatusDot.showCost` | `true` | 显示 $（未知 model 自动隐藏，需 `token-rates.json` 有匹配条目） |
-| `ccStatusDot.warnThresholdUsd` | `0` | cost 跨阈通知（`0` = 禁用；正数 = USD 阈值，每次跨越触发一次） |
+| 配置项                              | 默认        | 说明                                                                                                             |
+| ----------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`     | 时间窗口：`all` = 累积（整个会话不清零）；`5min/10min/1h/24h/3d/7d/30d` = 滚动窗口（旧 turn 到期滑出，像"清零"） |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`    | 显示模式：`token` 仅 token / `cost` 仅 $ / `both` 两者                                                           |
+| `ccStatusDot.rateDisplayMode`       | `"numeric"` | 流式速率呈现：`off` / `numeric`（如 `1.2k/s`）/ `sparkline`（▁▂▃▄▅▆▇█ 迷你图）/ `both`；状态栏拥挤可切 `off`     |
+| `ccStatusDot.tokenSbiVisible`       | `true`      | 显示 / 隐藏 token SBI                                                                                            |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`      | 流式输出时实时增量更新 token；性能敏感机器可设 `false`                                                           |
+| `ccStatusDot.showCost`              | `true`      | 显示 $（未知 model 自动隐藏，需 `token-rates.json` 有匹配条目）                                                  |
+| `ccStatusDot.warnThresholdUsd`      | `0`         | cost 跨阈通知（`0` = 禁用；正数 = USD 阈值，每次跨越触发一次）                                                   |
 
 > **自定义模型定价**：`~/.claude/cc-status-dot/token-rates.json` 是热更定价表（默认覆盖 Anthropic 官方价；GLM 等未匹配 model 自动隐藏 `$`）。加一条 glob 即可显示 `$`：
 >
 > ```jsonc
-> { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
+> {
+>   "_default": null,
+>   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
+>   "glm-*": { "in": 0.5, "out": 1.5 },
+> }
 > ```
 
 ### 3. 收藏 / 归档（对应功能②④）
 
 侧边栏 CC Favorites + CC Archive 视图（互斥）+ tab ★/● 标记 + 状态栏 ★/○ 按钮。归档完全参照收藏，无需额外配置。
 
-| 配置项 | 默认 | 说明 |
-|---|---|---|
+| 配置项                                         | 默认   | 说明                                                                |
+| ---------------------------------------------- | ------ | ------------------------------------------------------------------- |
 | `ccStatusDot.fav.includeInExplorerContextMenu` | `true` | Explorer 右键菜单显示"加入/退出 CC 收藏"；菜单拥挤可设 `false` 关闭 |
 
 ---
@@ -156,7 +160,6 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 - **emoji 字体栈依赖**：底部状态栏圆点是 emoji 字形（🟢🟡🔵🔴⚪），依赖系统 emoji 字体栈——macOS（Apple Color Emoji）/ Windows 10+（Segoe UI Emoji）/ 主流 Linux（Noto Color Emoji）正常显示彩色；Win7 / 部分 headless Linux / 无 emoji 字体的远程 SSH 环境可能渲染为黑白字形或豆腐块。这是有意的审美取舍（圆点 emoji > 跨平台一致的色块）。
 
 ---
-
 
 ## 🏗️ 原理 + 文档
 

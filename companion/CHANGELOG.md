@@ -1,5 +1,10 @@
 # Change Log — cc-status-dot Companion
 
+> **ARCHIVED (2026-08-21, v0.5.48)**: entries stop at 0.5.9. From 0.5.10 on,
+> version-by-version rationale lives in git commit messages
+> (https://github.com/wangdong233/vscode-claude-code-status-dot/commits/main).
+> This file is kept for the pre-0.5.10 history only (03 清单 §1.7.2 disposition).
+
 All notable changes to the **cc-status-dot Companion** VS Code extension are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -9,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — QuickPick session selector (replaces the infeasible in-webview star)
 
-- **`ccStatusDot.fav.pickSession` command** (`favPickSession()` in `extension.ts`): command-palette entry "CC Favorites: Pick CC Session to Star/Unstar" — lists every open CC session via `globalThis.__ccsdSidToTitle` ∪ `__ccsdSidToPanel` (favorited ★ first, then open, then closed), pick one to toggle. Goes through the sole writer `writeFavAtomic` + `forceRefresh` so the tree re-renders inline. This is the zero-webview-coupling replacement for v0.5.8's in-webview star click (which was architecturally infeasible — see root CHANGELOG #1).
+- **`ccStatusDot.fav.pickSession` command** (`favPickSession()` in `extension.ts`): command-palette entry "CC Favorites: Pick CC Session to Star/Unstar" — lists every open CC session via `globalThis.__ccsdSidToTitle` ∪ `__ccsdSidToPanel` (favorited ★ first, then open, then closed), pick one to toggle. Goes through the sole writer `writeFavAtomic` + `forceRefresh` so the tree re-renders inline. This is the zero-webview-coupling replacement for v0.5.8's in-webview star click (which was architecturally infeasible — see git history (archived file — pre-0.5.10)).
 
 ### Removed — `editor/title/context` tab right-click menu + dead config
 
@@ -67,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `MIN_PATCHER_VERSION` 0.3.1 → 0.4.0; `injectVersion()` fallback v0.3.1 → v0.4.0; `activationEvents` adds `onView:ccStatusDot.favorites`.
 
-> Companion releases 0.2.1 → 0.3.1 shipped incremental patcher-version/handshake bumps without a dedicated CHANGELOG entry; this file picks up at 0.4.0 with the Favorites feature. See the main project `CHANGELOG.md` for the cross-version trail (the companion version follows the patcher's lockstep).
+> Companion releases 0.2.1 → 0.3.1 shipped incremental patcher-version/handshake bumps without a dedicated CHANGELOG entry; this file picks up at 0.4.0 with the Favorites feature. See git history for the cross-version trail (pre-0.5.10 entries above; later rationale in commit messages) (the companion version follows the patcher's lockstep).
 
 ## [0.2.0] — 2026-07-19
 

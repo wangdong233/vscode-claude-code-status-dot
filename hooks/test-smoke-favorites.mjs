@@ -106,7 +106,8 @@ function isValidFavSession(x) {
     (s.cwd === undefined || typeof s.cwd === 'string') &&
     (s.transcript_path === undefined || typeof s.transcript_path === 'string') &&
     (s.model === undefined || typeof s.model === 'string') &&
-    (s.state === undefined || typeof s.state === 'string')
+    (s.state === undefined || typeof s.state === 'string') &&
+    (s.order === undefined || (typeof s.order === 'number' && Number.isFinite(s.order)))
   );
 }
 function isValidFavFile(x) {
@@ -118,7 +119,8 @@ function isValidFavFile(x) {
     typeof f.label === 'string' &&
     typeof f.addedAt === 'number' &&
     (f.line === undefined || typeof f.line === 'number') &&
-    (f.workspace === undefined || typeof f.workspace === 'string')
+    (f.workspace === undefined || typeof f.workspace === 'string') &&
+    (f.order === undefined || (typeof f.order === 'number' && Number.isFinite(f.order)))
   );
 }
 
@@ -188,9 +190,14 @@ class FakeFavoritesProvider {
     this.openSids = new Set();
   }
   static signature(doc, openSids) {
+    // v0.5.48: order in the tuple (lockstep with the real provider — the
+    // .sort()ed signature is otherwise order-blind and reorders never
+    // re-render; mirrored here per the replica-drift discipline).
     return JSON.stringify({
-      s: doc.sessions.map((s) => `${s.sid}|${openSids.has(s.sid) ? 1 : 0}|${s.label}|${s.state || ''}`).sort(),
-      f: doc.files.map((f) => `${f.fsPath}|${f.label}|${f.line || 0}`).sort(),
+      s: doc.sessions
+        .map((s) => `${s.sid}|${openSids.has(s.sid) ? 1 : 0}|${s.label}|${s.state || ''}|${s.order ?? ''}`)
+        .sort(),
+      f: doc.files.map((f) => `${f.fsPath}|${f.label}|${f.line || 0}|${f.order ?? ''}`).sort(),
     });
   }
   refresh() {
@@ -210,20 +217,34 @@ class FakeFavoritesProvider {
     this.lastActiveSidForCtx = '';
     this.refresh();
   }
-  // getChildren mirror — sorts sessions by lastSeenAt desc, files by
-  // addedAt desc, partitions sessions by open/closed (mirrors openSidSet()).
+  // v0.5.48 DnD mirrors — same order-aware comparator semantics as
+  // companion compareFavSessions/compareFavFiles (manual block first ASC,
+  // unordered recency cluster above it, historical tiebreaks).
   getChildren() {
     const doc = readFavDoc(this.favFile) ?? emptyFavDoc();
+    const bucket = (r) => (typeof r.order === 'number' && Number.isFinite(r.order) ? r.order : -Infinity);
     const sessions = doc.sessions
       .slice()
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+      .sort((a, b) => {
+        const oa = bucket(a);
+        const ob = bucket(b);
+        if (oa < ob) return -1;
+        if (oa > ob) return 1;
+        return b.lastSeenAt - a.lastSeenAt;
+      })
       .map((s) => ({
         kind: this.openSids.has(s.sid) ? 'sessionOpen' : 'sessionClosed',
         session: s,
       }));
     const files = doc.files
       .slice()
-      .sort((a, b) => b.addedAt - a.addedAt)
+      .sort((a, b) => {
+        const oa = bucket(a);
+        const ob = bucket(b);
+        if (oa < ob) return -1;
+        if (oa > ob) return 1;
+        return b.addedAt - a.addedAt;
+      })
       .map((f) => ({ kind: 'file', file: f }));
     return [...sessions, ...files];
   }
@@ -572,6 +593,228 @@ try {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 } catch {
   /* best-effort */
+}
+
+// ---------------------------------------------------------------------------
+// §9 v0.5.48 — DnD reorder BEHAVIORAL tests (review round-1 HIGH: FAV.51-57
+// are source-shape pins and provably cannot fail on LOGIC mutations — this
+// section EVALs the ACTUAL reorderFavRows/compareFavSessions/compareFavFiles
+// from companion/extension.ts and runs the gesture matrix, so any mutation of
+// the reorder algorithm/comparators fails HERE (§2.1.3 tests-must-fail /
+// §2.1.4 mutation gate).
+// ---------------------------------------------------------------------------
+{
+  const src = fs.readFileSync(path.join(ROOT, 'companion', 'extension.ts'), 'utf8');
+  const extract = (name) => {
+    // v0.5.48: reorderFavRows carries a TS generic - search the bare name
+    // (works for both 'function name(' and 'function name<T ...>(').
+    const start = src.indexOf('function ' + name);
+    if (start < 0) throw new Error(name + ' not found');
+    // Skip the parameter list first (reorderFavRows has a TS generic whose
+    // constraint contains braces - the first '{' after 'function name' is the
+    // GENERIC's, not the body's). Track parens to the params' closing ')',
+    // then take the body brace that follows.
+    let p0 = src.indexOf('(', start);
+    let pd = 1;
+    p0 += 1;
+    while (p0 < src.length && pd > 0) {
+      const c = src[p0];
+      if (c === '(') pd += 1;
+      else if (c === ')') pd -= 1;
+      p0 += 1;
+    }
+    let i = src.indexOf('{', p0);
+    let depth = 1;
+    i += 1;
+    const bodyStart = i;
+    while (i < src.length && depth > 0) {
+      const ch = src[i];
+      if (ch === '{') depth += 1;
+      else if (ch === '}') depth -= 1;
+      i += 1;
+    }
+    return src.slice(bodyStart, i - 1);
+  };
+  // v0.5.48.1 (round-2 HIGH): reorderFavRows, favOrderBucket AND both
+  // comparators are extracted from the companion source (comparators get the
+  // extracted favOrderBucket injected), so mutations of the reorder algorithm
+  // / bucket / comparator bodies ALL fail §9. The previous version inlined the
+  // comparators as textual mirrors — comparator mutations passed the entire
+  // suite (mutation score 1/5, empirically confirmed). parseFavDragPayload
+  // CANNOT be eval-extracted (its body contains TS `as` casts); §9k exercises
+  // an inline mirror whose every branch is literal-pinned by FAV.58 in
+  // test-favorites.mjs (kills the realistic mutations of that 12-line body).
+  const factory = new Function(
+    'return {' +
+      'favOrderBucket: new Function("r", ' +
+      JSON.stringify(extract('favOrderBucket')) +
+      '),' +
+      'reorderFavRows: new Function("rows","keyOf","cmp","keys","where", ' +
+      JSON.stringify(extract('reorderFavRows')) +
+      '),' +
+      'compareFavSessions: new Function("favOrderBucket","a","b", ' +
+      JSON.stringify(extract('compareFavSessions')) +
+      '),' +
+      'compareFavFiles: new Function("favOrderBucket","a","b", ' +
+      JSON.stringify(extract('compareFavFiles')) +
+      ')};',
+  );
+  const DnDRaw = factory();
+  const DnD = {
+    ...DnDRaw,
+    compareFavSessions: (a, b) => DnDRaw.compareFavSessions(DnDRaw.favOrderBucket, a, b),
+    compareFavFiles: (a, b) => DnDRaw.compareFavFiles(DnDRaw.favOrderBucket, a, b),
+  };
+  const sess = (sid, lastSeenAt, order) => ({
+    sid,
+    label: sid,
+    addedAt: 1,
+    lastSeenAt,
+    ...(order !== undefined ? { order } : {}),
+  });
+  const keySeq = (rows) => rows.map((r) => r.sid).join(',');
+  const SMOKE = (name, cond, detail) => {
+    if (cond) {
+      pass++;
+      console.log('  PASS  ' + name);
+    } else {
+      fail++;
+      console.log('  FAIL  ' + name + (detail ? '   ' + detail : ''));
+    }
+  };
+
+  // §9a pre-drag: all-unordered list displays recency desc (bit-identical legacy)
+  let rows = [sess('A', 100), sess('B', 300), sess('C', 200)];
+  let disp = rows
+    .slice()
+    .sort(DnD.compareFavSessions)
+    .map((r) => r.sid)
+    .join(',');
+  SMOKE('§9a unordered list renders recency-desc (legacy bit-identical)', disp === 'B,C,A', 'got ' + disp);
+
+  // §9b drag A (display pos 3 in recency order B,C,A) before B → [A,B,C],
+  // dense stamp 0..2, non-order fields untouched. (Dragging B before C would
+  // already be its display position - a legitimate no-op, covered by §9d.)
+  rows = [sess('A', 100), sess('B', 300), sess('C', 200)];
+  let changed = DnD.reorderFavRows(rows, (r) => r.sid, DnD.compareFavSessions, new Set(['A']), {
+    at: 'before',
+    key: 'B',
+  });
+  SMOKE(
+    '§9b move-A-before-B changed=true, display [A,B,C] stamped 0..2, labels kept',
+    changed &&
+      keySeq(rows) === 'A,B,C' &&
+      rows[0].order === 0 &&
+      rows[1].order === 1 &&
+      rows[2].order === 2 &&
+      rows.every((r) => r.label === r.sid && typeof r.lastSeenAt === 'number'),
+    'changed=' + changed + ' got ' + keySeq(rows),
+  );
+
+  // §9c SELF-DROP: B onto B → positional no-op, NO mutation (review MEDIUM ×3)
+  rows = [sess('A', 100, 0), sess('B', 300, 1), sess('C', 200, 2)];
+  const snapshot = JSON.stringify(rows);
+  changed = DnD.reorderFavRows(rows, (r) => r.sid, DnD.compareFavSessions, new Set(['B']), { at: 'before', key: 'B' });
+  SMOKE(
+    '§9c drop-onto-own-row is a NO-OP (changed=false, rows untouched)',
+    changed === false && JSON.stringify(rows) === snapshot,
+    'changed=' + changed,
+  );
+
+  // §9d same-position drop → no-op (no write churn)
+  rows = [sess('A', 100, 0), sess('B', 300, 1), sess('C', 200, 2)];
+  changed = DnD.reorderFavRows(rows, (r) => r.sid, DnD.compareFavSessions, new Set(['C']), { at: 'before', key: 'C' });
+  SMOKE('§9d same-position drop is a no-op', changed === false, 'changed=' + changed);
+
+  // §9e undefined target (drop past last row) = END
+  rows = [sess('A', 100, 0), sess('B', 300, 1), sess('C', 200, 2)];
+  changed = DnD.reorderFavRows(rows, (r) => r.sid, DnD.compareFavSessions, new Set(['A']), { at: 'end' });
+  SMOKE('§9e undefined target → dragged row moves to END', changed && keySeq(rows) === 'B,C,A', 'got ' + keySeq(rows));
+
+  // §9f head: drag C to top
+  rows = [sess('A', 100, 0), sess('B', 300, 1), sess('C', 200, 2)];
+  changed = DnD.reorderFavRows(rows, (r) => r.sid, DnD.compareFavSessions, new Set(['C']), { at: 'head' });
+  SMOKE('§9f head insertion works (C to top)', changed && keySeq(rows) === 'C,A,B', 'got ' + keySeq(rows));
+
+  // §9g unordered new row renders ABOVE the manual block (recency cluster)
+  rows = [sess('A', 100, 0), sess('B', 300, 1), sess('NEW', 999)];
+  disp = rows
+    .slice()
+    .sort(DnD.compareFavSessions)
+    .map((r) => r.sid)
+    .join(',');
+  SMOKE('§9g new unordered row lands ABOVE the manual block', disp === 'NEW,A,B', 'got ' + disp);
+
+  // §9h vanished key (row deleted mid-drag) → no-op
+  rows = [sess('A', 100, 0), sess('B', 300, 1)];
+  changed = DnD.reorderFavRows(rows, (r) => r.sid, DnD.compareFavSessions, new Set(['GONE']), {
+    at: 'before',
+    key: 'A',
+  });
+  SMOKE('§9h vanished dragged key → changed=false', changed === false, 'changed=' + changed);
+
+  // §9i vanished TARGET (row deleted mid-drag) → clamp to end
+  rows = [sess('A', 100, 0), sess('B', 300, 1)];
+  changed = DnD.reorderFavRows(rows, (r) => r.sid, DnD.compareFavSessions, new Set(['A']), {
+    at: 'before',
+    key: 'GONE',
+  });
+  SMOKE('§9i vanished target clamps to end', changed && keySeq(rows) === 'B,A', 'got ' + keySeq(rows));
+
+  // §9k parsePayload behavioral (round-2 HIGH: zero coverage before — a
+  // broken version check would silently kill the entire drag feature).
+  // parseFavDragPayload mirror (TS casts prevent eval-extraction); every
+  // branch literal-pinned by FAV.58 in test-favorites.mjs.
+  const PP = (x) => {
+    if (!x || typeof x !== 'object') return null;
+    if (x.v !== 1 || !Array.isArray(x.items)) return null;
+    for (const it of x.items) {
+      if (!it || typeof it !== 'object') return null;
+      if ((it.kind !== 'session' && it.kind !== 'file') || typeof it.key !== 'string' || !it.key) return null;
+    }
+    return { v: 1, items: x.items };
+  };
+  SMOKE(
+    '§9k parsePayload accepts a valid v1 payload',
+    PP({
+      v: 1,
+      items: [
+        { kind: 'session', key: 'abc' },
+        { kind: 'file', key: '/x/y' },
+      ],
+    }) !== null,
+  );
+  SMOKE('§9k parsePayload rejects wrong version', PP({ v: 2, items: [] }) === null && PP({ items: [] }) === null);
+  SMOKE(
+    '§9k parsePayload rejects malformed items',
+    PP({ v: 1, items: [null] }) === null &&
+      PP({ v: 1, items: [{ kind: 'bogus', key: 'x' }] }) === null &&
+      PP({ v: 1, items: [{ kind: 'session', key: 42 }] }) === null &&
+      PP({ v: 1, items: [{ kind: 'session', key: '' }] }) === null,
+  );
+  SMOKE('§9k parsePayload rejects non-objects', PP(null) === null && PP('x') === null && PP(7) === null);
+  SMOKE(
+    '§9k favOrderBucket: unordered rows are -Infinity ( ABOVE the manual block )',
+    DnD.favOrderBucket({}) === -Infinity &&
+      DnD.favOrderBucket({ order: 3 }) === 3 &&
+      DnD.favOrderBucket({ order: 'x' }) === -Infinity &&
+      DnD.favOrderBucket({ order: NaN }) === -Infinity,
+  );
+
+  // §9j files comparator (addedAt tiebreak)
+  const frow = (fsPath, addedAt, order) => ({
+    fsPath,
+    label: fsPath,
+    addedAt,
+    ...(order !== undefined ? { order } : {}),
+  });
+  let files = [frow('x', 10, 0), frow('y', 20, 1)];
+  changed = DnD.reorderFavRows(files, (r) => r.fsPath, DnD.compareFavFiles, new Set(['x']), { at: 'end' });
+  SMOKE(
+    '§9j files reorder via compareFavFiles',
+    changed && files.map((f) => f.fsPath).join(',') === 'y,x',
+    'got ' + files.map((f) => f.fsPath).join(','),
+  );
 }
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

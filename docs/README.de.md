@@ -31,7 +31,7 @@
 
 **① Tab-Fünf-Zustands-Statuspunkt**　Das Claude-Icon jedes CC-Session-Tabs ändert die Farbe nach Zustand —— 🟡 läuft / 🟢 fertig / 🔴 kurzes Rot-Blinken bei Unterbrechung / ⚪ Leerlauf / 🔵 wartet auf Eingabe. 🔵 wartet auf Eingabe hat **zwei Auslöser**: (a) CC fordert Berechtigung an → der Reader überlässt das Icon dem nativen CC-Blau-Punkt (**keine Überschreibung**); (b) CCs Antwort enthält »wartet auf deine Bestätigung / let me know / your call«-**Semantik** → der Tab schaltet automatisch auf Blau (überschreibt running-Gelb / done-Grün) —— auf einen Blick erkennst du »wirklich fertig« oder »wartet auf meine Eingabe«, ohne den Tab anstarren zu müssen. Favorisierte Session-Tabs erhalten ein **★**-Präfix im Titel + eine goldene Linie am unteren Icon-Rand; archivierte Session-Tabs erhalten ein **●**-Präfix im Titel + eine graue Linie am unteren Icon-Rand (Favorit und Archiv schließen sich gegenseitig aus, eine Session ist immer nur eines von beidem). Obere Tab-Leiste + Seitenleiste „Offene Editoren“ zeigen es beide, vollständig synchron.
 
-**② CC-Favorites- / CC-Archive-Ansicht in der Seitenleiste**　In der Explorer-Seitenleiste kommen **CC Favorites** + **CC Archive** hinzu (schließen sich gegenseitig aus: eine Session ist nur in einer der beiden); die Favorites-Ansicht pinnt häufig verwendete Sessions/Dateien an einem Ort, die Archive-Ansicht nimmt derzeit ungenutzte Sessions auf. Session-Icon open = solide Sprechblase / closed = Kontur-Sprechblase, Klick springt direkt dorthin oder resumed in ein neues Panel; Inline-Buttons schalten gegenseitig um —— Favorites-Ansicht [Archiv][Öffnen][Entfernen], Archive-Ansicht [Favorit][Öffnen][Entfernen], ein Klick auf Archiv/Favorit verschiebt die Session automatisch in die jeweils andere Ansicht. Rechtsklick auf eine bereits geschlossene Session kopiert den Befehl `claude -r <sid>`.
+**② CC-Favorites- / CC-Archive-Ansicht in der Seitenleiste**　In der Explorer-Seitenleiste kommen **CC Favorites** + **CC Archive** hinzu (schließen sich gegenseitig aus: eine Session ist nur in einer der beiden); die Favorites-Ansicht pinnt häufig verwendete Sessions/Dateien an einem Ort, die Archive-Ansicht nimmt derzeit ungenutzte Sessions auf. Session-Icon open = solide Sprechblase / closed = Kontur-Sprechblase, Klick springt direkt dorthin oder resumed in ein neues Panel; Inline-Buttons schalten gegenseitig um —— Favorites-Ansicht [Archiv][Öffnen][Entfernen], Archive-Ansicht [Favorit][Öffnen][Entfernen], ein Klick auf Archiv/Favorit verschiebt die Session automatisch in die jeweils andere Ansicht. Rechtsklick auf eine bereits geschlossene Session kopiert den Befehl `claude -r <sid>`. Zeilen in beiden Ansichten lassen sich per **Drag & Drop umsortieren** — auf einer Zeile ablegen fügt davor ein, hinter der letzten Zeile ablegen ans Ende. Nach dem ersten Ziehen steht die Liste auf manueller Reihenfolge (neue Einträge erscheinen weiterhin oben); No-op-Drops schreiben nichts auf die Platte.
 
 **③ Vier-Lichter-Aggregat unten**　Ein kompakter Block in der Statusleiste 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + Ziffern — Gesamtzustand aller Sessions auf einen Blick, ohne den Tab zu wechseln; die vier Positionen sind fix, Ziffernwechsel verschiebt nichts.
 
@@ -83,39 +83,43 @@ Sofort wird der Tab 🟡 gelb; bei Fertigstellung 🟢 grün plus Benachrichtigu
 
 Bei Fertigstellung / Unterbrechung wird eine Systembenachrichtigung + Ton eingeblendet (macOS: rechte obere Ecke / Win · Linux: Toast unten rechts, im Vordergrund wie im Hintergrund).
 
-| Konfig-Item | Standard | Beschreibung |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | Hauptschalter für Benachrichtigungen |
-| `ccStatusDot.notifyWhenFocused` | `true` | Auch im Vordergrund benachrichtigen; auf `false` nur im Hintergrund benachrichtigen |
-| `ccStatusDot.notifySound` | `"Glass"` | macOS-Benachrichtigungston (done und unterbrochen teilen sich; `""` stumm; Alternativen: Basso/Ping/Hero usw.) |
+| Konfig-Item                     | Standard  | Beschreibung                                                                                                   |
+| ------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.notify`            | `true`    | Hauptschalter für Benachrichtigungen                                                                           |
+| `ccStatusDot.notifyWhenFocused` | `true`    | Auch im Vordergrund benachrichtigen; auf `false` nur im Hintergrund benachrichtigen                            |
+| `ccStatusDot.notifySound`       | `"Glass"` | macOS-Benachrichtigungston (done und unterbrochen teilen sich; `""` stumm; Alternativen: Basso/Ping/Hero usw.) |
 
 ### 2. Token-Statistik und Kosten (entspricht Funktion ⑤)
 
 Der Token-SBI unten rechts zeigt den Token-Verbrauch der aktiven Session + optionale $-Schätzung + Streaming-Rate; Workflow-Subagent-Token fließt ebenfalls ein (bleibt nicht »unsichtbar«).
 
-| Konfig-Item | Standard | Beschreibung |
-|---|---|---|
-| `ccStatusDot.tokenStatsWindow` | `"all"` | Zeitfenster: `all` = kumulativ (ganze Session, kein Reset); `5min/10min/1h/24h/3d/7d/30d` = gleitendes Fenster (alte Turns fallen heraus, wirkt wie ein »Reset«) |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | Anzeigemodus: `token` nur Token / `cost` nur $ / `both` beides |
-| `ccStatusDot.rateDisplayMode` | `"numeric"` | Streaming-Rate-Darstellung: `off` / `numeric` (z. B. `1.2k/s`) / `sparkline` (▁▂▃▄▅▆▇█ Minichart) / `both`; bei voller Statusleiste auf `off` schalten |
-| `ccStatusDot.tokenSbiVisible` | `true` | Token-SBI anzeigen / verbergen |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | Während des Streamings Token-Echtzeit-Delta aktualisieren; auf leistungsempfindlichen Rechnern auf `false` setzen |
-| `ccStatusDot.showCost` | `true` | `$` anzeigen (unbekannte Modelle automatisch ausgeblendet, benötigt passenden Eintrag in `token-rates.json`) |
-| `ccStatusDot.warnThresholdUsd` | `0` | Benachrichtigung bei Kosten-Schwellwert (`0` = deaktiviert; positive Zahl = USD-Schwellwert, löst einmal pro Überschreitung aus) |
+| Konfig-Item                         | Standard    | Beschreibung                                                                                                                                                     |
+| ----------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`     | Zeitfenster: `all` = kumulativ (ganze Session, kein Reset); `5min/10min/1h/24h/3d/7d/30d` = gleitendes Fenster (alte Turns fallen heraus, wirkt wie ein »Reset«) |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`    | Anzeigemodus: `token` nur Token / `cost` nur $ / `both` beides                                                                                                   |
+| `ccStatusDot.rateDisplayMode`       | `"numeric"` | Streaming-Rate-Darstellung: `off` / `numeric` (z. B. `1.2k/s`) / `sparkline` (▁▂▃▄▅▆▇█ Minichart) / `both`; bei voller Statusleiste auf `off` schalten           |
+| `ccStatusDot.tokenSbiVisible`       | `true`      | Token-SBI anzeigen / verbergen                                                                                                                                   |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`      | Während des Streamings Token-Echtzeit-Delta aktualisieren; auf leistungsempfindlichen Rechnern auf `false` setzen                                                |
+| `ccStatusDot.showCost`              | `true`      | `$` anzeigen (unbekannte Modelle automatisch ausgeblendet, benötigt passenden Eintrag in `token-rates.json`)                                                     |
+| `ccStatusDot.warnThresholdUsd`      | `0`         | Benachrichtigung bei Kosten-Schwellwert (`0` = deaktiviert; positive Zahl = USD-Schwellwert, löst einmal pro Überschreitung aus)                                 |
 
 > **Eigene Modell-Preise**: `~/.claude/cc-status-dot/token-rates.json` ist eine heiß-reloadbare Preistabelle (deckt standardmäßig Anthropics offizielle Preise ab; GLM und andere nicht übereinstimmende Modelle blenden `$` automatisch aus). Füge einen Glob hinzu, um `$` anzuzeigen:
 >
 > ```jsonc
-> { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
+> {
+>   "_default": null,
+>   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
+>   "glm-*": { "in": 0.5, "out": 1.5 },
+> }
 > ```
 
 ### 3. Favoriten / Archiv (entspricht Funktion ②④)
 
 CC-Favorites- + CC-Archive-Ansicht in der Seitenleiste (schließen sich gegenseitig aus) + Tab-★/●-Markierung + ★/○-Buttons in der Statusleiste. Archiv verhält sich exakt wie Favoriten, keine zusätzliche Konfiguration nötig.
 
-| Konfig-Item | Standard | Beschreibung |
-|---|---|---|
-| `ccStatusDot.fav.includeInExplorerContextMenu` | `true` | Explorer-Rechtsklickmenü zeigt »Zu CC-Favorites hinzufügen/entfernen«; bei überfülltem Menü auf `false` setzen |
+| Konfig-Item                                    | Standard | Beschreibung                                                                                                   |
+| ---------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.fav.includeInExplorerContextMenu` | `true`   | Explorer-Rechtsklickmenü zeigt »Zu CC-Favorites hinzufügen/entfernen«; bei überfülltem Menü auf `false` setzen |
 
 ---
 
@@ -154,7 +158,6 @@ vscode-claude-code-status-dot        # nach der Installation direkt den Befehl a
 - **Emoji-Font-Stack-Abhängigkeit**: die Lichter in der unteren Statusleiste sind Emoji-Glyphen (🟢🟡🔵🔴⚪), abhängig vom System-Emoji-Font-Stack — macOS (Apple Color Emoji) / Windows 10+ (Segoe UI Emoji) / gängige Linux-Distributionen (Noto Color Emoji) rendern sie farbig; Win7 / headless Linux / Remote-SSH ohne Emoji-Font könnten sie monochrom oder als Tofu-Kästchen rendern. Bewusster ästhetischer Trade-off (Emoji-Bälle > plattformübergreifend einheitliche Farbflecken).
 
 ---
-
 
 ## 🏗️ Architektur + Dokumentation
 

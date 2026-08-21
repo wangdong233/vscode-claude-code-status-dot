@@ -31,7 +31,7 @@
 
 **① Point d'état à cinq états sur l'onglet**　L'icône Claude de chaque onglet de session CC change de couleur selon l'état — 🟡 en cours / 🟢 terminé / 🔴 clignotement rapide si interrompu / ⚪ inactif / 🔵 en attente de saisie. 🔵 en attente a deux types de déclencheurs : (a) CC affiche une boîte d'autorisation → cède la place au point bleu natif de CC (**sans le recouvrir**) ; (b) la réponse de CC contient une sémantique « attends ta décision / let me know / your call » → l'onglet passe automatiquement en bleu (**par-dessus running-jaune / done-vert**) — d'un coup d'œil, distinguez « vraiment terminé » de « attend que je dise quelque chose », sans scruter l'onglet pour deviner. Les onglets des sessions favorites portent un préfixe **★** dans le titre + une ligne dorée en bas de l'icône ; les onglets des sessions archivées portent un préfixe **●** + une ligne grise en bas de l'icône (favoris / archivage mutuellement exclusifs — une même session ne peut figurer que dans l'un). Affiché à la fois dans la barre d'onglets supérieure et dans la vue « Open Editors », parfaitement synchronisé des deux côtés.
 
-**② Vues CC Favorites / CC Archive dans la barre latérale**　Deux vues s'ajoutent à l'Explorer : CC Favorites + CC Archive (mutuellement exclusives : une session ne figure que dans une seule) ; la vue Favoris épingle les sessions/fichiers fréquents au même endroit, la vue Archive rassemble les sessions temporairement inutilisées. L'icône de session open = bulle pleine / closed = bulle en contour, un clic y saute ou lance un resume vers un nouveau panel ; boutons en ligne pour basculer entre les deux — vue Favoris [Archiver][Ouvrir][Retirer], vue Archive [Favori][Ouvrir][Retirer], cliquer sur Archiver/Favori la déplace automatiquement dans l'autre vue. Clic droit sur une session fermée permet de copier la commande `claude -r <sid>`.
+**② Vues CC Favorites / CC Archive dans la barre latérale**　Deux vues s'ajoutent à l'Explorer : CC Favorites + CC Archive (mutuellement exclusives : une session ne figure que dans une seule) ; la vue Favoris épingle les sessions/fichiers fréquents au même endroit, la vue Archive rassemble les sessions temporairement inutilisées. L'icône de session open = bulle pleine / closed = bulle en contour, un clic y saute ou lance un resume vers un nouveau panel ; boutons en ligne pour basculer entre les deux — vue Favoris [Archiver][Ouvrir][Retirer], vue Archive [Favori][Ouvrir][Retirer], cliquer sur Archiver/Favori la déplace automatiquement dans l'autre vue. Clic droit sur une session fermée permet de copier la commande `claude -r <sid>`. Les lignes des deux vues se **réorganisent par glisser-déposer** — déposer sur une ligne insère avant elle, déposer après la dernière la déplace en fin. Dès le premier glissement, la liste passe en ordre manuel (les nouvelles entrées restent en haut) ; les dépôts sans changement n'écrivent rien sur disque.
 
 **③ Agrégat à 4 boules en bas**　Un bloc compact unique dans la barre d'état 🟢 done · 🟡 running · 🔵 pending · 🔴 interrupted + compteurs, l'état global de toutes les sessions en un coup d'œil, sans changer d'onglet ; les 4 positions sont fixes, les chiffres qui changent ne décalent jamais la ligne.
 
@@ -83,38 +83,42 @@ L'onglet devient aussitôt 🟡 jaune, puis 🟢 vert à la fin avec une notific
 
 En fin de session / interruption, envoie une notification système + son (coin supérieur droit sur macOS / toast en bas à droite sur Win·Linux, au premier plan comme à l'arrière-plan).
 
-| Clé | Défaut | Description |
-|---|---|---|
-| `ccStatusDot.notify` | `true` | Interrupteur général des notifications |
-| `ccStatusDot.notifyWhenFocused` | `true` | Notifier aussi au premier plan ; `false` pour ne notifier qu'en arrière-plan |
-| `ccStatusDot.notifySound` | `"Glass"` | Son de notification macOS (partagé entre done et interruption ; `""` pour muet ; Basso / Ping / Hero etc. possibles) |
+| Clé                             | Défaut    | Description                                                                                                          |
+| ------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.notify`            | `true`    | Interrupteur général des notifications                                                                               |
+| `ccStatusDot.notifyWhenFocused` | `true`    | Notifier aussi au premier plan ; `false` pour ne notifier qu'en arrière-plan                                         |
+| `ccStatusDot.notifySound`       | `"Glass"` | Son de notification macOS (partagé entre done et interruption ; `""` pour muet ; Basso / Ping / Hero etc. possibles) |
 
 ### 2. Statistiques de tokens & coût (fonctionnalité ⑤)
 
 Le SBI de tokens en bas à droite affiche l'usage de tokens de la session active + estimation optionnelle en $ + débit de streaming ; les tokens des subagents workflow sont aussi comptabilisés (pas « invisibles »).
 
-| Clé | Défaut | Description |
-|---|---|---|
-| `ccStatusDot.tokenStatsWindow` | `"all"` | Fenêtre temporelle : `all` = cumulatif (toute la session, jamais remis à zéro) ; `5min/10min/1h/24h/3d/7d/30d` = fenêtres glissantes (les anciens turns expirent et sortent, donnant l'impression d'un « reset ») |
-| `ccStatusDot.tokenDisplayMode` | `"both"` | Mode d'affichage : `token` (tokens seulement) / `cost` ($ seulement) / `both` (les deux) |
-| `ccStatusDot.rateDisplayMode` | `"numeric"` | Débit de streaming : `off` / `numeric` (ex. `1.2k/s`) / `sparkline` (▁▂▃▄▅▆▇█ mini-graphique) / `both` ; `off` si la barre d'état est saturée |
-| `ccStatusDot.tokenSbiVisible` | `true` | Afficher / masquer le SBI de tokens |
-| `ccStatusDot.tokenLiveDeltaEnabled` | `true` | Pendant le streaming, met à jour les tokens en temps réel ; `false` sur les machines sensibles aux performances |
-| `ccStatusDot.showCost` | `true` | Afficher `$` (les modèles inconnus sont masqués automatiquement, nécessite une entrée dans `token-rates.json`) |
-| `ccStatusDot.warnThresholdUsd` | `0` | Notification de franchissement de seuil (`0` = désactivé ; nombre positif = seuil USD, se déclenche une fois par franchissement) |
+| Clé                                 | Défaut      | Description                                                                                                                                                                                                       |
+| ----------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ccStatusDot.tokenStatsWindow`      | `"all"`     | Fenêtre temporelle : `all` = cumulatif (toute la session, jamais remis à zéro) ; `5min/10min/1h/24h/3d/7d/30d` = fenêtres glissantes (les anciens turns expirent et sortent, donnant l'impression d'un « reset ») |
+| `ccStatusDot.tokenDisplayMode`      | `"both"`    | Mode d'affichage : `token` (tokens seulement) / `cost` ($ seulement) / `both` (les deux)                                                                                                                          |
+| `ccStatusDot.rateDisplayMode`       | `"numeric"` | Débit de streaming : `off` / `numeric` (ex. `1.2k/s`) / `sparkline` (▁▂▃▄▅▆▇█ mini-graphique) / `both` ; `off` si la barre d'état est saturée                                                                     |
+| `ccStatusDot.tokenSbiVisible`       | `true`      | Afficher / masquer le SBI de tokens                                                                                                                                                                               |
+| `ccStatusDot.tokenLiveDeltaEnabled` | `true`      | Pendant le streaming, met à jour les tokens en temps réel ; `false` sur les machines sensibles aux performances                                                                                                   |
+| `ccStatusDot.showCost`              | `true`      | Afficher `$` (les modèles inconnus sont masqués automatiquement, nécessite une entrée dans `token-rates.json`)                                                                                                    |
+| `ccStatusDot.warnThresholdUsd`      | `0`         | Notification de franchissement de seuil (`0` = désactivé ; nombre positif = seuil USD, se déclenche une fois par franchissement)                                                                                  |
 
 > **Tarification personnalisée par modèle** : `~/.claude/cc-status-dot/token-rates.json` est une table de prix à rechargement à chaud (par défaut couvre les prix officiels Anthropic ; les modèles inconnus comme GLM masquent automatiquement le `$`). Ajoutez un glob pour afficher le `$` :
 >
 > ```jsonc
-> { "_default": null, "claude-sonnet-*": {"in":3,"out":15,"cacheRead":0.3,"cacheCreate5m":3.75,"cacheCreate1h":6}, "glm-*": {"in":0.5,"out":1.5} }
+> {
+>   "_default": null,
+>   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
+>   "glm-*": { "in": 0.5, "out": 1.5 },
+> }
 > ```
 
 ### 3. Favoris / Archive (fonctionnalité ②④)
 
 Vues CC Favorites + CC Archive dans la barre latérale (mutuellement exclusives) + marqueurs ★/● sur l'onglet + boutons ★/○ dans la barre d'état. L'Archive reproduit à l'identique les Favoris, aucune configuration supplémentaire nécessaire.
 
-| Clé | Défaut | Description |
-|---|---|---|
+| Clé                                            | Défaut | Description                                                                                                    |
+| ---------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------- |
 | `ccStatusDot.fav.includeInExplorerContextMenu` | `true` | Afficher « Ajouter / Retirer des favoris CC » dans le clic droit de l'Explorer ; `false` si le menu est saturé |
 
 ---
@@ -154,7 +158,6 @@ vscode-claude-code-status-dot        # lancez directement la commande après ins
 - **Dépendance à la stack de polices emoji** : les boules dans la barre d'état inférieure sont des glyphes emoji (🟢🟡🔵🔴⚪), qui dépendent de la stack de polices emoji du système — macOS (Apple Color Emoji) / Windows 10+ (Segoe UI Emoji) / Linux grand public (Noto Color Emoji) affichent la couleur normalement ; Win7 / certaines distros Linux headless / environnements SSH distants sans police emoji peuvent rendre des glyphes noir et blanc ou des tofu. C'est un compromis esthétique délibéré (boule emoji > bloc de couleur cross-platform cohérent).
 
 ---
-
 
 ## 🏗️ Principe + Documentation
 

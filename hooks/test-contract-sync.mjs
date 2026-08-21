@@ -642,6 +642,33 @@ if (patchTokens !== null && hookTokens !== null) {
   );
 }
 
+// --- v0.5.48 §DND-MIME: DnD mime constants ↔ package.json view ids (§1.7.7) ---
+// The tree DnD mime format is `application/vnd.code.tree.<viewid-lowercase>`
+// (@types/vscode TreeDragAndDropController doc) — the constants in
+// companion/extension.ts and the contributed view ids in companion/package.json
+// are a cross-file literal PAIR: renaming a view without the mime silently
+// kills drag-reorder (the workbench stops matching the mime). This pin derives
+// the expected mimes FROM package.json so the pair cannot drift.
+{
+  const pkg = JSON.parse(read('companion/package.json'));
+  const viewIds = ((pkg.contributes && pkg.contributes.views && pkg.contributes.views.explorer) || []).map((v) => v.id);
+  const ext = read('companion/extension.ts');
+  const derivedOk = viewIds
+    .map((id) => {
+      const mime = 'application/vnd.code.tree.' + id.toLowerCase();
+      const re = new RegExp('"' + mime.replace(/[.]/g, '\\.') + '"');
+      return re.test(ext);
+    })
+    .every(Boolean);
+  check(
+    '§DND-MIME every contributed tree view id has its derived DnD mime constant in extension.ts (' +
+      viewIds.join(', ') +
+      ')',
+    viewIds.length >= 2 && derivedOk,
+    'the DnD mime must equal application/vnd.code.tree.<viewid-lowercase> for each view — renaming a view id without the mime silently kills drag-reorder.',
+  );
+}
+
 console.log('');
 if (fail === 0) {
   console.log(`All ${pass} contract-sync checks passed.`);

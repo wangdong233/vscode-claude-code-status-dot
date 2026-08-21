@@ -401,7 +401,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.47 stamp', /\/\*cc-status-dot-injected:v0.5.47:/.test(iife));
+check('IIFE.21c banner carries v0.5.48 stamp', /\/\*cc-status-dot-injected:v0.5.48:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -2707,7 +2707,7 @@ check(
 //     harness covers behavior for those pure helpers; these three are
 //     impure — they call into vscode API + globalThis caches). Source
 //     presence + banner-stamp + paren-balance is the right gate here; the
-//     measured-numbers rationale lives in docs/STATES.md §9 + CHANGELOG.
+//     measured-numbers rationale lives in docs/STATES.md §9 + git history (pre-0.5.10 CHANGELOG).
 
 // IIFE.125 v0.2.9 Q5 Fix 1: ccuri() Uri cache helper defined (vs.Uri.file
 // memoization by path string). Source-text presence.

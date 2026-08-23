@@ -402,7 +402,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.49 stamp', /\/\*cc-status-dot-injected:v0.5.49:/.test(iife));
+check('IIFE.21c banner carries v0.5.50 stamp', /\/\*cc-status-dot-injected:v0.5.50:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -1374,7 +1374,7 @@ check(
 // had a content hash.
 {
   const HOOK_SRC = path.join(ROOT, 'hooks', 'cc-status.js');
-  const SRC_HOOK_VERSION = 'v0.2.1'; // mirror HOOK_VERSION in patch.ts (v0.2.7 bump)
+  const SRC_HOOK_VERSION = 'v0.2.2'; // mirror HOOK_VERSION in patch.ts (v0.2.2 headless-exclusion contract bump)
   const HOOK_HASH_LEN = 8;
   let hookSrc = '';
   try {

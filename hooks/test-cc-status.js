@@ -4077,5 +4077,155 @@ checkPending(
   }
 }
 
+// ---------------------------------------------------------------------------
+// §HF v0.2.2 headless-exclusion (red-lamp noise fix): SDK-spawned sessions
+// (entrypoint sdk-cli/sdk-ts in the transcript tail) never touch the status
+// surfaces; interactive sessions keep the v0.2.7 contract byte-identical.
+// Local boolean assert — the file-level check() is a (name, stateObj,
+// expectedState) helper for fire()-style state comparisons, wrong shape here.
+// ---------------------------------------------------------------------------
+{
+  const hfcheck = (name, cond, detail) => {
+    if (cond) {
+      pass++;
+      console.log('  PASS  ' + name);
+    } else {
+      fail++;
+      console.log('  FAIL  ' + name + (detail ? '   ' + detail : ''));
+    }
+  };
+  const mkTx = (home, sid, entrypoint, pad) => {
+    const dir = path.join(home, 'tx');
+    fs.mkdirSync(dir, { recursive: true });
+    const tp = path.join(dir, sid + '.jsonl');
+    const rows = [];
+    if (pad) for (let i = 0; i < 50; i++) rows.push(JSON.stringify({ type: 'last-prompt', i }));
+    rows.push(JSON.stringify({ type: 'user', message: 'x' }));
+    rows.push(JSON.stringify({ type: 'assistant', entrypoint, isApiErrorMessage: true, error: 'unknown' }));
+    fs.writeFileSync(tp, rows.join('\n') + '\n');
+    return tp;
+  };
+  const st = (home, sid) => path.join(home, '.claude', 'cc-tab-status', sid + '.json');
+  const mk = (home, sid) => path.join(home, '.claude', 'cc-tab-status', sid + '.headless');
+  const rd = (home, sid) => {
+    try {
+      return JSON.parse(fs.readFileSync(st(home, sid), 'utf8'));
+    } catch {
+      return null;
+    }
+  };
+
+  {
+    const home = newTempHome();
+    const tp = mkTx(home, 'hf1', 'sdk-cli', false);
+    fire(home, 'UserPromptSubmit', { session_id: 'hf1', transcript_path: tp, cwd: '/x' });
+    const noState = !fs.existsSync(st(home, 'hf1'));
+    const marker = fs.existsSync(mk(home, 'hf1'));
+    fire(home, 'Stop', { session_id: 'hf1', transcript_path: tp });
+    hfcheck(
+      'HF.1 sdk-cli UserPromptSubmit → no state + .headless marker + later events no-op',
+      noState && marker && !fs.existsSync(st(home, 'hf1')),
+      'state=' + fs.existsSync(st(home, 'hf1')) + ' marker=' + marker,
+    );
+  }
+  {
+    const home = newTempHome();
+    const tp = mkTx(home, 'hf2', 'sdk-ts', true);
+    fire(home, 'StopFailure', { session_id: 'hf2', transcript_path: tp, error: 'unknown' });
+    hfcheck(
+      'HF.2 sdk-ts StopFailure (padded tail, backwards scan) → no interrupted file',
+      !fs.existsSync(st(home, 'hf2')) && fs.existsSync(mk(home, 'hf2')),
+      'state=' + fs.existsSync(st(home, 'hf2')) + ' marker=' + fs.existsSync(mk(home, 'hf2')),
+    );
+  }
+  {
+    const home = newTempHome();
+    const tp = mkTx(home, 'hf3', 'claude-vscode', false);
+    fire(home, 'StopFailure', { session_id: 'hf3', transcript_path: tp, error: 'rate_limit' });
+    const j = rd(home, 'hf3');
+    hfcheck(
+      'HF.3 claude-vscode StopFailure → interrupted + verbatim error + NO marker (v0.2.7 contract kept)',
+      j && j.state === 'interrupted' && j.error === 'rate_limit' && !fs.existsSync(mk(home, 'hf3')),
+      'j=' + JSON.stringify(j),
+    );
+  }
+  {
+    const home = newTempHome();
+    fire(home, 'StopFailure', { session_id: 'hf4a' });
+    fire(home, 'StopFailure', { session_id: 'hf4b', transcript_path: path.join(home, 'nope.jsonl') });
+    const a = rd(home, 'hf4a');
+    const b = rd(home, 'hf4b');
+    hfcheck(
+      'HF.4 missing/nonexistent transcript → interrupted (conservative interactive)',
+      a && a.state === 'interrupted' && b && b.state === 'interrupted',
+      'a=' + JSON.stringify(a && a.state) + ' b=' + JSON.stringify(b && b.state),
+    );
+  }
+  {
+    const home = newTempHome();
+    const tp = mkTx(home, 'hf5', 'cli', false);
+    fire(home, 'UserPromptSubmit', { session_id: 'hf5', transcript_path: tp, cwd: '/y' });
+    const j = rd(home, 'hf5');
+    hfcheck(
+      'HF.5 cli entrypoint → normal running write, no marker',
+      j && j.state === 'running' && !fs.existsSync(mk(home, 'hf5')),
+      'j=' + JSON.stringify(j),
+    );
+  }
+  // HF.7 R1 test-coverage fix: retroactive GC reap of headless interrupted
+  // residue — a STALE interrupted file whose transcript classifies sdk-* is
+  // unlinked by the sweep; its interactive twin (claude-vscode transcript)
+  // survives the same sweep (v0.2.7 contract); a FRESH interrupted file
+  // skips the tail read entirely (cost gate) and also survives.
+  {
+    const home = newTempHome();
+    fs.mkdirSync(path.join(home, '.claude', 'cc-tab-status'), { recursive: true });
+    const tpH = mkTx(home, 'hf7h', 'sdk-cli', false);
+    const tpI = mkTx(home, 'hf7i', 'claude-vscode', false);
+    const w = (sid, tp) => {
+      const f = st(home, sid);
+      fs.writeFileSync(
+        f,
+        JSON.stringify({ state: 'interrupted', since: Date.now(), error: 'unknown', transcript_path: tp }),
+      );
+      const past = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+      fs.utimesSync(f, past, past);
+    };
+    w('hf7h', tpH);
+    w('hf7i', tpI);
+    const fresh = st(home, 'hf7f');
+    fs.writeFileSync(
+      fresh,
+      JSON.stringify({
+        state: 'interrupted',
+        since: Date.now(),
+        error: 'x',
+        transcript_path: mkTx(home, 'hf7f', 'sdk-cli', false),
+      }),
+    );
+    fire(home, 'UserPromptSubmit', { session_id: 'gcdriver7', cwd: '/z' });
+    hfcheck(
+      'HF.7 retroactive reap: stale headless interrupted unlinked; interactive twin + fresh file survive',
+      !fs.existsSync(st(home, 'hf7h')) && fs.existsSync(st(home, 'hf7i')) && fs.existsSync(fresh),
+      'headless=' +
+        !fs.existsSync(st(home, 'hf7h')) +
+        ' interactive=' +
+        fs.existsSync(st(home, 'hf7i')) +
+        ' fresh=' +
+        fs.existsSync(fresh),
+    );
+  }
+  {
+    const home = newTempHome();
+    fs.mkdirSync(path.join(home, '.claude', 'cc-tab-status'), { recursive: true });
+    const m = mk(home, 'hf6');
+    fs.writeFileSync(m, '{"headless":true}');
+    const past = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(m, past, past);
+    fire(home, 'UserPromptSubmit', { session_id: 'gcdriver', cwd: '/z' });
+    hfcheck('HF.6 stale .headless marker reaped by the GC sweep', !fs.existsSync(m), 'marker still present');
+  }
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

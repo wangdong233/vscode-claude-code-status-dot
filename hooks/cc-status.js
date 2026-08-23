@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.1:a0d29107*/
+/*cc-status-dot-hook:v0.2.2:ebe4c846*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -982,6 +982,57 @@ async function main() {
   const RATES_PATH = path.join(INSTALL_DIR, 'token-rates.json');
 
   /**
+   * v0.2.2 (red-lamp noise fix): classify a session as HEADLESS by reading
+   * the transcript's TAIL (last 64KB) for the newest line carrying a
+   * top-level `entrypoint` field, and testing it against /^sdk(-|$)/
+   * (CC writes "sdk-cli" / "sdk-ts" for SDK-spawned sessions; interactive
+   * VSCode sessions carry "claude-vscode", terminal CLI "cli"). Tail read is
+   * MANDATORY: the entrypoint row sits tens of KB deep in long transcripts
+   * (the incident corpus: 55-58KB) and the final assistant row always
+   * carries it. Line-level JSON.parse reads the real top-level field, immune
+   * to the string "entrypoint" appearing inside message content. EVERY
+   * failure mode (missing path / unreadable / empty / no entrypoint row /
+   * corrupt lines / parse throw) returns false — conservatively INTERACTIVE,
+   * preserving the v0.2.7 sticky-red contract for anything we cannot prove
+   * headless. main()-scoped because `fs` is lazily imported above.
+   */
+  function isHeadlessTranscript(tp) {
+    if (typeof tp !== 'string' || !tp) return false;
+    let fh = null;
+    try {
+      const st = fs.statSync(tp);
+      const start = Math.max(0, st.size - 64 * 1024);
+      const len = st.size - start;
+      if (len <= 0) return false;
+      fh = fs.openSync(tp, 'r');
+      const buf = Buffer.alloc(len);
+      fs.readSync(fh, buf, 0, len, start);
+      const lines = buf.toString('utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const ln = lines[i] && lines[i].trim();
+        if (!ln) continue;
+        try {
+          const j = JSON.parse(ln);
+          if (j && typeof j.entrypoint === 'string') return /^sdk(-|$)/.test(j.entrypoint);
+        } catch {
+          /* corrupt line — keep scanning backwards */
+        }
+      }
+    } catch {
+      /* stat/open/read failure — conservative interactive */
+    } finally {
+      if (fh !== null) {
+        try {
+          fs.closeSync(fh);
+        } catch {
+          /* best-effort close */
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
    * Atomically write `obj` as JSON to `filePath`.
    * Writes a sibling .tmp file first, then renames over the target so a
    * reader never observes a half-written file.
@@ -1958,6 +2009,9 @@ async function main() {
           // resets then closes CC before the next hook fire consumes it, the
           // marker would otherwise linger forever). Same mtime rule as .offset.
           const isOffset = !isTokens && !isJson && !isTmp && name.endsWith('.offset');
+          // v0.2.2: headless-exclusion markers reap by the same 7d mtime rule
+          // as orphan sidecars (the session is long over by then).
+          const isHeadlessMarker = !isTokens && !isJson && !isTmp && name.endsWith('.headless');
           const isForceReread = !isTokens && !isJson && !isTmp && !isOffset && name.endsWith(TOK_FORCEREREAD_EXT);
           // v0.3.0 (lane D): GC <sid>.rate sidecar (IIFE-owned; cross-reload
           // ring buffer snapshot for the tok/s sparkline + chart webview).
@@ -1975,7 +2029,9 @@ async function main() {
           // `continue`s past it. Even `.gc.json` / `.gc.tmp` would not match
           // the strict `name === '.gc'` equality check. Removed: the suffix
           // filter is the authoritative gate.
-          if (!isTokens && !isJson && !isTmp && !isOffset && !isForceReread && !isRate) continue;
+          // v0.2.2: isHeadlessMarker joined the whitelist (the authoritative
+          // suffix gate — the dispatch branch alone is unreachable without it).
+          if (!isTokens && !isJson && !isTmp && !isOffset && !isForceReread && !isRate && !isHeadlessMarker) continue;
           const p = path.join(STATE_DIR, name);
           // v0.2.4: also skip the current session's .offset sidecar AND
           // .forcereread marker (we may be about to consume/re-write either).
@@ -1988,7 +2044,7 @@ async function main() {
           // alternation below lists .tokens.json BEFORE .json so a full match
           // strips both extensions and leaves the bare sid).
           // v0.3.0: alternation extended with `.rate` (IIFE-owned sidecar).
-          const baseName = name.replace(/\.(tokens\.json|json|offset|forcereread|rate|tmp)$/, '');
+          const baseName = name.replace(/\.(tokens\.json|json|offset|forcereread|rate|headless|tmp)$/, '');
           const currentBase = sid;
           if (baseName === currentBase) continue; // never prune the file we're about to write OR its sidecars
           try {
@@ -2025,19 +2081,33 @@ async function main() {
               // matches the documented intent at the original parse site).
               let preserved = false;
               let drifted = false;
+              let reaped = false;
               let parsed = null;
               try {
                 parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
-                if (parsed && parsed.state === 'interrupted') preserved = true;
+                if (parsed && parsed.state === 'interrupted') {
+                  // v0.2.2 retroactive reap: headless interrupted files (pre-fix
+                  // residue) lose the unconditional preservation — the GC sweep
+                  // unlinks them. R1 cost fix: the 64KB tail read is paid ONLY
+                  // when the file is ALREADY mtime-stale (residue is by
+                  // definition old; fresh interactive interrupted files skip
+                  // the read entirely — preserved-forever files would otherwise
+                  // re-pay per sweep, unboundedly, on this latency-sensitive
+                  // UserPromptSubmit path). A fresh headless-interrupted file
+                  // waits one 7d cycle before reaping — bounded, acceptable.
+                  if (st.mtimeMs < cutoff && isHeadlessTranscript(parsed.transcript_path)) reaped = true;
+                  else preserved = true;
+                }
                 const sinceMs = parsed && Number.isFinite(parsed.since) ? parsed.since : 0;
                 drifted = sinceMs > 0 && now - sinceMs > GC_DRIFT_SINCE_MS;
               } catch {
-                /* corrupt JSON — preserved/drifted stay false → fall through */
+                /* corrupt JSON — preserved/drifted/reaped stay false → fall through */
               }
               // (a) interrupted-preservation wins regardless of mtime or drift.
               if (preserved) continue;
-              // (b)+(c) fresh mtime keeps the file UNLESS drift says otherwise.
-              if (st.mtimeMs >= cutoff && !drifted) continue;
+              // (b)+(c) fresh mtime keeps the file UNLESS drift says otherwise
+              //     (a reaped headless file skips this continue and unlinks below).
+              if (!reaped && st.mtimeMs >= cutoff && !drifted) continue;
               // TOCTOU narrow: re-stat right before unlink; if another process
               // wrote the file between our first stat and now (mtimeMs moved
               // forward), keep it — they just refreshed it.
@@ -2047,6 +2117,13 @@ async function main() {
               } catch {
                 /* re-stat failed — best-effort proceed to unlink */
               }
+            } else if (isHeadlessMarker) {
+              // v0.2.2: headless-exclusion markers — pure mtime reap, same as
+              // the other orphan sidecars. R1 correctness note: freshness is
+              // maintained by the early-exit's utimesSync refresh (NOT by
+              // re-classification), so a live headless session's marker never
+              // ages out; a marker silent for 7d means its session is over.
+              if (st.mtimeMs >= cutoff) continue;
             } else if (isOffset) {
               // v0.2.7 (Q1 fix): .offset GC now PURE mtime. Pre-Q1 the rule
               // was "reap if older than cutoff AND matching .json is gone or
@@ -2169,6 +2246,61 @@ async function main() {
   }
 
   // --- Map event -> status action ---
+  // v0.2.2 (red-lamp noise fix — UNIFIED headless exclusion): SDK-spawned
+  // sessions (cron / OpenClaw / any external program via sdk-cli/sdk-ts) are
+  // OTHER PROGRAMS' sessions — they must never touch the interactive status
+  // surfaces AT ALL, not just on failure (a successful 1h headless job would
+  // otherwise paint the yellow lamp for its whole runtime and green for 5min
+  // after; a failed one goes sticky red — the Aug-22 incident class).
+  // Mechanism: classify ONCE at the session's first decisive event
+  // (UserPromptSubmit at start, StopFailure for a fail-before-prompt session);
+  // if headless, drop a <sid>.headless marker and REMOVE any state this
+  // session already wrote. Every subsequent event (and every other session's
+  // steady state) costs exactly one statSync on the marker — interactive
+  // sessions never pay the tail-read. Unprovable transcripts classify
+  // INTERACTIVE (v0.2.7 sticky-red contract preserved); classification keys
+  // on headless-ness only, NEVER on error strings. The reader never sees
+  // .headless (its glob filters non-.json), and the GC reaps stale markers
+  // like other orphan sidecars.
+  let headless = false;
+  const markerPath = filePath.replace(/\.json$/, '.headless');
+  try {
+    fs.statSync(markerPath);
+    headless = true;
+    // R1 freshness fix: statSync does NOT touch mtime, and the 7d GC reap
+    // would otherwise delete the marker of a STILL-LIVE long-running headless
+    // session (one non-UPS event would then write a noise state file until
+    // the next UserPromptSubmit re-classifies). Refresh on every hit — a
+    // utime syscall, trivially cheap.
+    try {
+      const nowS = Date.now() / 1000;
+      fs.utimesSync(markerPath, nowS, nowS);
+    } catch {
+      /* refresh failed — the 7d reap risk is the pre-R1 status quo */
+    }
+  } catch {
+    /* no marker yet */
+  }
+  if (!headless) {
+    const ev = payload && payload.hook_event_name;
+    if ((ev === 'UserPromptSubmit' || ev === 'StopFailure') && isHeadlessTranscript(payload.transcript_path)) {
+      headless = true;
+      try {
+        writeJsonAtomic(markerPath, { headless: true, at: Date.now() });
+      } catch {
+        /* marker write failure — proceed interactive this fire (conservative) */
+      }
+    }
+  }
+  if (headless) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      /* nothing written yet — fine */
+    }
+    process.exit(0);
+  }
+
   const status = deriveStatus(payload, cur, Date.now());
   if (status === null) process.exit(0); // event we don't track / not writing
 

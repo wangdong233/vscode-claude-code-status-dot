@@ -146,7 +146,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in companion/CHANGELOG.md (entries up to 0.5.9; later versions document rationale in commit messages); SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.49";
+const INJECT_VERSION = "v0.5.50";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -175,7 +175,7 @@ const HOOK_MARKER = "cc-status-dot-managed";
  *  INSTALL_DIR/hooks/cc-status.js) saw silent feature loss with no warning.
  *  MUST be kept in lockstep with the banner at the top of
  *  hooks/cc-status.js. */
-const HOOK_VERSION = "v0.2.1";
+const HOOK_VERSION = "v0.2.2";
 const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
 
 /** CC extension version against which the anchor strings (ANCHOR_A / ANCHOR_B)

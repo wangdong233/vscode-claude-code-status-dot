@@ -304,7 +304,7 @@ check(
   // __ccsdDecayState predicate; the per-tab tick now CALLS it
   // (decayInterrupted=false). Position locks anchor on the call site
   // instead of the retired inline done-decay string.
-  const perTabDecayCallIdx = iife.indexOf('st=__ccsdDecayState(st,since,j,now,false)');
+  const perTabDecayCallIdx = iife.indexOf('st=__ccsdDecayState(st,since,j,now,false,__mt)');
   check(
     'IIFE.12d per-tab tick applies decay BEFORE pending check (HIGH round-2: done>5min→idle)',
     perTabDecayCallIdx >= 0 && pendIdx >= 0 && perTabDecayCallIdx < pendIdx,
@@ -312,12 +312,13 @@ check(
   );
   check(
     'IIFE.12e v0.5.24: __ccsdDecayState unified predicate (done/interrupted/running) — replaces inline §F/§H decay chains',
-    /function __ccsdDecayState\(st,since,j,now,decayInterrupted\)/.test(iife) &&
+    /function __ccsdDecayState\(st,since,j,now,decayInterrupted,mt\)/.test(iife) &&
       /st==="done"&&since&&\(now-since\)>DONE_TO_IDLE_MS\)return "idle"/.test(iife) &&
       /decayInterrupted&&st==="interrupted"&&since&&\(now-since\)>INTERRUPTED_RETENTION_MS\)return "idle"/.test(iife) &&
-      /st==="running"&&since&&!\(j\.activeSubagents>0\)&&\(now-since\)>SBI_RUNNING_STALE_MS&&j\.tokens&&j\.tokens\.last_ts&&\(now-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)return "idle"/.test(
+      /st==="running"&&since&&\(!\(j\.activeSubagents>0\)\|\|!mt\|\|\(now-mt\)>SBI_AS_PROTECT_MAX_MS\)&&\(now-since\)>SBI_RUNNING_STALE_MS&&j\.tokens&&j\.tokens\.last_ts&&\(now-j\.tokens\.last_ts\)>SBI_RUNNING_STALE_MS\)return "idle"/.test(
         iife,
-      ),
+      ) &&
+      /var SBI_AS_PROTECT_MAX_MS=\d+;/.test(iife),
     'v0.5.24 debt #1: §F/§H decay unified into one predicate. running decay gated on since AND tokens.last_ts AND !activeSubagents (v0.5.13/14/16 rationale preserved in the declaration comment).',
   );
   check(
@@ -401,7 +402,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.48 stamp', /\/\*cc-status-dot-injected:v0.5.48:/.test(iife));
+check('IIFE.21c banner carries v0.5.49 stamp', /\/\*cc-status-dot-injected:v0.5.49:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -601,7 +602,7 @@ check(
 );
 check(
   'IIFE.29a v0.5.24: §F aggregation decay via __ccsdDecayState (decayInterrupted=true, shares the predicate with §H)',
-  /st=__ccsdDecayState\(st,since,j,Date\.now\(\),true\)/.test(iife),
+  /st=__ccsdDecayState\(st,since,j,Date\.now\(\),true,__mt\)/.test(iife),
   '§F four-light aggregation calls __ccsdDecayState with decayInterrupted=true (done/interrupted/running all decay) so the tab color and the bottom count NEVER disagree; the predicate is shared with §H (only the read source + decayInterrupted flag differ).',
 );
 {
@@ -610,7 +611,7 @@ check(
   // into __ccsdDecayState); anchor on the §F decay CALL SITE instead.
   // v0.2.5: pendingToken matches the OR form literal
   // (`__ps[files[i].slice(0,-5)]===true` is unique to the OR'd second branch).
-  const decayCallToken = 'st=__ccsdDecayState(st,since,j,Date.now(),true)';
+  const decayCallToken = 'st=__ccsdDecayState(st,since,j,Date.now(),true,__mt)';
   const pendingToken = '__ps[files[i].slice(0,-5)]===true';
   const decayIdx = iife.indexOf(decayCallToken);
   const pendingIdx = iife.indexOf(pendingToken);
@@ -635,12 +636,12 @@ check(
     'IIFE.29c ANCHOR_B __ps keyed by this.__ccsdSid (v0.5.35: not e.request.sessionId, which is absent in rename_tab)',
     patchSrc.includes('globalThis.__ccsdPendingSet||(globalThis.__ccsdPendingSet=Object.create(null))') &&
       patchSrc.includes(
-        'if(this.__ccsdSid){if(e.request.hasPendingPermissions){__ps[this.__ccsdSid]=true}else{delete __ps[this.__ccsdSid]}}',
+        'if(this.__ccsdSid){if(${e}.request.hasPendingPermissions){__ps[this.__ccsdSid]=true}else{delete __ps[this.__ccsdSid]}}',
       ),
   );
   check(
     'IIFE.29c2 ANCHOR_B sid-set guarded (v0.5.35: if(e.request.sessionId) — rename_tab must NOT clear the real sid)',
-    patchSrc.includes('if(e.request.sessionId)this.__ccsdSid=e.request.sessionId'),
+    patchSrc.includes('if(${e}.request.sessionId)this.__ccsdSid=${e}.request.sessionId;'),
   );
 }
 check(
@@ -665,11 +666,11 @@ check(
   // patch.ts has it twice (replA + replB). We assert >= 2 occurrences, which
   // uniquely identifies the round-2 addition without being sensitive to
   // surrounding whitespace or comment edits.
-  const sidAssignments = patchSrc.split('this.__ccsdSid=e.request.sessionId').length - 1;
+  const sidAssignments = patchSrc.split('this.__ccsdSid=${e}.request.sessionId').length - 1;
   check(
     'IIFE.29f ANCHOR_B replB stashes this.__ccsdSid on rename_tab (event-order lock)',
     sidAssignments >= 2,
-    'round-2 MEDIUM: replB must assign this.__ccsdSid (>= 2 occurrences expected: replA + replB); got ' +
+    'round-2 MEDIUM: replB must assign this.__ccsdSid (>= 2 occurrences expected: replA stash + replB guard, v0.5.49 template form); got ' +
       sidAssignments,
   );
   check(
@@ -689,8 +690,10 @@ check(
   // UserDialogSet — re-audit if a future CC reroutes askUserQuestion).
   check(
     'IIFE.29h v0.5.35 ANCHOR_C: patch.ts injects __ccsdUserDialogSet try/finally into requestUserDialog (consent/refusal sentinel; askUserQuestion implicitly via __ps)',
-    patchSrc.includes('const ANCHOR_C =') &&
-      patchSrc.includes('user_dialog_request",dialogKind:t.dialogKind,payload:t.payload,toolUseID:t.toolUseID') &&
+    patchSrc.includes('const ANCHOR_C = anchorCFrom(IDS_C_DEFAULT);') &&
+      patchSrc.includes(
+        'dialogKind:${ids.dlg}.dialogKind,payload:${ids.dlg}.payload,toolUseID:${ids.dlg}.toolUseID},${ids.cbsink}',
+      ) &&
       patchSrc.includes(
         'try{var __csd=this.__ccsdSid;if(__csd){var __ud=globalThis.__ccsdUserDialogSet||(globalThis.__ccsdUserDialogSet=Object.create(null));__ud[__csd]=true}',
       ) &&
@@ -1331,7 +1334,9 @@ check('IIFE.45 per-tab p.iconPath assignment still present', /p\.iconPath\s*=\s*
   // the shared declaration, not the per-tab body.
   check(
     'IIFE.46b2 v0.5.24: per-tab tick decays via __ccsdDecayState(decayInterrupted=false) — interrupted stays red on tab',
-    /st=__ccsdDecayState\(st,since,j,now,false\)/.test(perTabPart),
+    /st=__ccsdDecayState\(st,since,j,now,false,__mt\)/.test(perTabPart) &&
+      /var __mt=0;try\{var __s2=fs\.statSync\(pth\.join\(DIR/.test(perTabPart) &&
+      /__mt=__s2\.mtimeMs;\}catch\(_\)\{\}/.test(perTabPart),
     'per-tab tick calls __ccsdDecayState with decayInterrupted=false (done/running decay only; interrupted stays red on tab per STATES.md §7.4). Predicate + thresholds live in the shared declaration.',
   );
   // v0.5.2 (F4): the per-tab SVG-selection running/done decay ternaries are
@@ -1458,7 +1463,7 @@ check(
   const patchSrc = fs.readFileSync(path.join(ROOT, 'patch.ts'), 'utf8');
   check(
     'IIFE.55 ANCHOR_A replA publishes globalThis.__ccsdActiveSid=e.request.sessionId',
-    patchSrc.includes('globalThis.__ccsdActiveSid=e.request.sessionId'),
+    patchSrc.includes('globalThis.__ccsdActiveSid=${e}.request.sessionId;'),
   );
 }
 // fmtTok helper present.

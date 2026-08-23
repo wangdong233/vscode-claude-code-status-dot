@@ -26,7 +26,7 @@ npx tsx patch.ts
 
 1. 在 `~/.vscode/extensions`（及 insiders / server / cursor / vscodium）下查找 `anthropic.claude-code-*`，选版本最高的。
 2. 若检测到 v0.1.2 装的 webview 聚合色块条残留，**自动从 `.bak` 还原 webview**（升级即清理，无需先 `--revert`）。
-3. 校验 `extension.js` 中两段 anchor 字符串的命中数（Anchor A 必须唯一命中，Anchor B 命中 0 或 1 次）。命中失败则**不写任何文件**并报错。
+3. 两层锚校验 `extension.js`（三层锚 A/B/C，各为：精确字面快路径 + 容错正则兜底，协议字符串为锚、混淆器改名自动兼容；Anchor A 必须唯一命中，Anchor B/C 命中 0 或 1 次）。命中失败则**不写任何文件**并报错（验证先于备份，零足迹）。
 4. 备份 `extension.js` → `extension.js.bak`（仅首次）。
 5. 注入 IIFE（含 `setInterval` 500ms 重绘：running 静态黄 + done/interrupted 通知逻辑），把 `INSTALL_DIR/resources` 的绝对路径 bake 进注入块。
 6. 把 **9 个 hook 事件**写入 `~/.claude/settings.json`（幂等、带 `# cc-status-dot-managed` 标记，命令指向 `INSTALL_DIR/hooks/cc-status.js`），首次备份为 `settings.json.cc-status-dot.bak`。
@@ -40,13 +40,13 @@ npx tsx patch.ts
 
 ## 3. 触发各状态测试
 
-| 想测的状态 | 怎么触发 | 预期图标 |
-|---|---|---|
-| `running` | 在 CC 里发一条 prompt | 🟡 黄色**静态**（`#CCA700`，无动画） |
-| `done` | 等 CC 本轮正常完成 | 绿色静态 |
-| `idle` | `done` 后等超过 5 分钟（reader 自动把 done 渲染为 idle） | 灰色静态 |
-| `interrupted` | 触发 `StopFailure`（如限速 / 过载）——较难主动模拟，可跳过 | 红色快闪 |
-| permission | CC 弹出授权请求时（CC 原生蓝点，非本项目） | 蓝色（CC 原生） |
+| 想测的状态    | 怎么触发                                                  | 预期图标                             |
+| ------------- | --------------------------------------------------------- | ------------------------------------ |
+| `running`     | 在 CC 里发一条 prompt                                     | 🟡 黄色**静态**（`#CCA700`，无动画） |
+| `done`        | 等 CC 本轮正常完成                                        | 绿色静态                             |
+| `idle`        | `done` 后等超过 5 分钟（reader 自动把 done 渲染为 idle）  | 灰色静态                             |
+| `interrupted` | 触发 `StopFailure`（如限速 / 过载）——较难主动模拟，可跳过 | 红色快闪                             |
+| permission    | CC 弹出授权请求时（CC 原生蓝点，非本项目）                | 蓝色（CC 原生）                      |
 
 > 手动 Esc 中断**不会**触发任何 hook，状态会停在 `running`，属已知限制（见 [`STATES.md` §5](STATES.md)）。
 
@@ -64,6 +64,7 @@ npx tsx patch.ts
 **macOS 首次授权**：第一次收到系统通知时，系统会弹"Script Editor 想发送通知"——点允许（一次性）。
 
 **配置**（写进 VSCode `settings.json`，可选）：
+
 ```json
 {
   "ccStatusDot.notify": true,
@@ -71,6 +72,7 @@ npx tsx patch.ts
   "ccStatusDot.notifySound": "Glass"
 }
 ```
+
 - `notify`：总开关（默认 true）。
 - `notifyWhenFocused`：前台时也弹 VSCode 消息（默认 **true**）。
 - `notifySound`：macOS 系统通知声音（默认 `"Glass"`；`""` 静音；可选 Basso/Ping/Hero 等）。
@@ -111,17 +113,17 @@ Turn running: 47s
 
 ### 3.6.4 配置项（settings.json）
 
-| key | 类型 | 默认 | 作用 |
-|---|---|---|---|
-| `ccStatusDot.tokenStatsWindow` | enum | `"all"` | SBI 显示的时间窗口（`all` 累积 / `5min..30d` 滚动） |
-| `ccStatusDot.tokenDisplayMode` | enum | `"both"` | SBI 显示模式：token / cost / both |
-| `ccStatusDot.tokenSbiVisible` | bool | `true` | 显示 / 隐藏 token SBI |
-| `ccStatusDot.tokenLiveDeltaEnabled` | bool | `true` | 流式输出期间实时读 transcript 尾部增量（性能敏感机器可关闭） |
-| `ccStatusDot.showCost` | bool | `true` | 显示 $（未知 model 自动隐藏） |
-| `ccStatusDot.warnThresholdUsd` | number | `0` | cost 跨阈通知（0=禁用） |
-| `ccStatusDot.notify` | bool | `true` | 完成 / 中断通知 |
-| `ccStatusDot.notifyWhenFocused` | bool | `true` | VSCode 聚焦时也通知 |
-| `ccStatusDot.notifySound` | enum | `"Glass"` | macOS 通知声音 |
+| key                                 | 类型   | 默认      | 作用                                                         |
+| ----------------------------------- | ------ | --------- | ------------------------------------------------------------ |
+| `ccStatusDot.tokenStatsWindow`      | enum   | `"all"`   | SBI 显示的时间窗口（`all` 累积 / `5min..30d` 滚动）          |
+| `ccStatusDot.tokenDisplayMode`      | enum   | `"both"`  | SBI 显示模式：token / cost / both                            |
+| `ccStatusDot.tokenSbiVisible`       | bool   | `true`    | 显示 / 隐藏 token SBI                                        |
+| `ccStatusDot.tokenLiveDeltaEnabled` | bool   | `true`    | 流式输出期间实时读 transcript 尾部增量（性能敏感机器可关闭） |
+| `ccStatusDot.showCost`              | bool   | `true`    | 显示 $（未知 model 自动隐藏）                                |
+| `ccStatusDot.warnThresholdUsd`      | number | `0`       | cost 跨阈通知（0=禁用）                                      |
+| `ccStatusDot.notify`                | bool   | `true`    | 完成 / 中断通知                                              |
+| `ccStatusDot.notifyWhenFocused`     | bool   | `true`    | VSCode 聚焦时也通知                                          |
+| `ccStatusDot.notifySound`           | enum   | `"Glass"` | macOS 通知声音                                               |
 
 ### 3.6.5 自定义模型定价（`token-rates.json`）
 
@@ -131,8 +133,8 @@ Turn running: 47s
 {
   "_default": null,
   "claude-sonnet-*": { "in": 3, "out": 15, "cacheRead": 0.3, "cacheCreate5m": 3.75, "cacheCreate1h": 6 },
-  "claude-opus-*":   { "in": 5, "out": 25, "cacheRead": 0.5, "cacheCreate5m": 6.25, "cacheCreate1h": 10 },
-  "claude-haiku-*":  { "in": 1, "out": 5,  "cacheRead": 0.1, "cacheCreate5m": 1.25, "cacheCreate1h": 2 }
+  "claude-opus-*": { "in": 5, "out": 25, "cacheRead": 0.5, "cacheCreate5m": 6.25, "cacheCreate1h": 10 },
+  "claude-haiku-*": { "in": 1, "out": 5, "cacheRead": 0.1, "cacheCreate5m": 1.25, "cacheCreate1h": 2 },
 }
 ```
 
@@ -187,6 +189,7 @@ cc-status-dot — token stats & config
 ## 4. 排错
 
 **图标完全没变**
+
 - 先 `Developer: Reload Window`。
 - 跑 `npx vscode-claude-code-status-dot --status`（开发态 `npx tsx patch.ts --status`）：
   - `extension.js patched: no` → 没装上，重跑。
@@ -195,12 +198,15 @@ cc-status-dot — token stats & config
   - `missing SVGs` → `INSTALL_DIR/resources` 缺文件，重跑会从源补齐。
 
 **patch 报 "Anchor mismatch"**
-- CC 的 minified 代码漂移了。patcher 已拒绝写入，扩展未被破坏。到项目 issue 区提 issue 并附 CC 版本号。
+
+- CC 的 minified 代码发生了结构性漂移（改名类漂移会被容错正则层自动兼容，不会报此错）。patcher 已零足迹拒绝写入，扩展未被破坏。到项目 issue 区提 issue 并附 CC 版本号。
 
 **状态卡在 `running`**
+
 - 多半是你用 Esc 中断了 CC（无 hook）。下次发 prompt 或等正常完成会自然更正。
 
 **CC 更新后失效**
+
 - CC 自动更新覆盖了 patched `extension.js`。重跑 `npx vscode-claude-code-status-dot`（SVG/hook 运行时副本在 `INSTALL_DIR`，CC 更新不碰它；项目源目录删了也不影响）。
 
 ## 5. 还原

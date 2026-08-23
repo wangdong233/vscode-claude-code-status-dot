@@ -37,7 +37,7 @@
 
 **⑥ Completion / interruption notifications**　When a session finishes running or gets interrupted by rate-limiting, a system notification + sound pops up (macOS top-right dropdown / Windows · Linux bottom-right toast), fires in both foreground and background, so you get reminded even when you've switched away to do something else.
 
-> **Reliability safeguards**: When a CC auto-update overwrites the patch, the companion self-healing extension automatically re-patches and prompts a reload (invisible recovery); before every patch the full 2.6MB `extension.js` is validated with `node --check` + written atomically (**never bricks CC**); `--revert` is a one-click, zero-side-effect restore; the runtime copies live in `~/.claude/cc-status-dot/` (deleting the source / purging the cache / a CC update won't affect an installed copy). While a workflow runs subagents, the main session stays 🟡 — no false green.
+> **Reliability safeguards**: When a CC auto-update overwrites the patch, the companion self-healing extension automatically re-patches and prompts a reload (invisible recovery); before every patch the full ~3MB `extension.js` is validated with `node --check` + written atomically (**never bricks CC**); `--revert` is a one-click, zero-side-effect restore; the runtime copies live in `~/.claude/cc-status-dot/` (deleting the source / purging the cache / a CC update won't affect an installed copy). While a workflow runs subagents, the main session stays 🟡 — no false green.
 
 ---
 
@@ -145,7 +145,7 @@ vscode-claude-code-status-dot        # run the command directly after install
 
 - **No hook for manual Esc interrupt**: CC doesn't fire Stop/StopFailure ([#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)), so the state stays on running; corrected naturally by the next prompt/Stop.
 - **CC auto-update overwrite**: patched `extension.js` is overwritten by the original → **since v0.2.0 the companion extension auto-re-runs the patcher + prompts a reload** (see FAQ); without the companion, re-run the command manually to restore.
-- **Minified anchor fragility**: the patch depends on two exact strings in CC's code; on version drift the patcher reports "Anchor mismatch" and refuses to write (the extension is not damaged).
+- **Minified anchor fragility**: the patch locates CC code via a two-tier anchor (exact-literal fast path + tolerant regex fallback — anchored on IPC protocol strings, immune to minifier renames); only a structural change reports "Anchor mismatch" and refuses to write with zero footprint (the extension is not damaged).
 - **No notification when VSCode is fully closed**: the IIFE runs in the extension host process; if VSCode is closed it doesn't run → no notification.
 - **System notification click doesn't jump to tab**: osascript has no click callback; the notification only reminds — locate the session via the tab green/red dot back in VSCode.
 - **SBI priority namespace not owned**: the bottom status bar item sits at a single priority (`-9996`). The VSCode StatusBarItem API has no extension-level namespace/ownership — another extension declaring the same priority could push our item to a corner. Because the whole 4-light row is one SBI, an external insertion can only land on the side, never _between_ the four lights. Rare in practice; documented honestly in STATES.md §7.5.

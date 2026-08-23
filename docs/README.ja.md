@@ -41,7 +41,7 @@
 
 **⑥ 完了 / 中断通知**　セッション完了時やレート制限で中断されたときにシステム通知 + サウンドをポップアップ（macOS は画面右上からドロップ / Windows·Linux は右下 toast）、フォアグラウンドでもバックグラウンドでも通知、別作業に切り替えていてもお知らせを受け取れる。
 
-> **信頼性担保**：CC の自動更新がパッチを上書きしたとき、companion 自愈拡張が自動で再パッチ + reload を提案（無感で復元）；patch 前に完全な 2.6MB `extension.js` に対して `node --check` 校験 + 原子書き込み（**CC を絶対にレンガ化しない**）；`--revert` でワンクリック・ゼロ副作用で復元；ランタイムコピーは `~/.claude/cc-status-dot/`（ソース削除 / キャッシュクリア / CC 更新のいずれでも影響なし）。workflow でサブエージェント実行中はメインセッションは 🟡 のまま（誤緑にならない）。
+> **信頼性担保**：CC の自動更新がパッチを上書きしたとき、companion 自愈拡張が自動で再パッチ + reload を提案（無感で復元）；patch 前に完全な ~3MB `extension.js` に対して `node --check` 校験 + 原子書き込み（**CC を絶対にレンガ化しない**）；`--revert` でワンクリック・ゼロ副作用で復元；ランタイムコピーは `~/.claude/cc-status-dot/`（ソース削除 / キャッシュクリア / CC 更新のいずれでも影響なし）。workflow でサブエージェント実行中はメインセッションは 🟡 のまま（誤緑にならない）。
 
 ---
 
@@ -153,7 +153,7 @@ vscode-claude-code-status-dot        # インストール後そのままコマ�
 
 - **手動 Esc 中断には hook がない**: CC は Stop / StopFailure をトリガーしない（[#45289](https://github.com/anthropics/claude-code/issues/45289) / [#9516](https://github.com/anthropics/claude-code/issues/9516)）、状態は running で止まり、次回プロンプト / Stop で自然修正される。
 - **CC 自動更新で上書き**: patched `extension.js` がオリジナルで上書き → **companion 拡張が自動で patcher を再実行 + reload を提案**（FAQ 参照）；companion がない場合は手動でコマンドを再実行して復元。
-- **minified anchor の脆さ**: patch は CC コードの 2 箇所の正確な文字列に依存。バージョンずれが生じると patcher は "Anchor mismatch" を報告して書き込みを拒否。書き込み前には完全な 2.6MB ファイルに対して `node --check` を実行（assertCompiles 守衛、壊れた IIFE は拒絶）、原子書き込み（`.tmp` + rename）、`INJECT_VERSION` 自動再注入 —— **CC を絶対にレンガ化しない**。
+- **minified anchor の脆さ**: patch は 2 層アンカー（正確なリテラルの高速経路 + 許容正規表現のフォールバック — IPC プロトコル文字列に基づき、minifier のリネームを自動吸収）で CC コードを特定。構造的変化のみ "Anchor mismatch" を報告し、足跡を残さず書き込みを拒否。書き込み前には完全な ~3MB ファイルに対して `node --check` を実行（assertCompiles 守衛、壊れた IIFE は拒絶）、原子書き込み（`.tmp` + rename）、`INJECT_VERSION` 自動再注入 —— **CC を絶対にレンガ化しない**。
 - **VSCode 完全終了時は通知しない**: IIFE は拡張ホストプロセスで動く、VSCode 終了時には動かない → 通知しない。
 - **システム通知のクリックでタブに飛ばない**: osascript に click callback がなく、通知はリマインドのみ。VSCode に戻ってから tab の緑 / 赤ドットで位置を特定。
 - **SBI priority に所有権がない**: 下部ステータスバーのブロックは `StatusBarAlignment.Left` の priority `-9996`（単一ポイント）を占める。VSCode StatusBarItem API には拡張レベルの名前空間 / 所有権機構がないため、他の拡張が同じ priority を宣言すると SBI が隅に押しやられる可能性がある。**単一 SBI ブロックのアーキテクチャにより「行が外部に分割される」失敗モードを排除**（4 つの独立 SBI だと他拡張の SBI がライト間に割り込み分割する；行全体を 1 個の SBI にすれば外部挿入は行の両端にしか落ちず、4 ライトは分割されない）。主流のユースケースでは発火せず、STATES.md §7.5 にこの制限を誠実に記載している。

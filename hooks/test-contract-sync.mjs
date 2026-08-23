@@ -123,6 +123,17 @@ if (patchRunningStale !== null) {
   );
 }
 
+// --- SBI_AS_PROTECT_MAX_MS (v0.5.49 reader-only: as-protection expiry horizon) ---
+const patchAsProtect = extractNumericConst(patchSrc, 'SBI_AS_PROTECT_MAX_MS');
+check('patch.ts defines SBI_AS_PROTECT_MAX_MS numeric const (v0.5.49 as-protection expiry)', patchAsProtect !== null);
+if (patchAsProtect !== null) {
+  check(
+    'SBI_AS_PROTECT_MAX_MS sensible value (expected 86400000 = 24h — ≫ 30min worst-case event silence, ≪ 7d GC) — got ' +
+      patchAsProtect,
+    patchAsProtect === 24 * 60 * 60 * 1000,
+  );
+}
+
 // --- TOK_WIN_KEYS sequence equality (8-window insertion order, cross-file) ---
 const patchKeys = extractTokWinKeys(patchSrc);
 const hookKeys = extractTokWinKeys(hookSrc);

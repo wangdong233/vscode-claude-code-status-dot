@@ -17,6 +17,7 @@
 - `*.md`：2 空格，`proseWrap: preserve`（不重排段落）。
 
 **防漂移的工具契约**：
+
 - `.prettierrc.json` 通过 `overrides` 把每类文件的 quote/缩进偏好固定下来——任何贡献者跑 `prettier --write` 时它**保留**现有 quote 风格而非"纠正"（这是 M6 finding 真正担心的漂移点：TS 文件被 flip 成单引号或 JS 被 flip 成双引号）。
 - `.editorconfig` 提供跨编辑器（VSCode/JetBrains/vim/…）的基线，保存时不与 Prettier 打架。
 - `npm run format:check`（不阻塞 `npm test`，CI 可选接入）当前会对**预先存在的**非-quote 风格选择（多行数组/三元、超出 `printWidth: 120` 的拼接等）报警——这些与 M6 无关，是历史风格，可在后续独立 PR 里逐步收敛或一次性 `prettier --write` 全文 reformat。本轮只引入契约，不改既有代码风格。
@@ -25,14 +26,15 @@
 
 ## patch anchor 的 CC 版本脆性
 
-整个 patch 的版本敏感面收敛在 `patch.ts` 里的两段 anchor 字符串：
+整个 patch 的版本敏感面收敛在 `patch.ts` 里的三层锚（A/B/C，各为两层：精确字面快路径 + 容错正则兜底）：
 
 - **Anchor A**（`update_session_state` handler，必须唯一命中）：注入点，捕获 `sessionId` + 启动 500ms 重绘定时器。
 - **Anchor B**（`rename_tab` 图标分支，可选，命中 0 或 1 次）：加固，消除 CC 重设图标后 ~500ms 的闪烁。
+- **Anchor C**（`requestUserDialog` consent/refusal 蓝点；命中 0 或 1 次）：可选加固锚，失配软降级（A+B 安装继续，consent 蓝点不生效）。
 
 CC 每次 minified 代码漂移都可能导致 anchor 对不上。规则：
 
-- anchor 必须用**精确字符串匹配**（不是正则），并要求**唯一命中**（Anchor A 命中数 == 1，Anchor B 命中数 ∈ {0, 1}）。
+- 锚点两层：tier-1 **精确字面**（快路径，唯一命中）；tier-2 **容错正则**（以 IPC 协议字符串为字面锚、minified 标识符为 `[A-Za-z0-9_$]+` 捕获）——混淆器改名类漂移自动兼容，任一层命中数非唯一即 fail-closed（Anchor A 必须 == 1，Anchor B/C ∈ {0, 1}）。
 - 失配时**立即抛错、不写任何文件**，并在错误信息里提示用户提 issue 附 CC 版本。
 - 更新 anchor 时，先用 `npx tsx patch.ts --status` 确认在新版 CC 上的命中情况，再改常量。
 

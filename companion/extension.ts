@@ -96,7 +96,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.48";
+const MIN_PATCHER_VERSION = "0.5.49";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +155,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.48";
+    return effectiveConfig?.injectVersion ?? "v0.5.49";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -459,7 +459,7 @@ function ccPatchState(extDir: string): "fresh" | "stale" | "absent" {
     try {
         const extJs = path.join(extDir, "extension.js");
         if (!fs.existsSync(extJs)) return "absent";
-        // v0.5.12 perf: stat-mtime fast path. CC's extension.js is ~2.78MB;
+        // v0.5.12 perf: stat-mtime fast path. CC's extension.js is ~~3MB;
         // reading it + regex takes ~13ms and runs synchronously inside
         // activate() (async detectAndPatch runs sync until its first await).
         // If CC hasn't rewritten extension.js since our last successful patch
@@ -878,7 +878,7 @@ function startRepatchWatcher(extDir: string): void {
         // made the v0.5.45 RC3 check useless in the exact incident window.
         // v0.5.45.1 (review #4): check ranDirs BEFORE ccPatchState — after a
         // permanently-failing patch the dir is already in ranDirs, and the
-        // state check would re-read the full 2.78MB extension.js every 30s
+        // state check would re-read the full ~3MB extension.js every 30s
         // forever. The ranDirs short-circuit keeps the steady-state tick at
         // one readdir + one Set lookup.
         try {
@@ -3774,7 +3774,7 @@ export function activate(_ctx: vscode.ExtensionContext): void {
 
     // v0.5.12 perf: defer detectAndPatch past activate's synchronous return.
     // Despite `void`, an async function runs SYNCHRONOUSLY until its first
-    // await — detectAndPatch calls ccPatchState (readFileSync ~2.78MB, ~13ms)
+    // await — detectAndPatch calls ccPatchState (readFileSync ~~3MB, ~13ms)
     // before any await, which blocked activate. setImmediate lets activate
     // return FIRST (so the EH paints CC's injected IIFE — four-light + token
     // SBI), then detectAndPatch runs on the next tick. The detect→patch→reload

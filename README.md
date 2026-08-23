@@ -41,7 +41,7 @@
 
 **⑥ 完成 / 中断通知**　会话跑完或被限速中断时弹系统通知 + 提示音（macOS 屏幕右上角下拉 / Windows·Linux 右下角 toast），前台后台都弹，切去干别的也能被提醒。
 
-> **可靠性保障**：CC 自动更新覆盖 patch 时，companion 自愈扩展自动重 patch + 提示 reload（无感恢复）；patch 前对完整 2.6MB `extension.js` 跑 `node --check` 校验 + 原子写（**绝不砖 CC**）；`--revert` 一键零副作用还原；运行时副本在 `~/.claude/cc-status-dot/`（删源 / 清缓存 / CC 更新都不影响已装）。workflow 跑子代理期间主会话保持 🟡 不假绿。
+> **可靠性保障**：CC 自动更新覆盖 patch 时，companion 自愈扩展自动重 patch + 提示 reload（无感恢复）；patch 前对完整 ~3MB `extension.js` 跑 `node --check` 校验 + 原子写（**绝不砖 CC**）；`--revert` 一键零副作用还原；运行时副本在 `~/.claude/cc-status-dot/`（删源 / 清缓存 / CC 更新都不影响已装）。workflow 跑子代理期间主会话保持 🟡 不假绿。
 
 ---
 
@@ -153,7 +153,7 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 
 - **手动 Esc 中断无 hook**：CC 不触发 Stop/StopFailure（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)），状态会停在 running，靠下次 prompt/Stop 自然更正。
 - **CC 自动更新覆盖**：patched `extension.js` 被原版覆盖 → **v0.2.0 起 companion 扩展自动重跑 patcher + 提示 reload**（见 FAQ）；companion 没装则手动重跑命令恢复。
-- **minified anchor 脆性**：patch 依赖 CC 代码里两段精确字符串，版本漂移时 patcher 报 "Anchor mismatch" 拒绝写入；写 extension.js 前还会对完整 2.6MB 文件跑 `node --check`（assertCompiles 守卫，坏 IIFE 拒绝写入），原子写（`.tmp` + rename），`INJECT_VERSION` 自动重注入——**绝不砖 CC**。
+- **minified anchor 脆性**：patch 通过两层锚定位 CC 代码（精确字面快路径 + 容错正则兜底——以 IPC 协议字符串为锚、混淆器改名自动兼容），仅结构性变化才报 "Anchor mismatch" 零足迹拒绝写入；写 extension.js 前还会对完整 ~3MB 文件跑 `node --check`（assertCompiles 守卫，坏 IIFE 拒绝写入），原子写（`.tmp` + rename），`INJECT_VERSION` 自动重注入——**绝不砖 CC**。
 - **VSCode 完全关闭时不通知**：IIFE 跑在扩展宿主进程，VSCode 关闭则不运行 → 不通知。
 - **系统通知点击不跳 tab**：osascript 无 click callback，通知仅提醒，回 VSCode 靠 tab 绿/红点定位。
 - **SBI priority 无所有权**：底部状态栏块占用 `StatusBarAlignment.Left` 的 priority `-9996`（单点），VSCode StatusBarItem API 无扩展级命名空间/所有权机制——其它扩展若声明同 priority，可能把我们的 SBI 挤到角落。**单 SBI 整体块的架构消除了"行被外部分隔"失败模式**（4 个独立 SBI 会被其它扩展的 SBI 插入灯之间劈开；整行作为一个 SBI，外部插入只能落到整行两侧，不会拆开 4 灯）。主流场景下不会触发，STATES.md §7.5 已诚实声明此限制。

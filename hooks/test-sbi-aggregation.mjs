@@ -85,6 +85,7 @@ const CC_STATUS = path.join(__dirname, 'cc-status.js');
 const DONE_TO_IDLE_MS = 5 * 60 * 1000; // 5 min — §4 done→idle
 const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC (since-based, v0.2.6)
 const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
+const SBI_AS_PROTECT_MAX_MS = 24 * 60 * 60 * 1000; // 24h — v0.5.49 as-protection expiry horizon (mtime-based)
 const SINCE_STALE_MS = 15 * 60 * 1000; // 15 min — per-tab running decay (v0.2.6)
 
 // v0.1.16: the SBI surface renders each light as its own StatusBarItem with
@@ -124,38 +125,6 @@ function check(name, cond, detail) {
 // comparison, matching the IIFE which does NOT take a `now` param; plant a
 // real-fresh .jsonl to exercise the gate. Returns the raw uncapped counts;
 // callers apply cap() + sbiBlockText() to get the per-SBI texts.
-
-// Mirror of the IIFE's __ccsdTranscriptFresh(j,sid,staleMs) (patch.ts buildIIFE
-// §F running-decay branch). A running session whose transcript (.jsonl) was
-// modified within staleMs is ACTIVELY streaming (long turn / subagent wait
-// freezes 'since' but the jsonl keeps growing) → do NOT false-decay to idle.
-// Resolves the jsonl path the SAME way computeLiveDelta does: prefer
-// j.transcript_path (authoritative, persisted by the hook); else the
-// cwd→projects escape fallback (/[^a-zA-Z0-9._-]/g → '-'). Uses `home` in
-// place of os.homedir() (the replica's home IS the IIFE's os.homedir() in
-// tests). Uses real Date.now() — NOT the injectable `now` — because the IIFE
-// source does not parameterize time here either; a test that time-travels
-// `now` to age `since` must plant a real-fresh .jsonl (mtime ≈ Date.now()) to
-// exercise the "fresh transcript blocks decay" path. Any miss (no
-// transcript_path, no cwd, jsonl absent, statSync throw) → false (safe decay).
-function transcriptFresh(j, sid, staleMs, home) {
-  try {
-    if (!j || !sid) return false;
-    let jsonlPath = null;
-    if (typeof j.transcript_path === 'string' && j.transcript_path) {
-      jsonlPath = j.transcript_path;
-    } else if (typeof j.cwd === 'string' && j.cwd) {
-      const escaped = j.cwd.replace(/[^a-zA-Z0-9._-]/g, '-');
-      jsonlPath = path.join(home, '.claude', 'projects', escaped, sid + '.jsonl');
-    }
-    if (!jsonlPath) return false;
-    const stt = fs.statSync(jsonlPath);
-    if (!stt || !stt.isFile()) return false;
-    return Date.now() - stt.mtimeMs < staleMs;
-  } catch (_) {
-    return false;
-  }
-}
 
 function aggregate(home, now = Date.now(), pendingSet = null) {
   const DIR = path.join(home, '.claude', 'cc-tab-status');
@@ -198,15 +167,27 @@ function aggregate(home, now = Date.now(), pendingSet = null) {
       // elapsed. since-decay fires correctly because since is preserved
       // across the same path. Mirrors done>5min one branch up.
       else if (st === 'running') {
-        // v0.5.2 (#4): before downgrading stale-running to idle, gate on
-        // transcriptFresh — a session whose transcript (.jsonl) grew within
-        // SBI_RUNNING_STALE_MS is ACTIVELY streaming (long turn / subagent
-        // wait freezes 'since' but the jsonl keeps growing) → do NOT decay.
-        // Mirrors patch.ts §F __ccsdTranscriptFresh exactly. transcriptFresh
-        // uses real Date.now() (see its comment); `now` only governs the
-        // since-threshold comparison.
-        if (since && now - since > SBI_RUNNING_STALE_MS) {
-          if (!transcriptFresh(j, f.slice(0, -5), SBI_RUNNING_STALE_MS, home)) st = 'idle';
+        // v0.5.49 replica fix: this branch now mirrors the REAL __ccsdDecayState
+        // running predicate (the v0.5.2 __ccsdTranscriptFresh jsonl gate was
+        // RETIRED in v0.5.13 — the replica had drifted 30+ versions). Decay iff
+        // since>30m AND tokens.last_ts>30m AND NOT protected, where protection =
+        // activeSubagents>0 AND the file mtime (per-EVENT liveness witness — every
+        // hook fire rewrites the file, SubagentStart/Stop included) is fresh
+        // within SBI_AS_PROTECT_MAX_MS (24h). The v0.5.49 expiry kills the
+        // crash-frozen-as=1 zombie class (baeddc1d: running+as=1 untouched 5.3
+        // days → permanent phantom 🟡). Stat miss (mt=0) fails TOWARD decay,
+        // mirroring the !mt disjunct — behaviorally untestable here (stat+parse
+        // read the same file); the disjunct is source-pinned by IIFE.12e.
+        let mt = 0;
+        try {
+          mt = fs.statSync(fp).mtimeMs;
+        } catch {
+          mt = 0;
+        }
+        const lt = j.tokens && j.tokens.last_ts;
+        const asProtect = j.activeSubagents > 0 && mt > 0 && now - mt <= SBI_AS_PROTECT_MAX_MS;
+        if (since && now - since > SBI_RUNNING_STALE_MS && lt && now - lt > SBI_RUNNING_STALE_MS && !asProtect) {
+          st = 'idle';
         }
       }
       // v0.1.13/v0.1.14 interrupted>24h → idle, keyed on SINCE (the terminal
@@ -457,13 +438,14 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   writeStatus(home, 'crashed', {
     state: 'running',
     since: Date.now() - 31 * 60 * 1000, // OLD since (decay key under new rule)
+    tokens: { last_ts: Date.now() - 31 * 60 * 1000 }, // OLD last_ts (v0.5.13 AND-conjunct)
     activeSubagents: 0,
     pending: false,
   });
   writeStatus(home, 'live', { state: 'running', since: Date.now(), activeSubagents: 0, pending: false });
   const ag = aggregate(home);
   check(
-    '§1.6a  running since>30min decays to idle',
+    '§1.6a  running since>30min (+stale last_ts) decays to idle',
     ag.idle === 1 && ag.running === 1,
     'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
   );
@@ -505,6 +487,7 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   writeStatus(home, 'crashed-pending', {
     state: 'running',
     since: Date.now() - 31 * 60 * 1000, // OLD since (decay key under new rule)
+    tokens: { last_ts: Date.now() - 31 * 60 * 1000 }, // OLD last_ts (v0.5.13 AND-conjunct)
     activeSubagents: 0,
     pending: true,
   });
@@ -516,70 +499,141 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   );
 }
 
-// §1.6c  v0.5.2 (#4): stale since (>30min) BUT fresh transcript (.jsonl grown
-// within the threshold) → STAYS running. This is the root-cause fix for the
-// false-decay of genuinely-active long workflows: a long streaming turn / a
-// parent session blocked waiting on a subagent FREEZES 'since' (no *→running
-// re-transition) while the .jsonl keeps growing — the transcript mtime is the
-// real activity signal. §1.6b above has NO .jsonl planted so transcriptFresh
-// returns false → decay; here we plant a fresh .jsonl (mtime ≈ now) so the
-// gate returns true → no decay. This is the FIRST behavior test to cover the
-// transcriptFresh gate (prior to v0.5.2 round-2 the replica had no such gate,
-// so this core guarantee had ZERO behavior coverage — only structural regexes
-// in test-iife.mjs guarded the IIFE source). Two path variants are exercised:
-// (c1) transcript_path absolute, (c2) cwd→projects escape fallback.
+// §1.6c  v0.5.49 rewrite: the v0.5.2 transcriptFresh jsonl gate was RETIRED in
+// v0.5.13 (the replica had drifted and kept mirroring it until now). The REAL
+// running-decay blockers are (1) fresh tokens.last_ts (model still producing)
+// and (2) the v0.5.16 activeSubagents protection, which v0.5.49 gates on file
+// mtime freshness (per-EVENT liveness witness). Three real-semantics cases:
 {
-  // §1.6c1: transcript_path variant — plant an explicit absolute .jsonl path.
+  // §1.6c1: stale since BUT fresh tokens.last_ts → STAYS running (the real
+  // active-streaming block — long turn freezes `since` while last_ts advances
+  // on every TOK_EVENT).
   const home = newTempHome();
-  const sid = 'long-stream-c1';
-  const jsonlAbs = path.join(home, '.claude', 'projects', sid, sid + '.jsonl');
-  fs.mkdirSync(path.dirname(jsonlAbs), { recursive: true });
-  fs.writeFileSync(jsonlAbs, '{"type":"assistant","message":{"content":"streaming..."}}\n');
-  writeStatus(home, sid, {
+  writeStatus(home, 'long-stream-c1', {
     state: 'running',
-    since: Date.now() - 31 * 60 * 1000, // OLD since (past the 30min threshold)
-    transcript_path: jsonlAbs, // authoritative jsonl path (fresh mtime)
+    since: Date.now() - 31 * 60 * 1000, // OLD since
+    tokens: { last_ts: Date.now() }, // FRESH last_ts (streaming NOW)
     activeSubagents: 0,
     pending: false,
   });
-  const ag = aggregate(home, Date.now() + 31 * 60 * 1000); // age `since` past threshold
+  // NOTE: real `now` (no future injection) — the fresh last_ts must stay fresh
+  // for the gate to block decay; since is already 31min old in the fixture.
+  const ag = aggregate(home);
   check(
-    '§1.6c1  stale-since + FRESH transcript_path → STAYS running (transcriptFresh gate, v0.5.2 #4)',
+    '§1.6c1  stale-since + FRESH tokens.last_ts → STAYS running (v0.5.13+ real gate)',
     ag.running === 1 && ag.idle === 0,
     'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
   );
 }
 {
-  // §1.6c2: cwd→projects escape variant — NO transcript_path; the gate falls
-  // back to <home>/.claude/projects/<escaped-cwd>/<sid>.jsonl. Plant it fresh.
+  // §1.6c2: missing tokens.last_ts entirely → NO decay (R3 known limitation:
+  // a running file lacking last_ts blocks decay via the j.tokens&&j.tokens.last_ts
+  // conjunct — not live today, UserPromptSubmit derives last_ts; pinned here as
+  // CURRENT behavior so a future tightening flips this assert deliberately).
   const home = newTempHome();
-  const sid = 'long-stream-c2';
-  const cwd = '/Users/test/work';
-  const escaped = cwd.replace(/[^a-zA-Z0-9._-]/g, '-'); // '-Users-test-work'
-  const jsonlFallback = path.join(home, '.claude', 'projects', escaped, sid + '.jsonl');
-  fs.mkdirSync(path.dirname(jsonlFallback), { recursive: true });
-  fs.writeFileSync(jsonlFallback, '{"type":"assistant","message":{"content":"..."}}\n');
-  writeStatus(home, sid, {
+  writeStatus(home, 'no-last-ts-c2', {
     state: 'running',
-    since: Date.now() - 31 * 60 * 1000, // OLD since
-    cwd: cwd, // triggers the escape fallback inside transcriptFresh
+    since: Date.now() - 31 * 60 * 1000,
     activeSubagents: 0,
     pending: false,
   });
   const ag = aggregate(home, Date.now() + 31 * 60 * 1000);
   check(
-    '§1.6c2  stale-since + FRESH cwd-fallback transcript → STAYS running (escape path)',
+    '§1.6c2  stale-since + NO tokens.last_ts → stays running (R3 pin: last_ts conjunct blocks decay)',
     ag.running === 1 && ag.idle === 0,
     'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
   );
-  // §1.6c3: SAME setup but REMOVE the fresh transcript → transcriptFresh
-  // returns false → decay to idle (the gate is the ONLY thing preventing it).
-  fs.unlinkSync(jsonlFallback);
-  const ag2 = aggregate(home, Date.now() + 31 * 60 * 1000);
+}
+{
+  // §1.6c3: as>0 + FRESH mtime → STAYS running (v0.5.16 active-workflow
+  // protection, v0.5.49 mtime-gated — the REGRESSION-CRITICAL case: a parent
+  // blocked on a Workflow tool with subagents streaming fires hook events
+  // (SubagentStart/Stop) that refresh mtime while since/last_ts stay stale).
+  const home = newTempHome();
+  writeStatus(home, 'wf-protect-c3', {
+    state: 'running',
+    since: Date.now() - 2 * 60 * 60 * 1000, // OLD since (parent silent 2h)
+    tokens: { last_ts: Date.now() - 2 * 60 * 60 * 1000 }, // OLD last_ts (parent silent)
+    activeSubagents: 1,
+    pending: false,
+  }); // NO ageMs → mtime FRESH (subagent events keep rewriting the file)
+  const ag = aggregate(home);
   check(
-    '§1.6c3  stale-since + NO transcript → decays to idle (gate returns false)',
-    ag2.running === 0 && ag2.idle === 1,
-    'ag2.running=' + ag2.running + ' ag2.idle=' + ag2.idle,
+    '§1.6c3  as=1 + since/last_ts stale + mtime FRESH → STAYS running (v0.5.16 protection, NOT regressed)',
+    ag.running === 1 && ag.idle === 0,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+
+// §1.6z  v0.5.49 as-protection expiry (the baeddc1d zombie-kill cases):
+{
+  // (a) as=1 + since/last_ts/mtime ALL 2d old → idle. THE 5.3-day zombie class:
+  // crashed mid-workflow, SessionEnd never fired, as frozen at 1; pre-v0.5.49
+  // the !(as>0) gate blocked decay FOREVER → permanent phantom 🟡 +1.
+  const home = newTempHome();
+  writeStatus(
+    home,
+    'zombie-a',
+    {
+      state: 'running',
+      since: Date.now() - 2 * 24 * 60 * 60 * 1000,
+      tokens: { last_ts: Date.now() - 2 * 24 * 60 * 60 * 1000 },
+      activeSubagents: 1,
+      pending: false,
+    },
+    { ageMs: 2 * 24 * 60 * 60 * 1000 }, // mtime ALSO 2d old (no event since the crash)
+  );
+  const ag = aggregate(home);
+  check(
+    '§1.6za  as=1 zombie (all timestamps 2d old) → idle (v0.5.49 expiry KILLS the phantom 🟡)',
+    ag.idle === 1 && ag.running === 0,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // (c) as=1 + mtime 25h old (just past the 24h horizon) → idle (protection
+  // expires at the boundary, not just at multi-day scales).
+  const home = newTempHome();
+  writeStatus(
+    home,
+    'zombie-c',
+    {
+      state: 'running',
+      since: Date.now() - 25 * 60 * 60 * 1000,
+      tokens: { last_ts: Date.now() - 25 * 60 * 60 * 1000 },
+      activeSubagents: 1,
+      pending: false,
+    },
+    { ageMs: 25 * 60 * 60 * 1000 },
+  );
+  const ag = aggregate(home);
+  check(
+    '§1.6zc  as=1 + mtime 25h (just past horizon) → idle',
+    ag.idle === 1 && ag.running === 0,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // (d) as=0 + mtime 2d stale → idle (byte-identical class: the as-gate's first
+  // disjunct is true for as==0, mtime expiry changes nothing).
+  const home = newTempHome();
+  writeStatus(
+    home,
+    'plain-d',
+    {
+      state: 'running',
+      since: Date.now() - 2 * 24 * 60 * 60 * 1000,
+      tokens: { last_ts: Date.now() - 2 * 24 * 60 * 60 * 1000 },
+      activeSubagents: 0,
+      pending: false,
+    },
+    { ageMs: 2 * 24 * 60 * 60 * 1000 },
+  );
+  const ag = aggregate(home);
+  check(
+    '§1.6zd  as=0 + all stale (incl. mtime) → idle (unchanged for as==0)',
+    ag.idle === 1 && ag.running === 0,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
   );
 }
 
@@ -1083,7 +1137,15 @@ console.log('\n=== §4  End-to-end (user scenario: 3 done / 1 running / 2 pendin
   fs.mkdirSync(stateDir(home), { recursive: true });
   const sid = 'eee-stale-running-55555555';
   const filePath = path.join(stateDir(home), sid + '.json');
-  fs.writeFileSync(filePath, JSON.stringify({ state: 'running', since: Date.now() - 60 * 60 * 1000, pending: false }));
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      state: 'running',
+      since: Date.now() - 60 * 60 * 1000,
+      tokens: { last_ts: Date.now() - 60 * 60 * 1000 }, // v0.5.13 AND-conjunct
+      pending: false,
+    }),
+  );
   // Backdate mtime to >30min ago to trigger running-stale decay.
   const stale = new Date(Date.now() - (SBI_RUNNING_STALE_MS + 60000));
   fs.utimesSync(filePath, stale, stale);
@@ -1129,11 +1191,45 @@ console.log('\n=== §4  End-to-end (user scenario: 3 done / 1 running / 2 pendin
   );
   // mtime is already fresh (just written). DO NOT backdate it — that's the
   // whole point: the bug scenario has fresh mtime + old since.
+  // v0.5.49 SEMANTICS UPDATE: under the REAL v0.5.13+/v0.5.16 predicate this
+  // scenario STAYS RUNNING — as=1 with fresh mtime means hook events are still
+  // firing (per-event liveness witness), i.e. CC is ALIVE and honestly
+  // ambiguous (drifted heartbeats vs real workflow). This is protected BY
+  // DESIGN (synthesis R2) and bounded by the writer's 7d GC drift rule. The
+  // pre-v0.5.49 assertion (decays) passed only because the replica still
+  // mirrored the retired v0.5.2 transcriptFresh gate. The zombie twin (same
+  // fixture with mtime backdated >24h) is §5.7 below.
   const ag = aggregate(home, Date.now(), Object.create(null));
   check(
-    '§5.6 v0.2.6 stuck-yellow regression: running with since>30min + mtime fresh → idle (since-decay fires, mtime-decay would not)',
-    ag.running === 0 && ag.idle === 1,
+    '§5.6 drifted-CC alive (as=1 + mtime fresh, since stale) → STAYS running (v0.5.16 protection; honest ambiguity, 7d-GC-bounded)',
+    ag.running === 1 && ag.idle === 0,
     'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // §5.7 v0.5.49: the §5.6 twin with the mtime backdated 2 days — the crash
+  // variant (no hook event since the crash) → protection EXPIRED → decays.
+  const home = newTempHome();
+  fs.mkdirSync(stateDir(home), { recursive: true });
+  const sid = 'ggg-zombie-77777777777';
+  const filePath = path.join(stateDir(home), sid + '.json');
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      state: 'running',
+      since: Date.now() - 2 * 24 * 60 * 60 * 1000,
+      tokens: { last_ts: Date.now() - 2 * 24 * 60 * 60 * 1000 },
+      activeSubagents: 1,
+      pending: false,
+    }),
+  );
+  const stale = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(filePath, stale, stale); // no event since the crash
+  const ag2 = aggregate(home, Date.now(), Object.create(null));
+  check(
+    '§5.7 §5.6 twin with 2d-stale mtime → idle (v0.5.49 as-protection expiry)',
+    ag2.running === 0 && ag2.idle === 1,
+    'ag2.running=' + ag2.running + ' ag2.idle=' + ag2.idle,
   );
 }
 {

@@ -2,7 +2,7 @@
 
 > 逆向目标：`anthropic.claude-code-2.1.204-darwin-x64/extension.js`（minified, 2.27 MB）
 > 日期：2026-07-10
-> 结论先行：**注入可行；session↔panel 映射可达（需 1～2 锚点 patch）；最大风险 = CC 自动更新覆盖 + minified 名漂移。**
+> 结论先行：**注入可行；session↔panel 映射可达（需 1～3 锚点 patch（A 必需，B/C 可选））；最大风险 = CC 自动更新覆盖 + minified 名漂移。**
 
 ---
 
@@ -11,11 +11,23 @@
 图标切换只发生在 **1 处**（`iconPath` 全文共 4 处，仅此 1 处是 panel tab 图标；另 3 处是 terminal / panel 创建默认值，勿动）。
 
 **精确字符串（字节偏移 ~2158836–2159078）：**
+
 ```js
-if(e.request.type==="rename_tab"){if(this.panelTab){this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)r="claude-logo-pending.svg";else if(e.request.hasUnseenCompletion)r="claude-logo-done.svg";else r="claude-logo.svg";this.panelTab.iconPath=ue.Uri.file(dn.join(this.context.extensionPath,"resources",r))}return{type:"rename_tab_response"}}
+if (e.request.type === "rename_tab") {
+  if (this.panelTab) {
+    this.panelTab.title = e.request.title;
+    let r;
+    if (e.request.hasPendingPermissions) r = "claude-logo-pending.svg";
+    else if (e.request.hasUnseenCompletion) r = "claude-logo-done.svg";
+    else r = "claude-logo.svg";
+    this.panelTab.iconPath = ue.Uri.file(dn.join(this.context.extensionPath, "resources", r));
+  }
+  return { type: "rename_tab_response" };
+}
 ```
 
 要点：
+
 - 该 handler 属于 **class `ts extends wF`**（每个 panel/tab 一个实例，字段含 `panelTab;webview;onSessionStateChanged;isFullEditor;...`）。
 - `e.request` 字段：`{type:"rename_tab", title, hasPendingPermissions, hasUnseenCompletion}` —— **不含 sessionId**。
 - done 态触发条件 = `e.request.hasUnseenCompletion`（**不是** `hasError`/`lastErrorResultText`，brief 的猜测作废）。
@@ -31,10 +43,12 @@ if(e.request.type==="rename_tab"){if(this.panelTab){this.panelTab.title=e.reques
 ## 3. session ↔ panelTab 映射（成败关键 —— 已确认：可达）
 
 ### 3.1 两层类结构
+
 - **class `ts`（per-panel，偏移 ~2154000）**：持有 `this.panelTab`（WebviewPanel）、`this.onSessionStateChanged`。`rename_tab` handler 在此类内。**构造器不存 sessionId**（已读构造体：存的是 `context;cwd;settings;webview;panelTab=m;requestUsageBroadcast;isFullEditor;onSessionStateChanged=g;...`，无 sid 字段）。
 - **Manager 类（偏移 ~2188900）**：持有 `sessionPanels=new Map`、`sessionStates=new Map`、`activeSessionId`、`updateSessionState(e,t,r){this.sessionStates.set(e,{sessionId:e,state:t,title:r})...}`、`sessionPanels.set(e,o)`（`e`=sessionId, `o`=panel 对象=ts 实例）。
 
 ### 3.2 sessionId 在 rename_tab handler 内 **不可直接拿到**
+
 `e.request` 无 sessionId；`this` 无 sid 字段。直接逆向 `sessionPanels` Map 需要 manager 引用，从 `ts` 内部不可达。
 
 ### 3.3 可达方案（采用）：兄弟 handler 捕获 sid
@@ -42,9 +56,11 @@ if(e.request.type==="rename_tab"){if(this.panelTab){this.panelTab.title=e.reques
 > **⚠️ v0.5.47 / CC 2.1.238 更新**：本节以下展示的 `update_session_state` 锚点是 **pre-2.1.238 逗号表达式形态**，已退役。2.1.238 起 CC 把该 handler 的 consequent 改为 **块 + zod 校验门**（`{let r=uNe(e.request);if(r)this.onSessionStateChanged?.(r.sessionId,r.state,r.title);return{...}}`），当前权威形态见 `patch.ts` 的 `ANCHOR_A` 注释。**改形要点**：块状 consequent 内插入语句是安全的（旧行「block 会孤儿化尾部 else」的约束只适用于替换单表达式 consequent，不适用于在既有块内插入）；我们在块首插入（zod 门之前），保证 stash 总是触发且读取未截断的原始字段；iife 表达式语句须以 `;` 终结（旧逗号链接续不需要）。
 
 `update_session_state` handler 与 `rename_tab` handler **同属一个 `ts` 实例**（同一 panel），且其 `e.request` **含 sessionId**：
+
 ```js
 else if(e.request.type==="update_session_state")return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}
 ```
+
 webview 发送方（偏移 3133735）：`{type:"update_session_state",sessionId:e,state:t,title:i}` —— **per-panel 携带本 panel 的 sid**。
 
 → **在此 handler 内把 sid 挂到 `this.__ccSid`**，后续 `setInterval` 读取 `this.__ccSid` 即可。映射 **可达**，无需触碰 manager 的 Map。
@@ -54,33 +70,42 @@ webview 发送方（偏移 3133735）：`{type:"update_session_state",sessionId:
 ## 4. 注入点与代码草案
 
 ### 4.1 推荐方案：**单锚点 patch**（update_session_state 捕获 sid + 启动定时器）
+
 仅改 1 处，定时器每 500ms 重绘并覆盖 CC 的赋值（CC 的 rename_tab 稀疏触发，500ms 内必被重断言）。
 
 **Anchor A（match 串，需 escape 引号）——⚠️ pre-2.1.238 形态，现行形态见 patch.ts ANCHOR_A（块 + zod 门，语句插入）：**
+
 ```
 else if(e.request.type==="update_session_state")return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}
 ```
+
 **Replace 为：**
+
 ```js
 else if(e.request.type==="update_session_state"){this.__ccSid=e.request.sessionId;(function(t){if(t.__ccDotStarted||!t.panelTab)return;t.__ccDotStarted=true;var fs=require("fs"),os=require("os"),pth=require("path"),vs=require("vscode");var DIR=pth.join(os.homedir(),".claude","cc-tab-status");/*SVG_ABS_DIR*/var RES="/abs/path/to/project/resources";var seq=0;setInterval(function(){var p=t.panelTab;if(!p)return;var sid=t.__ccSid;if(!sid)return;var st=null;try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state}catch(e){}var map={running:"cc-running.svg",idle:"cc-idle.svg",error:"cc-error.svg"};var svg;if(st==="error"){svg=(seq%2===0)?"cc-error.svg":"claude-logo.svg"}else if(st==="running"){svg=(seq%2===0)?"cc-running.svg":"cc-running-bright.svg"}else if(st&&map[st]){svg=map[st]}else{return}seq++;try{p.iconPath=vs.Uri.file(pth.join(RES,svg))}catch(e){}},500)})(this);return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"}}
 ```
 
 要点：
+
 - 注入代码 **只依赖 `require("fs"|"os"|"path"|"vscode")` + `this` + `Date/seq`**，**完全不依赖 minified 名 `ue`/`dn`/`r`** → 版本鲁棒（VSCode 扩展宿主为 Node，`require` node 内建 + vscode 均可用）。
 - `RES` 为 SVG 绝对目录（patch 时由 patch.ts 用自身 `__dirname` 拼出，bake 进字符串，替换占位 `/*SVG_ABS_DIR*/`）。
 - 状态映射：`running`→呼吸（running↔running-bright），`error`→快闪（error↔默认），`idle`→静止，文件不存在/无状态→`return` 不覆盖（让 CC 原逻辑保留 pending/done）。
 - 守卫 `t.__ccDotStarted` 防多次启动；`if(!t.panelTab)return` 兼容非 tab 模式。
 
 ### 4.2 可选加固（第 2 锚点，消除 ~500ms 闪烁）
+
 **Anchor B（match 串）：**
+
 ```
 this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)
 ```
+
 在 `;let r;` 前插入同样的 `(function(t){...})(this)` 启动块（已由 `__ccDotStarted` 去重）。这样 CC 在 rename_tab 重设图标后，本帧已启动的定时器仍会在下个 tick 重断言。**非必需**，单锚点已可用。
 
 ### 4.3 patch.ts 流程
+
 1. `readFileSync(extension.js)` 为文本。
-2. 校验 Anchor A（及可选 B）命中数 == 1（防误伤）。
+2. 两层锚校验 Anchor A（必须 == 1）及可选 B/C（∈ {0,1}）（防误伤；改名类漂移由容错层吸收）。
 3. `String.prototype.replace` 注入；把 `RES` 占位替换为 `path.join(__dirname,"..","resources")` 的绝对路径。
 4. 写回 extension.js（先备份 `extension.js.bak`）。
 5. 把 `cc-running.svg`/`cc-running-bright.svg`/`cc-idle.svg`/`cc-error.svg` 放入项目 `resources/`。
@@ -89,10 +114,10 @@ this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)
 
 > **v0.2 演进（见 [STATES.md §3a](STATES.md)）**：A 的"劣"（移动/删除项目目录即失效）已被克服——phase1 在安装时把 7 个 SVG 复制到 `INSTALL_DIR`（`~/.claude/cc-status-dot/resources/`），IIFE bake 的是该**持久绝对路径**而非项目源目录。下面的方案对比保留作设计史；当前实现 = "A 的优" + "无 A 的劣"（删项目源 / npx 缓存被清都不影响）。
 
-| 方案 | 优 | 劣 |
-|---|---|---|
-| **A. 绝对路径 → 本项目 resources/**（推荐） | CC 自动更新只覆盖扩展目录，**SVG 不丢**（只需重 patch extension.js）；iconPath=`Uri.file(abs)` 对任意绝对路径生效（不受 webview `localResourceRoots` 限制）；SVG 单一源头、便于迭代动画 | 用户移动项目目录后需重跑 patcher bake 新路径 |
-| B. 复制进 CC `resources/` | 与 CC 现有 `Uri.file(join(extensionPath,"resources",x))` 模式一致 | CC 每次自动更新 **整个扩展目录被清空**，SVG 连同 patched extension.js 一起丢；反正必须重 patch，复制无额外收益 |
+| 方案                                        | 优                                                                                                                                                                                      | 劣                                                                                                             |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **A. 绝对路径 → 本项目 resources/**（推荐） | CC 自动更新只覆盖扩展目录，**SVG 不丢**（只需重 patch extension.js）；iconPath=`Uri.file(abs)` 对任意绝对路径生效（不受 webview `localResourceRoots` 限制）；SVG 单一源头、便于迭代动画 | 用户移动项目目录后需重跑 patcher bake 新路径                                                                   |
+| B. 复制进 CC `resources/`                   | 与 CC 现有 `Uri.file(join(extensionPath,"resources",x))` 模式一致                                                                                                                       | CC 每次自动更新 **整个扩展目录被清空**，SVG 连同 patched extension.js 一起丢；反正必须重 patch，复制无额外收益 |
 
 **选 A**。`iconPath` 仅需合法 `Uri`，绝对路径无任何限制；且把"动画素材"留在我们可控的项目里，更新扩展时只需一行重 patch。
 
@@ -101,7 +126,7 @@ this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)
 1. **CC 自动更新覆盖（最高风险）**：扩展更新会整体替换目录，patched `extension.js` 被原版覆盖 → 静默失效。
    - 缓解：patcher 检测 CC 版本号目录（`anthropic.claude-code-*`），启动时自检 `extension.js` 是否含 Anchor A，缺失则自动重 patch 并提示。
 2. **minified 名漂移**：`ue`/`dn`/`r`/`e`/`ts` 随版本变。
-   - 缓解：注入代码 **不引用任何 minified 名**（仅用 `require` + `this`）。脆弱面收窄到 **Anchor match 串**——把 Anchor A 做成正则匹配（容忍空白/引号微调），并要求唯一命中。
+   - 缓解：注入代码 **不引用任何 minified 名**（仅用 `require` + `this`）。脆弱面收窄到 **Anchor match**——v0.5.49 起每层锚为两级：精确字面（快路径）+ 容错正则（IPC 协议字符串为字面锚、minified 标识符为 `[A-Za-z0-9_$]+` 捕获），改名类漂移自动兼容，任一层非唯一命中即 fail-closed。
 3. **`update_session_state` 首次触发延迟**：新空 panel 若长期无状态变更，sid 迟迟不捕获 → 定时器不启动。
    - 缓解：4.2 的 Anchor B 兜底（rename_tab 在首次设 title 即触发）；或改为在 panel 创建点（偏移 2195593 `iconPath:{light:a,dark:a}`）旁注入启动块。
 4. **多 panel 竞态**：每个 `ts` 实例各自启动 1 个 setInterval（已去重），N 个 tab = N 个 500ms 定时器。开销可接受（仅 fs.readFileSync 小文件），但极端多 tab 时可考虑全局单定时器 + 遍历 `sessionPanels`（需 manager 引用，复杂度上升，暂不取）。
@@ -114,12 +139,13 @@ this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)
 ---
 
 ## 附：关键偏移速查（2.1.204）
-| 内容 | 偏移 |
-|---|---|
-| `rename_tab` handler + 图标分支（**Anchor 区**） | 2158815 / 2158836–2159078 |
-| `hasUnseenCompletion`（唯一） | 2158969 |
-| `update_session_state` handler（**Anchor A**） | 2159080 |
-| `claude-logo.svg` panel 首次创建默认图标 | 2195573 |
-| terminal 图标（勿动） | 2167650 / 2207056 |
-| class `ts` 字段声明 | 2154000–2155300 |
+
+| 内容                                                       | 偏移                        |
+| ---------------------------------------------------------- | --------------------------- |
+| `rename_tab` handler + 图标分支（**Anchor 区**）           | 2158815 / 2158836–2159078   |
+| `hasUnseenCompletion`（唯一）                              | 2158969                     |
+| `update_session_state` handler（**Anchor A**）             | 2159080                     |
+| `claude-logo.svg` panel 首次创建默认图标                   | 2195573                     |
+| terminal 图标（勿动）                                      | 2167650 / 2207056           |
+| class `ts` 字段声明                                        | 2154000–2155300             |
 | Manager: `sessionPanels`/`sessionStates`/`activeSessionId` | 2188900 / 2193586 / 2196884 |

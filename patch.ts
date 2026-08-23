@@ -34,8 +34,10 @@
  *
  *   The injected code references ZERO minified identifiers (no `ue`/`dn`/`r`);
  *   it only uses `require("fs"|"path"|"vscode"|"os")`, `this`, and `Date`. The
- *   only version-sensitive surface is therefore the two anchor strings below,
- *   which are asserted to match exactly once before any byte is written.
+ *   only version-sensitive surface is therefore the three anchors below
+ *   (A/B/C), each resolved two-tier (exact literal, then a tolerant regex that
+ *   absorbs minifier renames) and asserted to match exactly once (A) or 0..1
+ *   (B/C) before any byte is written.
  *
  * SVG WIRING (DESIGN §5 — absolute path to a PERSISTENT copy, not the project)
  *   Our SVGs (claude-logo-idle.svg + claude-logo-running.svg + claude-logo-done.svg
@@ -144,7 +146,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in companion/CHANGELOG.md (entries up to 0.5.9; later versions document rationale in commit messages); SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.48";
+const INJECT_VERSION = "v0.5.49";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -186,7 +188,7 @@ const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
  *  --status now surfaces this const so the user can self-check after a CC
  *  upgrade; install does NOT hard-gate (preserves forward compat — a future CC
  *  that keeps the anchor bytes identical still installs cleanly). */
-const LAST_VERIFIED_CC = "2.1.238";
+const LAST_VERIFIED_CC = "2.1.240";
 
 /** Length (hex chars) of the content-hash suffix appended to the writer hook
  *  banner (`cc-status-dot-hook:vX.Y.Z:HASH`). Mirrors STAMP_HASH_LEN — same
@@ -377,6 +379,29 @@ const DONE_TO_IDLE_MS = 5 * 60 * 1000;
  *  preserved (drifted Stop heartbeats refresh the state-file mtime but NOT
  *  the transcript → stale transcript → decay still fires). */
 const SBI_RUNNING_STALE_MS = 30 * 60 * 1000;
+
+/** v0.5.49 (as-protection expiry): mtime is the per-EVENT liveness witness for
+ *  the running-decay activeSubagents gate. Every non-null deriveStatus hook
+ *  event rewrites <sid>.json via atomic tmp+rename (incl. SubagentStart /
+ *  SubagentStop / Notification / Stop heartbeats), so a workflow that is alive
+ *  in ANY form keeps the file mtime fresh — while tokens.last_ts stays frozen
+ *  for the whole parent-silent span (subagent rows never advance ctx.lastTs,
+ *  cc-status.js isSub gate) and `since` is preserved across inflight Stop
+ *  heartbeats. The v0.5.16 gate !(activeSubagents>0) protected exactly that
+ *  parent-silent case — but a session that CRASHED mid-workflow freezes as>0
+ *  forever, converting the gate into a permanent phantom 🟡 (baeddc1d class:
+ *  running+as=1 untouched for 5.3 days, +1 yellow on the four lamps). Fix
+ *  direction: protection EXPIRES when no hook event fired for
+ *  SBI_AS_PROTECT_MAX_MS (mtime stale). 24h ≫ the documented worst-case event
+ *  silence (sleep 1800 = 30min, STATES.md §7.2) and ≪ the 7d GC_DRIFT_SINCE_MS
+ *  disk backstop. NOTE this is the INVERSE of the v0.2.6 mtime rejection
+ *  (§7.2): that rejected fresh-mtime as the decay CLOCK (fresh mtime BLOCKING
+ *  decay = the stuck-yellow bug); here fresh mtime KEEPS the as-protection and
+ *  stale mtime EXPIRES it, so the v0.2.6 stuck-drift class behaves
+ *  identically to today. Byte-identical for as==0 sessions (first disjunct
+ *  true). mt missing (stat miss) fails TOWARD decay, mirroring the §F
+ *  cache-miss precedent. */
+const SBI_AS_PROTECT_MAX_MS = 24 * 60 * 60 * 1000;
 
 /** Persistent runtime install dir. A copy of resources/*.svg + hooks/cc-status.js
  *  lives here so the patched extension and the CC hook keep working even if the
@@ -1434,8 +1459,44 @@ const I18N_DICT: Record<string, I18NEntry> = {
  * aliases the generic SDK-side switch handler at ~offset 2609115 which has
  * no panelTab/onSessionStateChanged).
  */
-const ANCHOR_A =
-    'else if(e.request.type==="update_session_state"){let r=uNe(e.request);if(r)this.onSessionStateChanged?.(r.sessionId,r.state,r.title);return{type:"update_session_state_response"}}';
+// v0.5.49: anchors are now GENERATED from captured identifier sets. The
+// 2.1.239/240 incident was a 2-char minifier rename (uNe->rMe) breaking a
+// 178-char exact literal — the anchor machinery now has TWO tiers per anchor:
+// tier 1 = exact literal from IDS_*_DEFAULT (fast path, byte-identical when CC
+// is unchanged); tier 2 = TOL_* tolerant regex (protocol-stable tokens as
+// bytes, minifiable identifiers as captures) resolved by matchAnchor*. See
+// TOL_A/B/C below for the verified shapes. anchorXFrom re-derives the exact
+// literal from any ids so inject/strip stay byte-exact per install.
+interface IdsA {
+    param: string;
+    rvar: string;
+    zod: string;
+}
+interface IdsB {
+    param: string;
+    rvar: string;
+}
+interface IdsC {
+    param: string;
+    dlg: string;
+    cbsink: string;
+}
+/** CC 2.1.240 bytes (verified 2026-08-23; 2.1.238 used zod=uNe -> tier 2). */
+const IDS_A_DEFAULT: IdsA = { param: "e", rvar: "r", zod: "rMe" };
+const IDS_B_DEFAULT: IdsB = { param: "e", rvar: "r" };
+const IDS_C_DEFAULT: IdsC = { param: "e", dlg: "t", cbsink: "r" };
+function anchorAFrom(ids: IdsA): string {
+    return `else if(${ids.param}.request.type==="update_session_state"){let ${ids.rvar}=${ids.zod}(${ids.param}.request);if(${ids.rvar})this.onSessionStateChanged?.(${ids.rvar}.sessionId,${ids.rvar}.state,${ids.rvar}.title);return{type:"update_session_state_response"}}`;
+}
+function anchorBFrom(ids: IdsB): string {
+    return `this.panelTab.title=${ids.param}.request.title;let ${ids.rvar};if(${ids.param}.request.hasPendingPermissions)`;
+}
+function anchorCFrom(ids: IdsC): string {
+    return `return(await this.sendRequest(${ids.param},{type:"user_dialog_request",dialogKind:${ids.dlg}.dialogKind,payload:${ids.dlg}.payload,toolUseID:${ids.dlg}.toolUseID},${ids.cbsink})).result`;
+}
+const ANCHOR_A = anchorAFrom(IDS_A_DEFAULT);
+const ANCHOR_B = anchorBFrom(IDS_B_DEFAULT);
+const ANCHOR_C = anchorCFrom(IDS_C_DEFAULT);
 
 /**
  * Anchor B — inside the `rename_tab` handler, just after the title is set and
@@ -1457,7 +1518,6 @@ const ANCHOR_A =
  *     on disk, which previously caused the yellow running dot to cover the
  *     blue pending dot).
  */
-const ANCHOR_B = "this.panelTab.title=e.request.title;let r;if(e.request.hasPendingPermissions)";
 
 /**
  * Anchor C — INSIDE `uq.prototype.requestUserDialog` (inherited by each `go`
@@ -1497,8 +1557,6 @@ const ANCHOR_B = "this.panelTab.title=e.request.title;let r;if(e.request.hasPend
  * session start before rename_tab: acceptable degradation, same class as
  * v0.5.22 sid-inference uncertainty).
  */
-const ANCHOR_C =
-    'return(await this.sendRequest(e,{type:"user_dialog_request",dialogKind:t.dialogKind,payload:t.payload,toolUseID:t.toolUseID},r)).result';
 
 // ---------------------------------------------------------------------------
 // Logging — plain text, no emojis (kept terminal-friendly & greppable)
@@ -1514,6 +1572,55 @@ function fail(msg: string): never {
     // Tag anchor problems so the top-level handler can append a version hint.
     if (/anchor/i.test(msg)) throw new Error(`Anchor mismatch: ${msg}`);
     throw new Error(msg);
+}
+
+// ---------------------------------------------------------------------------
+// v0.5.49 tolerant anchor tier: identifier-agnostic, protocol-stable. The
+// regex bytes pin ONLY what crosses the IPC boundary (RPC method strings +
+// wire field names — unminifiable); every minifiable local is a capture with
+// backreference consistency. NO dot-star anywhere (linear scan, no
+// catastrophic backtracking) and the full arm shape is pinned so a structural
+// CC change still yields 0 matches (fail closed). matchAll only — never .test
+// on these /g literals (lastIndex hygiene). Verified against the real
+// 2.1.238/239/240 bundles: exactly 1 match each, and the SDK-side switch
+// alias arm (case"update_session_state":return{...}, no else-if prefix / no
+// onSessionStateChanged) can never match.
+// ---------------------------------------------------------------------------
+const TOL_A =
+    /else if\(([A-Za-z0-9_$]+)\.request\.type==="update_session_state"\)\{let ([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\(\1\.request\);if\(\2\)this\.onSessionStateChanged\?\.\(\2\.sessionId,\2\.state,\2\.title\);return\{type:"update_session_state_response"\}\}/g;
+const TOL_B =
+    /this\.panelTab\.title=([A-Za-z0-9_$]+)\.request\.title;let ([A-Za-z0-9_$]+);if\(\1\.request\.hasPendingPermissions\)/g;
+const TOL_C =
+    /return\(await this\.sendRequest\(([A-Za-z0-9_$]+),\{type:"user_dialog_request",dialogKind:([A-Za-z0-9_$]+)\.dialogKind,payload:\2\.payload,toolUseID:\2\.toolUseID\},([A-Za-z0-9_$]+)\)\)\.result/g;
+
+/** Tier-1 (exact default literal) -> tier-2 (tolerant regex, exactly-once +
+ *  re-derivation count gate). Returns the resolved ids, or null when neither
+ *  tier yields a unique match (caller fails closed). */
+function matchAnchorA(src: string): IdsA | null {
+    // Ambiguity is checked across BOTH tiers first (T7): an exact default hit
+    // PLUS any other tolerant shape (renamed duplicate) must fail closed.
+    const ms = [...src.matchAll(TOL_A)];
+    if (ms.length > 1) return null;
+    if (countOccurrences(src, ANCHOR_A) === 1) return IDS_A_DEFAULT;
+    if (ms.length !== 1) return null;
+    const ids: IdsA = { param: ms[0][1]!, rvar: ms[0][2]!, zod: ms[0][3]! };
+    return countOccurrences(src, anchorAFrom(ids)) === 1 ? ids : null;
+}
+function matchAnchorB(src: string): IdsB | null {
+    const ms = [...src.matchAll(TOL_B)];
+    if (ms.length > 1) return null;
+    if (countOccurrences(src, ANCHOR_B) === 1) return IDS_B_DEFAULT;
+    if (ms.length !== 1) return null;
+    const ids: IdsB = { param: ms[0][1]!, rvar: ms[0][2]! };
+    return countOccurrences(src, anchorBFrom(ids)) === 1 ? ids : null;
+}
+function matchAnchorC(src: string): IdsC | null {
+    const ms = [...src.matchAll(TOL_C)];
+    if (ms.length > 1) return null;
+    if (countOccurrences(src, ANCHOR_C) === 1) return IDS_C_DEFAULT;
+    if (ms.length !== 1) return null;
+    const ids: IdsC = { param: ms[0][1]!, dlg: ms[0][2]!, cbsink: ms[0][3]! };
+    return countOccurrences(src, anchorCFrom(ids)) === 1 ? ids : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1721,7 +1828,7 @@ function countOccurrences(haystack: string, needle: string): number {
 // Syntax gate — refuse to write a malformed extension.js. Validates the FINAL
 // spliced bytes the way Node/VSCode actually load CC's bundle (`node --check`),
 // so a typo in buildIIFE's template-literal array — e.g. a missing `}` that
-// turns the whole 2.6 MB bundle into a SyntaxError and bricks the CC extension
+// turns the whole ~3MB bundle into a SyntaxError and bricks the CC extension
 // (its commands, incl. claude-vscode.editor.openLast, vanish and new sessions
 // refuse to open) — is caught BEFORE any byte reaches disk. Catches anchor/
 // replace mistakes too, since it checks the assembled `next`, not just the IIFE.
@@ -2025,6 +2132,7 @@ function buildIIFE(resDir: string): string {
         `var DONE_TO_IDLE_MS=${DONE_TO_IDLE_MS};`,
         `/*§7.2 stale-running heuristic: v0.2.6 keys off 'since' (the *→running transition time), not mtime. Stop preserveSince path (cc-status.js:390-401) keeps cur.since on inflight>0 Stop heartbeats while writeJsonAtomic refreshes mtime — mtime stays fresh forever under CC's repeated Stop fire on drifted inflight payloads, so mtime-decay never fires. since-decay fires correctly because since is preserved (not refreshed) across the same path. Mirrors done>5min / interrupted>24h decay which already key off since.*/`,
         `var SBI_RUNNING_STALE_MS=${SBI_RUNNING_STALE_MS};`,
+        `var SBI_AS_PROTECT_MAX_MS=${SBI_AS_PROTECT_MAX_MS};`,
         /*v0.5.2 (#4): the per-tab decay threshold is UNIFIED with §F — both
          surfaces now reference the single SBI_RUNNING_STALE_MS above + the
          __ccsdTranscriptFresh activity gate. The v0.2.6 round-1
@@ -2052,7 +2160,7 @@ function buildIIFE(resDir: string): string {
          * decayInterrupted=true) and §H (per-tab, decayInterrupted=false — interrupted stays
          * red on tab for diagnostics, see STATES.md §7.4). Eliminates byte-identical decay
          * chain duplication. Each consumer reads sid.json INDEPENDENTLY (§F readdirSync /
-         * §H readFileSync — see rejected-by-design). Only the predicate is shared, not read.*/ `function __ccsdDecayState(st,since,j,now,decayInterrupted){if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS)return "idle";if(decayInterrupted&&st==="interrupted"&&since&&(now-since)>INTERRUPTED_RETENTION_MS)return "idle";if(st==="running"&&since&&!(j.activeSubagents>0)&&(now-since)>SBI_RUNNING_STALE_MS&&j.tokens&&j.tokens.last_ts&&(now-j.tokens.last_ts)>SBI_RUNNING_STALE_MS)return "idle";return st;}`,
+         * §H readFileSync — see rejected-by-design). Only the predicate is shared, not read.*/ `function __ccsdDecayState(st,since,j,now,decayInterrupted,mt){if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS)return "idle";if(decayInterrupted&&st==="interrupted"&&since&&(now-since)>INTERRUPTED_RETENTION_MS)return "idle";/*v0.5.49 as-protection expiry: the v0.5.16 !(activeSubagents>0) gate blocked running-decay FOREVER for sessions that crashed mid-workflow (as frozen >0 → permanent phantom 🟡, the 5.3-day baeddc1d zombie). mt = the sid.json mtime — the per-EVENT liveness witness (every hook fire rewrites the file; SubagentStart/Stop included), unlike since (preserved across inflight Stop heartbeats) and tokens.last_ts (frozen during parent-silent workflows). Protection for as>0 now EXPIRES once no event fired for SBI_AS_PROTECT_MAX_MS (24h ≫ documented 30min worst-case silence, ≪ 7d GC). !mt (stat miss) fails TOWARD decay. Byte-identical for as==0.*/if(st==="running"&&since&&(!(j.activeSubagents>0)||!mt||(now-mt)>SBI_AS_PROTECT_MAX_MS)&&(now-since)>SBI_RUNNING_STALE_MS&&j.tokens&&j.tokens.last_ts&&(now-j.tokens.last_ts)>SBI_RUNNING_STALE_MS)return "idle";return st;}`,
         // v0.2.5 round-3 (MEDIUM): rolling-window spans in ms. Used by
         // computeLiveDelta to filter transcript rows by timestamp so the
         // IIFE's live-delta dSum only counts rows INSIDE the rolling window
@@ -2341,7 +2449,7 @@ function buildIIFE(resDir: string): string {
         `var j=(__e&&__e.mt===__mt&&__e.sz===__sz)?__e.j:JSON.parse(fs.readFileSync(fp,"utf8"));`,
         `if(!__e||__e.mt!==__mt||__e.sz!==__sz){__cc[files[i]]={j:j,mt:__mt,sz:__sz};}`,
         `var st=j.state;var since=j.since;`,
-        /*§F four-light decay (done>5min / interrupted>7d / running-stale) — unified predicate __ccsdDecayState (decayInterrupted=true — four-light aggregates interrupted at 7d per STATES.md §7.5); see its declaration for full rationale.*/ `st=__ccsdDecayState(st,since,j,Date.now(),true);`,
+        /*§F four-light decay (done>5min / interrupted>7d / running-stale) — unified predicate __ccsdDecayState (decayInterrupted=true — four-light aggregates interrupted at 7d per STATES.md §7.5); see its declaration for full rationale.*/ `st=__ccsdDecayState(st,since,j,Date.now(),true,__mt);`,
         /*v0.5.13 (state-machine fix): count is PRIORITY-OVERLAY + mutually EXCLUSIVE — mirrors §H's early-return. A session goes into exactly ONE bucket. Priority: pending(🔵) > interrupted(🔴) > running(🟡) > done(🟢) > idle(⚪, not rendered). Pre-0.5.13 pending was counted INDEPENDENTLY of state (a running+pending session added +1 yellow AND +1 blue), violating the user spec "blue wins over yellow" (this was the exact cause of the reported "two-yellow one-blue": zombie 90cc10fb was running+pending and got double-counted). Two pending sources OR'd as before — file flag (Notification hook, cross-window) OR per-window __ccsdPendingSet (rename_tab IPC, sync) — now made exclusive with state via st!=="idle" (decayed → no 🔵 false-stick).*/
         // v0.2.5 (problem 1 fix): OR two sources — the file-pending flag
         // (Notification hook → cc-status.js atomic write, async but
@@ -2557,6 +2665,7 @@ function buildIIFE(resDir: string): string {
         // sink trap. RE-AUDIT TRIGGER: any CC update that drifts ANCHOR_C bytes,
         // changes askUserQuestion's can_use_tool routing, or adds notification_
         // type coverage for consent → re-audit which term covers which dialog.
+        `var __mt=0;try{var __s2=fs.statSync(pth.join(DIR,sid+".json"));__mt=__s2.mtimeMs;}catch(_){}`,
         `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)||(globalThis.__ccsdPendingSet&&globalThis.__ccsdPendingSet[sid]===true)||(globalThis.__ccsdUserDialogSet&&globalThis.__ccsdUserDialogSet[sid]===true)}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
         `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){`,
@@ -2613,7 +2722,7 @@ function buildIIFE(resDir: string): string {
         // pending at cc-status.js:558; the §F aggregate decays interrupted at
         // 7d, the only remaining per-tab-vs-SBI divergence — see STATES.md §7.4).
         `var now=Date.now();`,
-        /*§H per-tab decay (done>5min / running-stale) — BEFORE the pending check so a decayed session with j.pending=true does not false-stick 🔵. Unified predicate __ccsdDecayState (decayInterrupted=false — interrupted stays red on tab for diagnostics, STATES.md §7.4); see its declaration for the full running-decay rationale.*/ `st=__ccsdDecayState(st,since,j,now,false);`,
+        /*§H per-tab decay (done>5min / running-stale) — BEFORE the pending check so a decayed session with j.pending=true does not false-stick 🔵. Unified predicate __ccsdDecayState (decayInterrupted=false — interrupted stays red on tab for diagnostics, STATES.md §7.4); see its declaration for the full running-decay rationale.*/ `st=__ccsdDecayState(st,since,j,now,false,__mt);`,
         `/*reader pending (Notification file-flag OR __ps IPC permission set): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
         `if(pend && st!=="idle"){try{p.iconPath=ccuri(favOf(pth.join(RES,"claude-logo-pending.svg"),sid))}catch(e){}return}`,
         `var svg;`,
@@ -2755,16 +2864,17 @@ function currentHookBodyHash(): string | null {
 /** v0.5.47: module-level replC builder (same hoist rationale as
  *  buildReplA/buildReplB — the --self-test-strip round-trip splices Anchor C
  *  with the EXACT production string). Pure constant. */
-function buildReplC(): string {
-    return 'try{var __csd=this.__ccsdSid;if(__csd){var __ud=globalThis.__ccsdUserDialogSet||(globalThis.__ccsdUserDialogSet=Object.create(null));__ud[__csd]=true}var __ccsdUdRes=await this.sendRequest(e,{type:"user_dialog_request",dialogKind:t.dialogKind,payload:t.payload,toolUseID:t.toolUseID},r);return __ccsdUdRes.result}finally{try{if(__csd&&globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[__csd]}catch(_){}}';
+function buildReplC(ids: IdsC = IDS_C_DEFAULT): string {
+    return `try{var __csd=this.__ccsdSid;if(__csd){var __ud=globalThis.__ccsdUserDialogSet||(globalThis.__ccsdUserDialogSet=Object.create(null));__ud[__csd]=true}var __ccsdUdRes=await this.sendRequest(${ids.param},{type:"user_dialog_request",dialogKind:${ids.dlg}.dialogKind,payload:${ids.dlg}.payload,toolUseID:${ids.dlg}.toolUseID},${ids.cbsink});return __ccsdUdRes.result}finally{try{if(__csd&&globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[__csd]}catch(_){}}`;
 }
 
 /** v0.5.47: module-level replB builder (same hoist rationale as
  *  buildReplA — the --self-test-strip round-trip splices with the EXACT
  *  production strings). Pure function of the iife string. */
-function buildReplB(iife: string): string {
+function buildReplB(iife: string, ids: IdsB = IDS_B_DEFAULT): string {
+    const e = ids.param;
     return (
-        "this.panelTab.title=e.request.title;this.__ccsdTitle=e.request.title;this.__ccsdPending=!!e.request.hasPendingPermissions;" +
+        `this.panelTab.title=${e}.request.title;this.__ccsdTitle=${e}.request.title;this.__ccsdPending=!!${e}.request.hasPendingPermissions;` +
         // v0.5.35 FIX: the v0.2.5 premise "rename_tab carries sessionId" is FALSE
         // (verified: webview renameTab producer sends {title,hasPendingPermissions,
         // hasUnseenCompletion}, NO sessionId). The unconditional this.__ccsdSid=
@@ -2782,7 +2892,7 @@ function buildReplB(iife: string): string {
         // degrades to a no-op `delete __ps[undefined]` if the panel is
         // closed in that window → __ccsdPendingSet entry leaks. Idempotent
         // with replA (both write the same value when both fire).
-        "if(e.request.sessionId)this.__ccsdSid=e.request.sessionId;" +
+        `if(${e}.request.sessionId)this.__ccsdSid=${e}.request.sessionId;` +
         // v0.5.44 BUG1 Layer 1b: rename_tab carries the NEW title but NO
         // sessionId, and fires repeatedly (truncation, user rename, panel
         // title reassignment). If update_session_state has ALREADY fired for
@@ -2797,7 +2907,7 @@ function buildReplB(iife: string): string {
         // covers it the moment update_session_state fires. Statement form
         // (`;`-terminated) matches replB's style; gated on this.__ccsdSid so
         // it never registers under an undefined key.
-        'if(this.__ccsdSid&&!this.__ccsdDisposed){(globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[this.__ccsdSid]=e.request.title||"";(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[this.__ccsdSid]=this.panelTab;}' +
+        `if(this.__ccsdSid&&!this.__ccsdDisposed){(globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[this.__ccsdSid]=${e}.request.title||"";(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[this.__ccsdSid]=this.panelTab;}` +
         // v0.2.5 (problem 1 fix): mirror the per-panel __ccsdPending flag into
         // a window-scoped globalThis set so the §F 4-light aggregation (which
         // scans STATE_DIR files, not panel objects) can pick up the
@@ -2817,9 +2927,9 @@ function buildReplB(iife: string): string {
         // footgun for any future edit at the end of replB. let keeps the
         // binding local to the try block; behavior inside the try is
         // identical to var.
-        "try{let __ps=globalThis.__ccsdPendingSet||(globalThis.__ccsdPendingSet=Object.create(null));if(this.__ccsdSid){if(e.request.hasPendingPermissions){__ps[this.__ccsdSid]=true}else{delete __ps[this.__ccsdSid]}}}catch(_){}" +
+        `try{let __ps=globalThis.__ccsdPendingSet||(globalThis.__ccsdPendingSet=Object.create(null));if(this.__ccsdSid){if(${e}.request.hasPendingPermissions){__ps[this.__ccsdSid]=true}else{delete __ps[this.__ccsdSid]}}}catch(_){}` +
         iife +
-        ";let r;if(e.request.hasPendingPermissions)"
+        `;let ${ids.rvar};if(${e}.request.hasPendingPermissions)`
     );
 }
 
@@ -2828,10 +2938,11 @@ function buildReplB(iife: string): string {
  *  — the strip patterns and this builder are now lockstep-tested together;
  *  see the LIFECYCLE-LOCKSTEP comment in stripIifeInPlace). Pure function of
  *  the iife string; behavior byte-identical to the former inline const. */
-function buildReplA(iife: string): string {
+function buildReplA(iife: string, ids: IdsA = IDS_A_DEFAULT): string {
+    const e = ids.param;
     return (
-        'else if(e.request.type==="update_session_state"){' +
-        "this.__ccsdSid=e.request.sessionId;this.__ccsdTitle=e.request.title;" +
+        `else if(${e}.request.type==="update_session_state"){` +
+        `this.__ccsdSid=${e}.request.sessionId;this.__ccsdTitle=${e}.request.title;` +
         // v0.5.44 BUG1+BUG2 Layer 1a (v0.5.47 statement form): synchronously
         // mirror sid→title AND sid→panel into the globalThis bridge HERE, on
         // every update_session_state (the ONE event that carries sessionId) —
@@ -2854,7 +2965,7 @@ function buildReplA(iife: string): string {
         // lazily inits the maps (mirrors §A's own init) so order-of-fire never
         // matters; the !__ccsdDisposed guard prevents post-teardown in-flight
         // events from re-adding zombie panel entries.
-        'if(e.request.sessionId&&!this.__ccsdDisposed){(globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[e.request.sessionId]=(e.request.title||"");(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[e.request.sessionId]=this.panelTab;}' +
+        `if(${e}.request.sessionId&&!this.__ccsdDisposed){(globalThis.__ccsdSidToTitle||(globalThis.__ccsdSidToTitle=Object.create(null)))[${e}.request.sessionId]=(${e}.request.title||"");(globalThis.__ccsdSidToPanel||(globalThis.__ccsdSidToPanel=Object.create(null)))[${e}.request.sessionId]=this.panelTab;}` +
         // v0.2.4: also publish the active sid to globalThis so the token SBI
         // tick (window-scoped, outside this panel closure) picks it up.
         //
@@ -2867,7 +2978,7 @@ function buildReplA(iife: string): string {
         // (background) therefore oscillated the token SBI between sessions
         // every 500ms. With the gate the event-driven path and the
         // tick-driven path agree: only the active panel publishes.
-        "if(this.panelTab&&this.panelTab.active===true)globalThis.__ccsdActiveSid=e.request.sessionId;" +
+        `if(this.panelTab&&this.panelTab.active===true)globalThis.__ccsdActiveSid=${e}.request.sessionId;` +
         iife +
         // (the iife is `(function(t){…})(this)` — an expression statement; the
         // `;` below terminates it. The pre-2.1.238 form chained it with the
@@ -2877,7 +2988,7 @@ function buildReplA(iife: string): string {
         // validated callback → unconditional response). Our stashes above read
         // the RAW fields, so the 200-char title truncation in the parsed r.*
         // does not affect __ccsdTitle / the bridge.
-        'let r=uNe(e.request);if(r)this.onSessionStateChanged?.(r.sessionId,r.state,r.title);return{type:"update_session_state_response"}}'
+        `let ${ids.rvar}=${ids.zod}(${e}.request);if(${ids.rvar})this.onSessionStateChanged?.(${ids.rvar}.sessionId,${ids.rvar}.state,${ids.rvar}.title);return{type:"update_session_state_response"}}`
     );
 }
 
@@ -2888,23 +2999,44 @@ function buildReplA(iife: string): string {
 function injectFresh(extJs: string, src: string): void {
     // Validate anchors BEFORE creating any backup or writing anything, so a
     // failed run leaves zero footprint on disk (no half-written file, no .bak).
-    const aCount = countOccurrences(src, ANCHOR_A);
-    if (aCount !== 1) {
+    // v0.5.49 two-tier resolution: exact literal first, then the tolerant
+    // identifier-agnostic regex (protocol-stable bytes + id captures). Each
+    // tier must yield EXACTLY ONE match — anything else fails closed below,
+    // before any backup or write (zero-footprint failure).
+    const idsA = matchAnchorA(src);
+    if (!idsA) {
+        const aCount = countOccurrences(src, ANCHOR_A);
+        const aTol = [...src.matchAll(TOL_A)].length;
         fail(
-            `Anchor A (update_session_state handler) matched ${aCount} time(s), expected 1. ` +
-                `The CC extension has likely changed. No files were modified.`,
+            `Anchor A (update_session_state handler) matched ${aCount} time(s) via the exact literal and ${aTol} via the tolerant tier, expected exactly 1 in either. ` +
+                `The CC extension has likely changed structurally. No files were modified.`,
         );
     }
-    const bCount = countOccurrences(src, ANCHOR_B);
-    if (bCount > 1) {
-        fail(
-            `Anchor B (rename_tab icon branch) matched ${bCount} times, expected 0 or 1. ` + `No files were modified.`,
+    if (idsA !== IDS_A_DEFAULT) {
+        log(
+            `anchor A: tolerant match (param=${idsA.param} rvar=${idsA.rvar} zod=${idsA.zod}) — CC minifier renamed identifiers; injecting with the captured names.`,
         );
     }
-    if (bCount === 0) {
+    const idsB = matchAnchorB(src);
+    if (idsB === null && (countOccurrences(src, ANCHOR_B) > 1 || [...src.matchAll(TOL_B)].length > 1)) {
+        fail(`Anchor B (rename_tab icon branch) ambiguous, expected 0 or 1. No files were modified.`);
+    }
+    if (idsB === null) {
         warn(
             "Anchor B not found — installing with Anchor A only. The permission-pending blue-dot fix will be INACTIVE (a yellow running dot may cover CC's native blue pending dot during a permission prompt), and ~500 ms flash may occur after CC rename_tab.",
         );
+    } else if (idsB !== IDS_B_DEFAULT) {
+        log(`anchor B: tolerant match (param=${idsB.param} rvar=${idsB.rvar}).`);
+    }
+    const idsCpre = matchAnchorC(src);
+    // v0.5.49 R1: the C ambiguity gate lives HERE (pre-backup) so a failed
+    // run leaves zero footprint — the contract at the function head promises
+    // "no half-written file, no .bak". idsCpre is reused below (single scan).
+    if (idsCpre === null && (countOccurrences(src, ANCHOR_C) > 1 || [...src.matchAll(TOL_C)].length > 1)) {
+        fail(`Anchor C (requestUserDialog) ambiguous, expected 0 or 1. ` + "No files were modified.");
+    }
+    if (idsCpre !== null && idsCpre !== IDS_C_DEFAULT) {
+        log(`anchor C: tolerant match (param=${idsCpre.param} dlg=${idsCpre.dlg} cbsink=${idsCpre.cbsink}).`);
     }
 
     // One-time original backup, only after we know injection will succeed.
@@ -2922,20 +3054,20 @@ function injectFresh(extJs: string, src: string): void {
     // exactly as shipped. Block-start (not inside if(r)) keeps our stashes
     // always-fire + reading the RAW untruncated e.request fields, matching the
     // pre-2.1.238 semantics.
-    const replA = buildReplA(iife);
-    let next = src.replace(ANCHOR_A, replA);
+    const replA = buildReplA(iife, idsA);
+    let next = src.replace(anchorAFrom(idsA), replA);
     if (!next.includes(INJECT_MARKER)) fail("Anchor A replacement did not apply. No files were modified.");
 
     // Anchor B (optional hardening): start the same guarded timer from rename_tab too.
-    if (bCount === 1) {
+    if (idsB !== null) {
         // replB also refreshes this.__ccsdTitle from the live rename_tab title —
         // CC may fire rename_tab multiple times AFTER update_session_state
         // (truncation, user rename, panel title reassignment) and replA's
         // stashed value would otherwise go stale. notify() appends
         // "["+__ccsdTitle+"]" to the notification body, so keeping it fresh
         // matters for the message shown to the user.
-        const replB = buildReplB(iife);
-        next = next.replace(ANCHOR_B, replB);
+        const replB = buildReplB(iife, idsB);
+        next = next.replace(anchorBFrom(idsB), replB);
         if (countOccurrences(next, INJECT_MARKER) < 2) {
             fail("Anchor B replacement did not apply. No files were modified.");
         }
@@ -2955,16 +3087,13 @@ function injectFresh(extJs: string, src: string): void {
     // is needed: the webview's user_dialog_response reply is routed by the
     // message dispatcher's case "response" keyed on requestId, NOT through
     // processRequest's case chain.
-    const cCount = countOccurrences(src, ANCHOR_C);
-    if (cCount > 1) {
-        fail(`Anchor C (requestUserDialog) matched ${cCount} times, expected 0 or 1. ` + "No files were modified.");
-    }
-    if (cCount === 0) {
+    const idsC = idsCpre; // resolved + ambiguity-gated BEFORE backupOnce above
+    if (idsC === null) {
         warn(
             "Anchor C not found — installing with Anchor A+B only. The consent/refusal blue-dot fix will be INACTIVE (consent prompts fall back to CC's native presentation; askUserQuestion-blue still active via Anchor B/__ps).",
         );
     }
-    if (cCount === 1) {
+    if (idsC !== null) {
         // Wrap the requestUserDialog tail in try/finally. Reads this.__ccsdSid
         // fresh inside the try (NOT the channelId first arg `e`). The finally
         // re-reads this.__ccsdSid (cheap; defensive against any future code
@@ -2972,8 +3101,8 @@ function injectFresh(extJs: string, src: string): void {
         // if(this.__ccsdSid) guard inside the try prevented the set, so a
         // never-set sid yields no-op delete on an unused key. The sendRequest
         // call + args + .result return are preserved byte-for-byte.
-        const replC = buildReplC();
-        next = next.replace(ANCHOR_C, replC);
+        const replC = buildReplC(idsC);
+        next = next.replace(anchorCFrom(idsC), replC);
         if (!next.includes("__ccsdUserDialogSet")) {
             fail("Anchor C replacement did not apply. No files were modified.");
         }
@@ -2981,7 +3110,7 @@ function injectFresh(extJs: string, src: string): void {
 
     assertCompiles(next, "patched extension.js");
     writeAtomicSync(extJs, next);
-    log(`patched extension.js (anchors injected: A${bCount === 1 ? "+B" : " only"}${cCount === 1 ? "+C" : ""})`);
+    log(`patched extension.js (anchors injected: A${idsB !== null ? "+B" : " only"}${idsC !== null ? "+C" : ""})`);
 }
 
 /** Extract the baked `var RES="..."` path from an already-patched extension.js.
@@ -3092,7 +3221,7 @@ function stripIifeInPlace(content: string): string | null {
     // INJECT_MARKER-free + assertCompiles checks remain the safety net; the
     // --self-test-strip round-trip now pins patterns↔builders mechanically.
     const segA_block =
-        /this\.__ccsdSid=e\.request\.sessionId;this\.__ccsdTitle=e\.request\.title;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
+        /this\.__ccsdSid=([A-Za-z0-9_$]+)\.request\.sessionId;this\.__ccsdTitle=\1\.request\.title;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
     const segA =
         /this\.__ccsdSid=e\.request\.sessionId,this\.__ccsdTitle=e\.request\.title,[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\),/g;
     // Anchor B segment: stash fields + (v0.2.5: optional pending-set sync) +
@@ -3105,7 +3234,7 @@ function stripIifeInPlace(content: string): string | null {
     // whatever future revisions add; the historical optional-group forms are
     // retired (see the segA note above).
     const segB =
-        /this\.__ccsdTitle=e\.request\.title;this\.__ccsdPending=!!e\.request\.hasPendingPermissions;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
+        /this\.__ccsdTitle=([A-Za-z0-9_$]+)\.request\.title;this\.__ccsdPending=!!\1\.request\.hasPendingPermissions;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
 
     // Pre-check: at least one segment must match, otherwise this isn't ours.
     if (!segA_block.test(content) && !segA.test(content) && !segB.test(content)) return null;
@@ -3124,8 +3253,19 @@ function stripIifeInPlace(content: string): string | null {
     // replC at inject time). Widened middles absorb future replC tweaks; the
     // --self-test-strip round-trip now splices C too, pinning this inversion.
     const segC =
-        /try\{var __csd=this\.__ccsdSid;if\(__csd\)\{[\s\S]*?return __ccsdUdRes\.result\}finally\{try\{[\s\S]*?catch\(_\)\{\}\}/g;
-    let out = content.replace(segA_block, "").replace(segA, "").replace(segB, "").replace(segC, ANCHOR_C);
+        /try\{var __csd=this\.__ccsdSid;if\(__csd\)\{[\s\S]*?await this\.sendRequest\(([A-Za-z0-9_$]+),\{type:"user_dialog_request",dialogKind:([A-Za-z0-9_$]+)\.dialogKind,payload:\2\.payload,toolUseID:\2\.toolUseID\},([A-Za-z0-9_$]+)\);return __ccsdUdRes\.result\}finally\{try\{[\s\S]*?catch\(_\)\{\}\}/g;
+    // v0.5.49 capture-aware C reversal: a tolerant-matched install may carry
+    // RENAMED identifiers in replC's sendRequest copy — re-emitting the
+    // default ANCHOR_C constant would restore different names than the
+    // original (compiles, breaks at runtime). Rebuild the original from the
+    // ids captured out of the injected bytes instead.
+    let out = content
+        .replace(segA_block, "")
+        .replace(segA, "")
+        .replace(segB, "")
+        .replace(segC, (_m, cParam: string, cDlg: string, cCb: string) =>
+            anchorCFrom({ param: cParam, dlg: cDlg, cbsink: cCb }),
+        );
 
     // Sanity check the result compiles (anchor shape preserved). If anything
     // looks off, return null so the caller falls through to the safe RES
@@ -5168,6 +5308,46 @@ function runSelfTestStrip(): void {
             "strip round-trip is not byte-exact (length " + stripped.length + " vs pristine " + scaffold.length + ")",
         );
     }
+    // v0.5.49 alt-ids roundtrip: a tolerant-matched install carries RENAMED
+    // identifiers everywhere (stash prefixes, replC's sendRequest copy, the
+    // verbatim tails). This second scaffold pins that (a) the builders emit
+    // the captured names, (b) the widened segA_block/segB prefixes and the
+    // capture-aware segC reversal strip it back byte-exact — the strip-symmetry
+    // class that silently killed segA/segB twice historically.
+    // R1: per-scope minifier names differ per handler — use DISTINCT names per
+    // anchor (a shared 'n' could not catch cross-anchor capture mixups) plus a
+    // '$'-containing name (the capture class is [A-Za-z0-9_$]+; string-pattern
+    // replace leaves $N literal, pinned here).
+    const altA: IdsA = { param: "nA", rvar: "rA", zod: "zA$9" };
+    const altB: IdsB = { param: "nB", rvar: "rB" };
+    const altC: IdsC = { param: "nC", dlg: "dC", cbsink: "cC$" };
+    const scaffoldAlt =
+        "async function processRequest(nA,u){" +
+        'if(nA.request.type==="noop")return null;' +
+        anchorAFrom(altA) +
+        "}" +
+        "async function renameTab(nB){if(this.panelTab){" +
+        anchorBFrom(altB) +
+        "rB=1;}}" +
+        "async function requestUserDialog(nC,dC,cC$){if(!ok)return null;" +
+        anchorCFrom(altC) +
+        "}";
+    let patchedAlt = scaffoldAlt.replace(anchorAFrom(altA), buildReplA(iife, altA));
+    patchedAlt = patchedAlt.replace(anchorBFrom(altB), buildReplB(iife, altB));
+    patchedAlt = patchedAlt.replace(anchorCFrom(altC), buildReplC(altC));
+    if (
+        !patchedAlt.includes("this.__ccsdSid=nA.request.sessionId") ||
+        !patchedAlt.includes("let rA=zA$9(nA.request);") ||
+        !patchedAlt.includes("this.__ccsdTitle=nB.request.title")
+    ) {
+        failures.push("alt-ids splice did not emit the captured identifiers");
+    }
+    const strippedAlt = stripIifeInPlace(patchedAlt);
+    if (strippedAlt !== scaffoldAlt) {
+        failures.push(
+            "alt-ids strip round-trip is not byte-exact (renamed-id installs would restore WRONG identifiers)",
+        );
+    }
     if (stripped === null) {
         // v0.5.47 debug aid: dump the spliced region heads so pattern drift is
         // diagnosable from the failure output alone.
@@ -5188,6 +5368,129 @@ function runSelfTestStrip(): void {
     console.log(
         "[cc-status-dot][self-test-strip] OK: inject→strip round-trip byte-exact over " + patched.length + " chars",
     );
+}
+
+/** v0.5.49 --self-test-anchors: behavioral test of the two-tier anchor
+ *  resolution on synthetic bundles (mirrors --self-test-strip's philosophy —
+ *  assert on REAL function output, not source greps). Rows:
+ *  T1 238-shape (uNe)      -> tier 2, ids.zod==="uNe", splice+strip byte-exact
+ *  T2 240-shape (rMe)      -> tier 1 exact
+ *  T3 renamed ids (n/s/qX9)-> tier 2, injected statements carry captured names
+ *  T4 double-arm           -> resolver null (fail closed, no write)
+ *  T5 structural drift     -> both tiers 0 (fail closed)
+ *  T6 SDK switch alias only-> TOL_A must NOT match the case-arm form
+ *  T7 B ambiguous          -> matchAnchorB null with >1 tolerant match
+ *  T8 B renamed-ids        -> tier-2 + captured-name injection via buildReplB
+ *  T9 C renamed-ids        -> tier-2 + captured-name injection via buildReplC  */
+function stripIiePlaceSafe(x: string): string | null {
+    return stripIifeInPlace(x);
+}
+function runSelfTestAnchors(): void {
+    const rows: Array<{ t: string; ok: boolean; info: string }> = [];
+    const iife = buildIIFE(RUNTIME_RES_DIR);
+    const A238: IdsA = { param: "e", rvar: "r", zod: "uNe" };
+    const A240 = IDS_A_DEFAULT;
+    const AALT: IdsA = { param: "n", rvar: "s", zod: "qX9" };
+    const mk = (ids: IdsA) =>
+        "async function p(" +
+        ids.param +
+        ",t){if(" +
+        ids.param +
+        '.request.type==="noop")return null;' +
+        anchorAFrom(ids) +
+        "}";
+    // T1: 238 shape resolves via tier 2 and round-trips through strip.
+    {
+        const src = mk(A238);
+        const ids = matchAnchorA(src);
+        let ok = false;
+        let info = "resolver/strip failed";
+        if (ids !== null && ids.zod === "uNe") {
+            const patched = src.replace(anchorAFrom(ids), buildReplA(iife, ids));
+            ok = patched.includes("let r=uNe(e.request);") && stripIiePlaceSafe(patched) === src;
+            if (!ok) info = "strip round-trip failed";
+        } else if (ids !== null) {
+            info = "wrong zod captured: " + ids.zod;
+        }
+        rows.push({ t: "T1 238-shape(uNe) tier-2 + strip", ok, info: ok ? "" : info });
+    }
+    // T2: 240 shape resolves via tier 1 (exact default).
+    {
+        const ids = matchAnchorA(mk(A240));
+        rows.push({ t: "T2 240-shape(rMe) tier-1 exact", ok: ids === IDS_A_DEFAULT, info: String(ids) });
+    }
+    // T3: fully renamed ids resolve via tier 2 and the injection carries them.
+    {
+        const src = mk(AALT);
+        const ids = matchAnchorA(src);
+        let ok = false;
+        let info = "captured names not emitted";
+        if (ids !== null && ids.param === "n" && ids.rvar === "s" && ids.zod === "qX9") {
+            const patched = src.replace(anchorAFrom(ids), buildReplA(iife, ids));
+            ok =
+                patched.includes("this.__ccsdSid=n.request.sessionId") &&
+                patched.includes("let s=qX9(n.request);") &&
+                stripIiePlaceSafe(patched) === src;
+            if (!ok) info = "strip round-trip failed";
+        }
+        rows.push({ t: "T3 renamed-ids tier-2 + captured-name injection", ok, info: ok ? "" : info });
+    }
+    // T4: duplicated arm -> both tiers see >1 -> fail closed.
+    {
+        const src = mk(A238) + mk(A238);
+        rows.push({ t: "T4 double-arm fails closed", ok: matchAnchorA(src) === null, info: "" });
+    }
+    // T5: structural drift (zod gate dropped, direct callback) -> 0 matches.
+    {
+        const src =
+            'async function p(e,t){if(e.request.type==="noop")return null;else if(e.request.type==="update_session_state"){this.onSessionStateChanged?.(e.request);return{type:"update_session_state_response"}}}';
+        rows.push({ t: "T5 structural drift fails closed", ok: matchAnchorA(src) === null, info: "" });
+    }
+    // T6: SDK-side switch alias arm alone must NOT match TOL_A.
+    {
+        const src =
+            'async function sdk(e){switch(e.request.type){case"update_session_state":return{type:"update_session_state_response"};default:return null}}';
+        rows.push({ t: "T6 SDK switch alias never matches", ok: matchAnchorA(src) === null, info: "" });
+    }
+    // T8: B renamed ids resolve via tier 2 and the injection carries them.
+    {
+        const src =
+            "function f(qB){if(this.panelTab){this.panelTab.title=qB.request.title;let wB;if(qB.request.hasPendingPermissions)wB=1}}";
+        const ids = matchAnchorB(src);
+        let ok = false;
+        if (ids !== null && ids.param === "qB" && ids.rvar === "wB") {
+            ok = buildReplB(iife, ids).includes("this.__ccsdTitle=qB.request.title");
+        }
+        rows.push({ t: "T8 B renamed-ids tier-2 + captured-name injection", ok, info: ok ? "" : "B capture failed" });
+    }
+    // T9: C renamed ids resolve via tier 2 and replC carries them.
+    {
+        const src =
+            'function g(zC,dC2,cC2){return(await this.sendRequest(zC,{type:"user_dialog_request",dialogKind:dC2.dialogKind,payload:dC2.payload,toolUseID:dC2.toolUseID},cC2)).result}';
+        const ids = matchAnchorC(src);
+        let ok = false;
+        if (ids !== null && ids.param === "zC" && ids.dlg === "dC2" && ids.cbsink === "cC2") {
+            ok = buildReplC(ids).includes(
+                'await this.sendRequest(zC,{type:"user_dialog_request",dialogKind:dC2.dialogKind',
+            );
+        }
+        rows.push({ t: "T9 C renamed-ids tier-2 + captured-name injection", ok, info: ok ? "" : "C capture failed" });
+    }
+    // T7: B ambiguity (two tolerant matches) -> null.
+    {
+        const b = (p: string, r: string) =>
+            "this.panelTab.title=" + p + ".request.title;let " + r + ";if(" + p + ".request.hasPendingPermissions)";
+        const src = "function f(e){if(x){" + b("e", "r") + "r=1}}function g(n){if(y){" + b("n", "w") + "w=1}}";
+        rows.push({ t: "T7 B ambiguous fails closed", ok: matchAnchorB(src) === null, info: "" });
+    }
+    const failed = rows.filter((r) => !r.ok);
+    for (const r of rows) {
+        console.log(
+            `[cc-status-dot][self-test-anchors] ${r.ok ? "PASS" : "FAIL"} ${r.t}${r.info ? " — " + r.info : ""}`,
+        );
+    }
+    if (failed.length > 0) process.exit(1);
+    console.log(`[cc-status-dot][self-test-anchors] OK: ${rows.length} rows passed`);
 }
 
 // Invoked via `--self-test-io`. Emits a JSON array of { name, pass, expected,
@@ -5362,6 +5665,10 @@ function run(argv: string[]): void {
     }
     if (args.includes("--self-test-strip")) {
         runSelfTestStrip();
+        return;
+    }
+    if (args.includes("--self-test-anchors")) {
+        runSelfTestAnchors();
         return;
     }
     if (args.includes("--self-test-io")) {

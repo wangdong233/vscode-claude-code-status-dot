@@ -1095,12 +1095,12 @@ check(
 // first, instead of blocking on detectAndPatch's sync readFileSync.
 // ===========================================================================
 check(
-  'FAV.43a v0.5.12 ccPatchState stat-mtime fast path (skip 2.78MB read when CC unchanged)',
+  'FAV.43a v0.5.12 ccPatchState stat-mtime fast path (skip ~3MB read when CC unchanged)',
   /function\s+ccPatchState/.test(companionSrc) &&
     /fs\.statSync\(\s*extJs\s*\)\.mtimeMs/.test(companionSrc) &&
     /readRepatchFlag\(\)/.test(companionSrc) &&
     /extMtime\s*<=\s*flag\.ts/.test(companionSrc),
-  'activate calls ccPatchState synchronously (async fn runs sync pre-await); the stat fast path returns "fresh" without reading the 2.78MB extension.js when CC has not rewritten it since the last patch',
+  'activate calls ccPatchState synchronously (async fn runs sync pre-await); the stat fast path returns "fresh" without reading the ~3MB extension.js when CC has not rewritten it since the last patch',
 );
 check(
   'FAV.43b v0.5.12 activate wraps detectAndPatch in setImmediate (defer past sync return)',
@@ -1223,7 +1223,7 @@ check(
     /!\(ran && ran\.has\(curDir\)\) && ccPatchState\(curDir\) !== "fresh"/.test(companionSrc) &&
     /if \(detectInFlight\) return;\s*detectInFlight = true;/.test(companionSrc) &&
     /finally \{\s*detectInFlight = false;\s*\}/.test(companionSrc),
-  'v0.5.45 used discoverCcInThisFlavor() whose vscode.extensions.all primary path cannot see a mid-session CC install (the EH keeps the old entry until reload) — the 08:39 incident window was NOT detected. v0.5.45.1 targets detectTargetDir() (disk-highest in this flavor, parent-dir scan keeps v0.2.3 flavor scoping). ranDirs is checked BEFORE ccPatchState so a permanently-failed patch does not re-read the 2.78MB extension.js every 30s.',
+  'v0.5.45 used discoverCcInThisFlavor() whose vscode.extensions.all primary path cannot see a mid-session CC install (the EH keeps the old entry until reload) — the 08:39 incident window was NOT detected. v0.5.45.1 targets detectTargetDir() (disk-highest in this flavor, parent-dir scan keeps v0.2.3 flavor scoping). ranDirs is checked BEFORE ccPatchState so a permanently-failed patch does not re-read the ~3MB extension.js every 30s.',
 );
 check(
   'COMP.4 v0.5.45 RC2 deactivate disposes the reload bar',

@@ -153,6 +153,7 @@ vscode-claude-code-status-dot        # 装好后直接跑命令
 
 - **手动 Esc 中断无 hook**：CC 不触发 Stop/StopFailure（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)），状态会停在 running，靠下次 prompt/Stop 自然更正。
 - **CC 自动更新覆盖**：patched `extension.js` 被原版覆盖 → **v0.2.0 起 companion 扩展自动重跑 patcher + 提示 reload**（见 FAQ）；companion 没装则手动重跑命令恢复。
+- **收藏/归档会话保活（v0.5.51+）**：Claude Code 默认 30 天清理历史 transcript（`cleanupPeriodDays`），收藏 ★ 或归档 ● 的会话会被插件以硬链接快照保护——CC 清理后仍可一键恢复，且运行期每小时保鲜（CC 自身对当前会话同款机制）。快照零额外磁盘占用；取消收藏/归档即释放。
 - **minified anchor 脆性**：patch 通过两层锚定位 CC 代码（精确字面快路径 + 容错正则兜底——以 IPC 协议字符串为锚、混淆器改名自动兼容），仅结构性变化才报 "Anchor mismatch" 零足迹拒绝写入；写 extension.js 前还会对完整 ~3MB 文件跑 `node --check`（assertCompiles 守卫，坏 IIFE 拒绝写入），原子写（`.tmp` + rename），`INJECT_VERSION` 自动重注入——**绝不砖 CC**。
 - **VSCode 完全关闭时不通知**：IIFE 跑在扩展宿主进程，VSCode 关闭则不运行 → 不通知。
 - **系统通知点击不跳 tab**：osascript 无 click callback，通知仅提醒，回 VSCode 靠 tab 绿/红点定位。

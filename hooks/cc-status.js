@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.2:ebe4c846*/
+/*cc-status-dot-hook:v0.2.3:007a4351*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -1975,7 +1975,12 @@ async function main() {
           // close-time-persist had happened to touch it that morning (luck,
           // not protection). Skip BOTH companion-owned files; the §GC.favorites
           // test now has an §GC.archive twin pinning this.
-          if (name === 'favorites.json' || name === 'archive.json') continue;
+          // v0.5.51: 'keepalive' subdir joins the companion-owned skip set — the
+          // suffix gate provably never matches it (no known suffix), but the
+          // v0.5.47 archive.json data-loss incident class mandates the explicit
+          // pin for EXACTLY this bug shape (4th file of the class).
+          if (name === 'favorites.json' || name === 'archive.json' || name === 'keepalive' || name === '.keepalive-v1')
+            continue;
           // v0.2.7 (Q1 fix): isTokens MUST be tested BEFORE isJson — the file
           // `<sid>.tokens.json` ends with `.json` so the bare isJson check would
           // otherwise match it, then JSON.parse would treat it as a state file

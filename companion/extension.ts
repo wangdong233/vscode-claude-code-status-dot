@@ -59,6 +59,12 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import {
+    keepalivePath as kaPathOf,
+    reconcile as kaReconcile,
+    restoreForClick as kaRestoreForClick,
+    type KeepaliveIO,
+} from "./keepalive";
 
 /** Absolute path to the patcher's runtime install dir. Must match
  *  patch.ts:INSTALL_DIR — single source of truth is the patcher; we mirror it
@@ -96,7 +102,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.50";
+const MIN_PATCHER_VERSION = "0.5.51";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -155,7 +161,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.50";
+    return effectiveConfig?.injectVersion ?? "v0.5.51";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -971,6 +977,11 @@ const FAV_FILE = path.join(FAV_STATE_DIR, "favorites.json");
  *  (atomic tmp+rename, same as writeFavAtomic). */
 const ARCHIVE_FILE = path.join(FAV_STATE_DIR, "archive.json");
 
+/** v0.5.51 keep-alive: CC projects root (transcript store CC's 30d retention
+ *  reaps) + the one-shot migration marker for legacy row backfill. */
+const PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
+const KEEPALIVE_MARKER = path.join(FAV_STATE_DIR, ".keepalive-v1");
+
 /** favorites.json schema version. Bump on schema-incompatible changes; the
  *  loader migrates forward (or rejects with a clear error) per version. */
 const FAV_SCHEMA_VERSION = 1;
@@ -1512,6 +1523,43 @@ function mutateArchiveDoc(mutate: (doc: FavDoc) => { changed: boolean }, silent 
     return { wrote: false, noop: false };
 }
 
+/**
+ * v0.5.51: reconcile the keep-alive hardlinks with the favorites ∪ archive
+ * union (link/resync/belt each resolvable row, prune orphans, backfill
+ * transcript_path for legacy rows via CAS). Called after every doc mutation
+ * (both providers' forceRefresh), hourly (belt), and once at activation.
+ * O(rows) stats — microseconds; never touches CC settings or .last-cleanup.
+ */
+function reconcileKeepalives(): void {
+    const io: KeepaliveIO = {
+        stateDir: FAV_STATE_DIR,
+        projectsDir: PROJECTS_DIR,
+        readRows: () => {
+            const rows: Array<{ sid: string; transcript_path?: string; doc: "fav" | "arch" }> = [];
+            for (const r of (readFavDoc() || { sessions: [] }).sessions || [])
+                rows.push({ sid: r.sid, transcript_path: r.transcript_path, doc: "fav" });
+            for (const r of (readArchiveDoc() || { sessions: [] }).sessions || [])
+                rows.push({ sid: r.sid, transcript_path: r.transcript_path, doc: "arch" });
+            return rows;
+        },
+        persistTranscriptPath: (doc, sid, tp) => {
+            const mut = doc === "fav" ? mutateFavDoc : mutateArchiveDoc;
+            const res = mut((d) => {
+                const row = (d.sessions || []).find((x) => x.sid === sid);
+                if (!row || row.transcript_path === tp) return { changed: false };
+                row.transcript_path = tp;
+                return { changed: true };
+            }, true);
+            return res.wrote;
+        },
+    };
+    try {
+        kaReconcile(io);
+    } catch {
+        /* keep-alive must never break the mutation path */
+    }
+}
+
 function isValidFavSession(x: unknown): x is FavSession {
     if (typeof x !== "object" || x === null) return false;
     const s = x as Partial<FavSession>;
@@ -1791,6 +1839,7 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
      *  the add lands), the user has unambiguous signal and the double-toggle
      *  path is unreachable. */
     forceRefresh(): void {
+        void reconcileKeepalives();
         this.lastSig = "";
         this.lastActiveSidForCtx = "";
         this.refresh();
@@ -1860,16 +1909,34 @@ class FavoritesProvider implements vscode.TreeDataProvider<FavNode> {
         item.iconPath = isOpen
             ? vscode.Uri.file(path.join(__dirname, "..", "media", "fav-open.svg"))
             : new vscode.ThemeIcon("comment");
+        // v0.5.51: cheap liveness overlay for CLOSED rows — dead = neither the
+        // row's transcript nor a keepalive link exists (one/two stats; the
+        // scan-based resolver runs only in reconcile). Honest "(已清理)" beats
+        // a resume promise CC will silently convert into a new session.
+        // R1: recoverable ⟺ click can resume = live transcript OR (row path
+        // known + keepalive link). A ka link with NO resolvable path (legacy
+        // row swept before backfill) cannot be restored — display must match
+        // the expired-dialog click behavior, not promise resume.
+        const kaAlive =
+            !!s.transcript_path && fs.existsSync(s.transcript_path)
+                ? true
+                : !!s.transcript_path && fs.existsSync(kaPathOf(FAV_STATE_DIR, s.sid));
         item.description = isOpen
             ? `${String(s.state || "open").slice(0, 12)}`
-            : `(closed)${s.state ? " " + String(s.state).slice(0, 8) : ""}`;
+            : kaAlive
+              ? `(closed)${s.state ? " " + String(s.state).slice(0, 8) : ""}`
+              : `(closed·已清理)`;
         const tip = [
             `sid: ${s.sid.slice(0, 8)}…`,
             s.cwd ? `cwd: ${s.cwd}` : "",
             s.model ? `model: ${s.model}` : "",
             `state: ${s.state || "(unknown)"}`,
             `added: ${new Date(s.addedAt).toLocaleString()}`,
-            isOpen ? "click to focus panel" : "click to resume session",
+            isOpen
+                ? "click to focus panel"
+                : kaAlive
+                  ? "click to resume session"
+                  : "transcript 已被 CC 30 天清理——点击将询问是否开新会话",
         ]
             .filter(Boolean)
             .join("\n");
@@ -1974,6 +2041,7 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
      *  FavoritesProvider.forceRefresh (Bug 1 latency fix). Also pokes the status
      *  bar so the archive glyph / star flips the instant the user clicks. */
     forceRefresh(): void {
+        void reconcileKeepalives();
         this.lastSig = "";
         this.refresh();
         refreshFavStatusBar();
@@ -2009,9 +2077,23 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
         item.iconPath = isOpen
             ? vscode.Uri.file(path.join(__dirname, "..", "media", "fav-open.svg"))
             : new vscode.ThemeIcon("comment");
+        // v0.5.51: cheap liveness overlay for CLOSED rows — dead = neither the
+        // row's transcript nor a keepalive link exists (one/two stats; the
+        // scan-based resolver runs only in reconcile). Honest "(已清理)" beats
+        // a resume promise CC will silently convert into a new session.
+        // R1: recoverable ⟺ click can resume = live transcript OR (row path
+        // known + keepalive link). A ka link with NO resolvable path (legacy
+        // row swept before backfill) cannot be restored — display must match
+        // the expired-dialog click behavior, not promise resume.
+        const kaAlive =
+            !!s.transcript_path && fs.existsSync(s.transcript_path)
+                ? true
+                : !!s.transcript_path && fs.existsSync(kaPathOf(FAV_STATE_DIR, s.sid));
         item.description = isOpen
             ? `${String(s.state || "open").slice(0, 12)}`
-            : `(closed)${s.state ? " " + String(s.state).slice(0, 8) : ""}`;
+            : kaAlive
+              ? `(closed)${s.state ? " " + String(s.state).slice(0, 8) : ""}`
+              : `(closed·已清理)`;
         const tip = [
             `sid: ${s.sid.slice(0, 8)}…`,
             s.cwd ? `cwd: ${s.cwd}` : "",
@@ -2019,7 +2101,11 @@ class ArchiveProvider implements vscode.TreeDataProvider<FavNode> {
             `state: ${s.state || "(unknown)"}`,
             `added: ${new Date(s.addedAt).toLocaleString()}`,
             `archived`,
-            isOpen ? "click to focus panel" : "click to resume session",
+            isOpen
+                ? "click to focus panel"
+                : kaAlive
+                  ? "click to resume session"
+                  : "transcript 已被 CC 30 天清理——点击将询问是否开新会话",
         ]
             .filter(Boolean)
             .join("\n");
@@ -2894,6 +2980,37 @@ async function favOpen(node: FavNode): Promise<void> {
         // doc + CC extension.js createPanel.) The right-click Copy cmd
         // remains as a terminal fallback for older CC or if this command
         // is unavailable.
+        // v0.5.51 keep-alive: ensure the transcript exists at its CC path
+        // before delegating — resurrect from the keepalive hardlink if CC's
+        // 30d retention already swept it (link back + mtime freshen). If
+        // neither exists (pre-keep-alive death, e.g. legacy rows favorited
+        // after CC already cleaned), show the honest expired message and DO
+        // NOT call editor.open — CC's webview would silently start a NEW
+        // session under this sid (the exact user-reported bug).
+        const kaOutcome = kaRestoreForClick(FAV_STATE_DIR, PROJECTS_DIR, closedSid, node.session.transcript_path);
+        if (kaOutcome === "expired") {
+            void vscode.window
+                .showWarningMessage(
+                    `收藏会话「${node.session.label || closedSid.slice(0, 8)}」的转录已被 Claude Code 清理（默认保留 30 天，收藏时未受保活保护）。继续将开启一个新会话；如仅需记录可保留此条目。`,
+                    "仍要打开(新会话)",
+                )
+                .then((choice) => {
+                    if (choice === "仍要打开(新会话)") {
+                        // R1: surface a rejection instead of a silent no-op /
+                        // unhandled rejection (CC command unavailable etc.).
+                        vscode.commands
+                            .executeCommand("claude-vscode.editor.open", closedSid, undefined)
+                            .then(
+                                undefined,
+                                (e: unknown) =>
+                                    void vscode.window.showErrorMessage(
+                                        `恢复会话失败: ${e instanceof Error ? e.message : String(e)}`,
+                                    ),
+                            );
+                    }
+                });
+            return;
+        }
         try {
             await vscode.commands.executeCommand("claude-vscode.editor.open", closedSid, undefined);
         } catch (e) {
@@ -3510,6 +3627,32 @@ class FavTreeDragController implements vscode.TreeDragAndDropController<FavNode>
 }
 
 function registerFavorites(ctx: vscode.ExtensionContext): void {
+    // v0.5.51 keep-alive one-shot migration: backfill transcript_path for
+    // pre-field legacy rows (scan, CC's own resolution algorithm) BEFORE the
+    // first tree render, then reconcile links for the whole union. Marker-
+    // gated idempotence. First natural deaths ≈ 2026-09-10 — this pass
+    // rescues every still-live legacy row in the same release.
+    try {
+        reconcileKeepalives(); // R1: EVERY activation — marker only gates the
+        // marker write; otherwise the first heal waits up to 1h (belt) or the
+        // first user mutation, leaving downtime-window drift unhealed.
+        if (!fs.existsSync(KEEPALIVE_MARKER)) {
+            fs.writeFileSync(KEEPALIVE_MARKER, "v1");
+        }
+    } catch {
+        /* migration is best-effort; hourly reconcile heals */
+    }
+    // Belt + resync: hourly touch of live owned transcripts (CC's own native
+    // keep-alive primitive — QQi utimes the current session hourly) + inode
+    // re-link after /compact renames. setInterval not registered in tests
+    // (companion unit tests never call registerFavorites).
+    try {
+        const belt = setInterval(() => reconcileKeepalives(), 3_600_000);
+        belt.unref?.(); // R1: never hold the EH host open on this timer alone
+        ctx.subscriptions.push({ dispose: () => clearInterval(belt) });
+    } catch {
+        /* no ctx in some harnesses */
+    }
     favoritesProvider = new FavoritesProvider();
     const tree = vscode.window.createTreeView("ccStatusDot.favorites", {
         treeDataProvider: favoritesProvider,

@@ -197,6 +197,10 @@ cc-status-dot — token stats & config
   - `hooks wired: no` → settings.json 接线丢失，重跑。
   - `missing SVGs` → `INSTALL_DIR/resources` 缺文件，重跑会从源补齐。
 
+**收藏的会话点击后提示"转录已被清理"？**
+
+- 该会话在收藏/归档**之前**就已被 CC 的 30 天保留策略清理（v0.5.51 之前的收藏不受保活保护）——点击会明确询问是否开新会话。v0.5.51+ 新收藏/归档的会话受硬链接保活，永不过期。如希望未收藏的长会话也保得住，可在 `~/.claude/settings.json` 加 `"cleanupPeriodDays": 3650`。
+
 **patch 报 "Anchor mismatch"**
 
 - CC 的 minified 代码发生了结构性漂移（改名类漂移会被容错正则层自动兼容，不会报此错）。patcher 已零足迹拒绝写入，扩展未被破坏。到项目 issue 区提 issue 并附 CC 版本号。

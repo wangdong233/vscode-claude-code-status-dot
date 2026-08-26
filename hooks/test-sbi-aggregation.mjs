@@ -84,8 +84,9 @@ const CC_STATUS = path.join(__dirname, 'cc-status.js');
 // IIFE.46c regex).
 const DONE_TO_IDLE_MS = 5 * 60 * 1000; // 5 min — §4 done→idle
 const SBI_RUNNING_STALE_MS = 30 * 60 * 1000; // 30 min — §7.2 stale-running GC (since-based, v0.2.6)
-const INTERRUPTED_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h — 🔴 retention cap
+const INTERRUPTED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7d — 🔴 retention cap (v0.2.7; R1 fixed a replica drift to 24h dating to v0.1.14)
 const SBI_AS_PROTECT_MAX_MS = 24 * 60 * 60 * 1000; // 24h — v0.5.49 as-protection expiry horizon (mtime-based)
+const SBI_MISSING_LT_STALE_MS = 2 * 60 * 60 * 1000; // 2h — v0.5.52 mtime fallback witness (no tokens.last_ts)
 const SINCE_STALE_MS = 15 * 60 * 1000; // 15 min — per-tab running decay (v0.2.6)
 
 // v0.1.16: the SBI surface renders each light as its own StatusBarItem with
@@ -126,7 +127,17 @@ function check(name, cond, detail) {
 // real-fresh .jsonl to exercise the gate. Returns the raw uncapped counts;
 // callers apply cap() + sbiBlockText() to get the per-SBI texts.
 
-function aggregate(home, now = Date.now(), pendingSet = null) {
+function aggregate(home, now = Date.now(), pendingSet = null, suspIv = null) {
+  // v0.5.52 R1 per-witness clamp (mirrors __ccsdAgeAdj — except this replica
+  // also clamps the interval END to now; production does not, diverging only
+  // under backward clock skew, outcome = stay-yellow-longer, the safe
+  // direction): adj(ts) subtracts only suspension overlapping [ts, now] —
+  // sleep predating a witness must not shrink its age.
+  const adj =
+    suspIv && suspIv.length
+      ? (ts) => now - suspIv.reduce((sum, iv) => sum + Math.max(0, Math.min(now, iv[1]) - Math.max(ts, iv[0])), 0)
+      : null;
+  const E = (ts) => (adj ? adj(ts) - ts : now - ts);
   const DIR = path.join(home, '.claude', 'cc-tab-status');
   const ag = { running: 0, done: 0, interrupted: 0, idle: 0, pending: 0 };
   let files = [];
@@ -185,8 +196,9 @@ function aggregate(home, now = Date.now(), pendingSet = null) {
           mt = 0;
         }
         const lt = j.tokens && j.tokens.last_ts;
-        const asProtect = j.activeSubagents > 0 && mt > 0 && now - mt <= SBI_AS_PROTECT_MAX_MS;
-        if (since && now - since > SBI_RUNNING_STALE_MS && lt && now - lt > SBI_RUNNING_STALE_MS && !asProtect) {
+        const asProtect = j.activeSubagents > 0 && mt > 0 && E(mt) <= SBI_AS_PROTECT_MAX_MS;
+        const witnessStale = lt ? E(lt) > SBI_RUNNING_STALE_MS : !mt || E(mt) > SBI_MISSING_LT_STALE_MS;
+        if (since && E(since) > SBI_RUNNING_STALE_MS && witnessStale && !asProtect) {
           st = 'idle';
         }
       }
@@ -526,10 +538,9 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   );
 }
 {
-  // §1.6c2: missing tokens.last_ts entirely → NO decay (R3 known limitation:
-  // a running file lacking last_ts blocks decay via the j.tokens&&j.tokens.last_ts
-  // conjunct — not live today, UserPromptSubmit derives last_ts; pinned here as
-  // CURRENT behavior so a future tightening flips this assert deliberately).
+  // §1.6c2 (v0.5.52 R3 RESOLVED): missing tokens.last_ts + FRESH mtime (spawn
+  // grace — file written recently, no follow-up events YET) → stays running;
+  // the mtime fallback witness only fires at 2h.
   const home = newTempHome();
   writeStatus(home, 'no-last-ts-c2', {
     state: 'running',
@@ -539,9 +550,90 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   });
   const ag = aggregate(home, Date.now() + 31 * 60 * 1000);
   check(
-    '§1.6c2  stale-since + NO tokens.last_ts → stays running (R3 pin: last_ts conjunct blocks decay)',
+    '§1.6c2  stale-since + NO last_ts + FRESH mtime → stays running (spawn grace)',
     ag.running === 1 && ag.idle === 0,
     'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // §1.6c2b (v0.5.52): the R3 vector KILLED — no last_ts + mtime aged >2h
+  // (the cc-control SDK spawn class: single write, zero follow-up events).
+  const home = newTempHome();
+  writeStatus(
+    home,
+    'dead-spawn-c2b',
+    { state: 'running', since: Date.now() - 3 * 60 * 60 * 1000, activeSubagents: 0, pending: false },
+    { ageMs: 3 * 60 * 60 * 1000 },
+  );
+  const ag = aggregate(home);
+  check(
+    '§1.6c2b  NO last_ts + mtime 3h → idle (R3 dead-spawn class killed)',
+    ag.idle === 1 && ag.running === 0,
+    'ag.running=' + ag.running + ' ag.idle=' + ag.idle,
+  );
+}
+{
+  // §1.6c2c: boundary — no last_ts + mtime 1h59m → stays.
+  const home = newTempHome();
+  writeStatus(
+    home,
+    'boundary-c2c',
+    { state: 'running', since: Date.now() - 2 * 60 * 60 * 1000, activeSubagents: 0, pending: false },
+    { ageMs: 119 * 60 * 1000 },
+  );
+  const ag = aggregate(home);
+  check(
+    '§1.6c2c  NO last_ts + mtime 1h59m → stays running (boundary under)',
+    ag.running === 1 && ag.idle === 0,
+    'ag.running=' + ag.running,
+  );
+}
+{
+  // §1.6s (v0.5.52 sleep ledger): mid-turn session (with last_ts) whose wall
+  // age spans a recorded sleep stays YELLOW; identical fixture with NO ledger
+  // decays (the pre-v0.5.52 bug pinned as the contrast).
+  const home = newTempHome();
+  writeStatus(home, 'slept-mid-turn', {
+    state: 'running',
+    since: Date.now() - 4 * 60 * 60 * 1000,
+    tokens: { last_ts: Date.now() - 4 * 60 * 60 * 1000 },
+    activeSubagents: 0,
+    pending: false,
+  });
+  const wake = Date.now();
+  const ledger = [[wake - 3.7 * 60 * 60 * 1000, wake]];
+  const agLedger = aggregate(home, wake, null, ledger);
+  check(
+    '§1.6s  mid-turn across a 3.7h recorded sleep → STAYS running (awake age ≈ 18m)',
+    agLedger.running === 1 && agLedger.idle === 0,
+    'run=' + agLedger.running + ' idle=' + agLedger.idle,
+  );
+  const agNoLedger = aggregate(home, wake, null, null);
+  check(
+    '§1.6s2  identical fixture WITHOUT ledger → idle (pre-v0.5.52 bug as contrast)',
+    agNoLedger.idle === 1 && agNoLedger.running === 0,
+    'run=' + agNoLedger.running,
+  );
+}
+{
+  // §1.6s3 (R1 per-witness clamp): a session SPAWNED AFTER the wake (fresh
+  // since/last_ts/mtime) must NOT inherit the night's suspension as credit —
+  // its ages stay wall-clock even with a big ledger interval present.
+  const home = newTempHome();
+  const wake = Date.now();
+  writeStatus(home, 'post-wake-spawn', {
+    state: 'running',
+    since: wake - 3 * 60 * 60 * 1000, // spawned after wake, 3h ago
+    tokens: { last_ts: wake - 3 * 60 * 60 * 1000 },
+    activeSubagents: 0,
+    pending: false,
+  });
+  const ledger = [[wake - 10 * 60 * 60 * 1000, wake - 3.1 * 60 * 60 * 1000]]; // sleep BEFORE spawn
+  const ag = aggregate(home, wake, null, ledger);
+  check(
+    '§1.6s3  post-wake spawn with pre-spawn sleep in ledger → ages NOT reduced (3h stale → idle)',
+    ag.idle === 1 && ag.running === 0,
+    'run=' + ag.running + ' idle=' + ag.idle,
   );
 }
 {
@@ -637,37 +729,29 @@ console.log('=== §1  Multi-session aggregation (SBI.text computation) ===');
   );
 }
 
-// §1.7  interrupted>24h since → idle (bounds 🔴 growth from abandoned sessions)
-// v0.2.4 follow-up (round-2 data-logic fix): the decay now keys on SINCE
-// (the terminal timestamp), not mtime. The prior version of this test set
-// BOTH since and mtime to 25h-ago, so it could not distinguish which key
-// the branch read. Now decoupled: since=25h-ago (OLD), mtime=fresh (NOW).
-// Under the new since-based rule this session decays to idle (since is old);
-// under the old mtime-based rule it would have stayed interrupted (mtime is
-// fresh) — the assertion below locks the new behavior.
+// §1.7  interrupted>7d since → idle (bounds 🔴 growth from abandoned sessions)
+// v0.5.52 R1: the replica const was 24h (drift since v0.1.14) while the real
+// reader uses 7d (v0.2.7) — §1.7 used to assert a boundary production does
+// not have. Now pinned faithfully: 25h STAYS red (diagnostic window), 8d decays.
 {
   const home = newTempHome();
-  writeStatus(
-    home,
-    'old-int',
-    {
-      state: 'interrupted',
-      since: Date.now() - 25 * 60 * 60 * 1000, // OLD since (decay key under new rule)
-      error: 'rate_limit',
-      activeSubagents: 0,
-      pending: false,
-    }, // NO ageMs → mtime is fresh (NOW), proving the branch no longer reads mtime
-  );
-  writeStatus(home, 'fresh-int', {
+  writeStatus(home, 'old-int-25h', {
     state: 'interrupted',
-    since: Date.now(),
+    since: Date.now() - 25 * 60 * 60 * 1000, // 25h — INSIDE the 7d window
+    error: 'rate_limit',
+    activeSubagents: 0,
+    pending: false,
+  });
+  writeStatus(home, 'ancient-int-8d', {
+    state: 'interrupted',
+    since: Date.now() - 8 * 24 * 60 * 60 * 1000, // 8d — past the window
     error: 'interrupted',
     activeSubagents: 0,
     pending: false,
   });
   const ag = aggregate(home);
   check(
-    '§1.7  interrupted since>24h decays to idle; fresh interrupted stays',
+    '§1.7  interrupted 25h stays red; 8d decays to idle (7d window pinned)',
     ag.interrupted === 1 && ag.idle === 1,
     'ag.interrupted=' + ag.interrupted + ' ag.idle=' + ag.idle,
   );

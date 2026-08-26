@@ -123,6 +123,18 @@ if (patchRunningStale !== null) {
   );
 }
 
+// --- v0.5.52 reader-only consts: mtime-fallback witness + sleep ledger ---
+const patchMissingLt = extractNumericConst(patchSrc, 'SBI_MISSING_LT_STALE_MS');
+check('patch.ts defines SBI_MISSING_LT_STALE_MS (2h mtime fallback witness)', patchMissingLt === 2 * 60 * 60 * 1000);
+check(
+  'patch.ts defines CCSD_SUSPEND_GAP_MS (5s tick-gap sleep detection)',
+  extractNumericConst(patchSrc, 'CCSD_SUSPEND_GAP_MS') === 5 * 1000,
+);
+check(
+  'patch.ts defines CCSD_LEDGER_MAX_IV (ledger cap 64)',
+  extractNumericConst(patchSrc, 'CCSD_LEDGER_MAX_IV') === 64,
+);
+
 // --- SBI_AS_PROTECT_MAX_MS (v0.5.49 reader-only: as-protection expiry horizon) ---
 const patchAsProtect = extractNumericConst(patchSrc, 'SBI_AS_PROTECT_MAX_MS');
 check('patch.ts defines SBI_AS_PROTECT_MAX_MS numeric const (v0.5.49 as-protection expiry)', patchAsProtect !== null);

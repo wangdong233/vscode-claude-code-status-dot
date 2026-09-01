@@ -146,7 +146,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in companion/CHANGELOG.md (entries up to 0.5.9; later versions document rationale in commit messages); SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.5.52";
+const INJECT_VERSION = "v0.5.53";
 
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
@@ -1865,6 +1865,15 @@ function assertCompiles(code: string, label: string): void {
             cp.execFileSync(process.execPath, ["--check", tmp], {
                 stdio: ["ignore", "pipe", "pipe"],
                 encoding: "utf8",
+                // v0.5.53: bounded — the 2026-09-01 incident had the companion's
+                // own 30s SIGTERM kill a resource-starved patcher inside this
+                // UN-TIMED spawn (Electron-as-node parsing the ~3MB bundle),
+                // producing a signal-death with empty stderr that looked like a
+                // content problem. A 10s timeout lands in the existing
+                // spawn-failure warn+skip branch (non-numeric status) — the
+                // documented environment-not-content semantics — well under the
+                // parent ceiling so the run finishes and reports honestly.
+                timeout: 10000,
             });
         } catch (e) {
             const err = e as { status?: number; stderr?: string; code?: string; message?: string };
@@ -3140,7 +3149,12 @@ function injectFresh(extJs: string, src: string): void {
         }
     }
 
+    // v0.5.53 stall-localization markers: a future hang's captured stdout
+    // tail now shows WHICH step stalled (the 2026-09-01 toast ended at the
+    // backup line, localizing nothing).
+    log("syntax gate (node --check)…");
     assertCompiles(next, "patched extension.js");
+    log("writing extension.js…");
     writeAtomicSync(extJs, next);
     log(`patched extension.js (anchors injected: A${idsB !== null ? "+B" : " only"}${idsC !== null ? "+C" : ""})`);
 }

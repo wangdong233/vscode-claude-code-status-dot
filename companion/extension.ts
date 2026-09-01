@@ -65,6 +65,13 @@ import {
     restoreForClick as kaRestoreForClick,
     type KeepaliveIO,
 } from "./keepalive";
+import {
+    classifyClose as retryClassifyClose,
+    composeFailureDetail as retryComposeDetail,
+    shouldRetry as retryShouldRetry,
+    type DirPatchState,
+    RETRY_MAX_ATTEMPTS,
+} from "./retry-policy";
 
 /** Absolute path to the patcher's runtime install dir. Must match
  *  patch.ts:INSTALL_DIR — single source of truth is the patcher; we mirror it
@@ -102,7 +109,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.52";
+const MIN_PATCHER_VERSION = "0.5.53";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -161,7 +168,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.52";
+    return effectiveConfig?.injectVersion ?? "v0.5.53";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -533,6 +540,14 @@ interface PatchResult {
     ok: boolean;
     stdout: string;
     stderr: string;
+    /** v0.5.53: how the child ended — null signal + numeric code = normal
+     *  exit; non-null signal = killed (our 30s timer or external). Drives the
+     *  transient-vs-hard classification in the retry policy. */
+    closeSignal: NodeJS.Signals | null;
+    timerFired: boolean;
+    /** v0.5.53 R1: the raw exit code (null on signal death) — classifyClose
+     *  and last-failure.log need the REAL value, not a reconstructed null. */
+    exitCode: number | null;
     /** True if patch.js logged the Anchor-B-not-found warning. Means the
      *  permission-pending blue-dot fix is inactive (yellow running dot may
      *  cover CC's native blue pending dot during a permission prompt). */
@@ -559,7 +574,15 @@ function runPatcher(): Promise<PatchResult> {
         vscode.window.showWarningMessage(
             `cc-status-dot: patcher not found at ${PATCH_JS}. Re-run \`npx vscode-claude-code-status-dot\` to install.`,
         );
-        return Promise.resolve({ ok: false, stdout: "", stderr: "", anchorBMissing: false });
+        return Promise.resolve({
+            ok: false,
+            stdout: "",
+            stderr: "",
+            closeSignal: null,
+            timerFired: false,
+            exitCode: null,
+            anchorBMissing: false,
+        });
     }
     const node = findNodeBin();
     return new Promise((resolve) => {
@@ -588,8 +611,12 @@ function runPatcher(): Promise<PatchResult> {
         child.stderr.on("data", (d) => stderrChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d)));
         // 30s ceiling — patch.js normally runs <1s. If it somehow hangs (disk
         // I/O stall, antivirus scan, etc.) we kill it so the EH doesn't wait
-        // forever on a fire-and-forget activate() promise.
+        // forever on a fire-and-forget activate() promise. v0.5.53: timerFired
+        // feeds the retry classification (our SIGTERM = transient timeout
+        // class, NOT a content error — the 2026-09-01 incident signature).
+        let timerFired = false;
         const timer = setTimeout(() => {
+            timerFired = true;
             try {
                 child.kill("SIGTERM");
             } catch {
@@ -598,9 +625,17 @@ function runPatcher(): Promise<PatchResult> {
         }, 30000);
         child.on("error", (e) => {
             clearTimeout(timer);
-            resolve({ ok: false, stdout: "", stderr: e.message, anchorBMissing: false });
+            resolve({
+                ok: false,
+                stdout: "",
+                stderr: e.message,
+                closeSignal: null,
+                timerFired,
+                exitCode: null,
+                anchorBMissing: false,
+            });
         });
-        child.on("close", (code) => {
+        child.on("close", (code, signal) => {
             clearTimeout(timer);
             const stdout = Buffer.concat(stdoutChunks).toString("utf8");
             const stderr = Buffer.concat(stderrChunks).toString("utf8");
@@ -608,9 +643,41 @@ function runPatcher(): Promise<PatchResult> {
             // exits 0 with the A-only patch written. Parse stdout so we can
             // surface it to the user instead of reporting a hollow "success".
             const anchorBMissing = /Anchor B not found/i.test(stdout) || /anchors injected: A only/i.test(stdout);
-            resolve({ ok: code === 0, stdout, stderr, anchorBMissing });
+            resolve({
+                ok: code === 0,
+                stdout,
+                stderr,
+                closeSignal: signal,
+                timerFired,
+                exitCode: code,
+                anchorBMissing,
+            });
         });
     });
+}
+
+/** v0.5.53: persist the last 5 failed patch attempts to INSTALL_DIR/
+ *  last-failure.log (bounded ring, best-effort) so a truncated toast can never
+ *  again be the only forensic record — the 2026-09-01 incident's true cause
+ *  (signal death, empty stderr) was invisible in the stdout-only Detail. */
+function appendLastFailure(entry: Record<string, unknown>): void {
+    try {
+        const logPath = path.join(INSTALL_DIR, "last-failure.log");
+        let ring: unknown[] = [];
+        try {
+            const prev = JSON.parse(fs.readFileSync(logPath, "utf8") as unknown as string);
+            if (Array.isArray(prev)) ring = prev;
+        } catch {
+            /* fresh file */
+        }
+        ring.push(entry);
+        while (ring.length > 5) ring.shift();
+        const tmp = logPath + ".tmp";
+        fs.writeFileSync(tmp, JSON.stringify(ring, null, 1));
+        fs.renameSync(tmp, logPath);
+    } catch {
+        /* diagnosability only — never fatal */
+    }
 }
 
 /** Detect → patch → reload, gated by the per-extDir globalThis Set. Designed
@@ -633,8 +700,14 @@ async function detectAndPatch(): Promise<void> {
  *  to the pre-0.5.45 detectAndPatch except the RC2 else-branches). */
 async function detectAndPatchInner(): Promise<void> {
     const g = globalThis as Record<string, unknown>;
-    const ranDirs = (g[ALREADY_RAN_KEY] as Set<string> | undefined) ?? new Set<string>();
-    g[ALREADY_RAN_KEY] = ranDirs;
+    // v0.5.53: Set → per-dir state Map. 'ok' is recorded ONLY after the
+    // post-verify marker check passes; failures record {failed, attempts+1,
+    // now} so the 30s tick can retry with backoff instead of short-circuiting
+    // forever (the 2026-09-01 no-self-heal bug: ranDirs.add ran BEFORE the
+    // attempt and conflated "attempted" with "done").
+    const dirStates =
+        (g[ALREADY_RAN_KEY] as Map<string, DirPatchState> | undefined) ?? new Map<string, DirPatchState>();
+    g[ALREADY_RAN_KEY] = dirStates;
 
     // v0.5.45.1 (review HIGH): target the DISK-highest CC dir in this flavor
     // (detectTargetDir), not just the EH-known one — a mid-session CC install
@@ -647,21 +720,58 @@ async function detectAndPatchInner(): Promise<void> {
         // this window's lifetime, the next window reload re-runs detection.
         return;
     }
-    if (ranDirs.has(extDir)) return; // already checked this extDir this EH lifetime
-    ranDirs.add(extDir);
+    const dirState = dirStates.get(extDir);
+    if (dirState && retryShouldRetry(dirState, Date.now()) !== "run") return; // ok'd or inside backoff or exhausted
+    // (a fresh 'failed' entry past its backoff, or no entry at all, proceeds)
 
     const state = ccPatchState(extDir);
-    if (state === "fresh") return; // happy path — nothing to do.
+    if (state === "fresh") {
+        // v0.5.53 R1: record 'ok' on the fresh path too — (a) a dir reached
+        // via activation/inner-gate on a fresh disk gets its one-lookup steady
+        // state; (b) the tick's missing-entry='run' fallback relies on every
+        // KNOWN-fresh dir having an 'ok' entry. (Mid-EH self-heal of a FAILED
+        // entry converges at the TICK's freshness observation instead — see
+        // the R2 convergence note there; this site is unreachable for that
+        // class because the tick skips dispatch on fresh disks.)
+        dirStates.set(extDir, { status: "ok", attempts: 1, lastAttemptMs: Date.now() });
+        return;
+    }
 
     // CC is installed but unpatched (CC update wiped the IIFE) OR stale
     // (older patcher was used; the marker is present but the version stamp
     // doesn't match INJECT_VERSION). Either way, re-run patch.js.
     const result = await runPatcher();
     if (!result.ok) {
-        const detail = result.stderr || result.stdout || "(no output)";
-        vscode.window.showErrorMessage(
-            `cc-status-dot: auto-patch failed. Run \`npx vscode-claude-code-status-dot\` manually.\nDetail: ${detail.slice(-500)}`,
-        );
+        // v0.5.53 retry-then-toast: record the failure, stay SILENT until the
+        // attempts are exhausted (the transient class — our own 30s SIGTERM
+        // under load, external OOM kills — heals on the next backoff retry;
+        // toasting on the FIRST failure was the 2026-09-01 UX bug).
+        const prev = dirStates.get(extDir);
+        const attempts = (prev && prev.status === "failed" ? prev.attempts : 0) + 1;
+        const cls = retryClassifyClose(result.exitCode, result.closeSignal, result.timerFired);
+        const nowMs = Date.now();
+        dirStates.set(extDir, { status: "failed", attempts, lastAttemptMs: nowMs });
+        appendLastFailure({
+            ts: new Date(nowMs).toISOString(),
+            extDir: path.basename(extDir),
+            attempt: attempts,
+            exitCode: result.exitCode,
+            signal: result.closeSignal,
+            timerFired: result.timerFired,
+            class: cls.kind,
+            stderrTail: (result.stderr || "").slice(-500),
+            stdoutTail: (result.stdout || "").slice(-500),
+        });
+        if (attempts >= RETRY_MAX_ATTEMPTS) {
+            const detail = retryComposeDetail(cls, result.stderr, result.stdout);
+            const hint =
+                cls.kind === "hard-error"
+                    ? "Run `npx vscode-claude-code-status-dot` manually."
+                    : "Transient class (machine load / external kill) — a later VSCode restart will retry; or run npx manually.";
+            vscode.window.showErrorMessage(
+                `cc-status-dot: auto-patch failed (${attempts} attempts). ${hint}\nDetail: ${detail}`,
+            );
+        }
         return;
     }
 
@@ -672,13 +782,36 @@ async function detectAndPatchInner(): Promise<void> {
     // with no marker at all). Re-check the disk before claiming success.
     const postState = ccPatchState(extDir);
     if (postState === "absent") {
-        vscode.window.showErrorMessage(
-            `cc-status-dot: auto-patch reported success but the marker is still absent from ${path.basename(
-                extDir,
-            )}. Run \`npx vscode-claude-code-status-dot\` manually to diagnose.\nDetail: ${result.stdout.slice(-500)}`,
-        );
+        const prevPV = dirStates.get(extDir);
+        dirStates.set(extDir, {
+            status: "failed",
+            attempts: (prevPV && prevPV.status === "failed" ? prevPV.attempts : 0) + 1,
+            lastAttemptMs: Date.now(),
+        });
+        appendLastFailure({
+            ts: new Date().toISOString(),
+            extDir: path.basename(extDir),
+            attempt: dirStates.get(extDir)?.attempts,
+            class: "post-verify-marker-absent",
+            stdoutTail: (result.stdout || "").slice(-500),
+        });
+        // v0.5.53 R1: this class participates in the SAME retry-then-toast
+        // policy — silent until attempts are exhausted (the pre-R1 code
+        // toasted on EVERY attempt, up to 5 scary toasts in ~8 minutes).
+        if ((dirStates.get(extDir)?.attempts ?? 0) >= RETRY_MAX_ATTEMPTS) {
+            vscode.window.showErrorMessage(
+                `cc-status-dot: auto-patch reported success but the marker is still absent from ${path.basename(
+                    extDir,
+                )} (${dirStates.get(extDir)?.attempts} attempts). Run \`npx vscode-claude-code-status-dot\` manually to diagnose.\nDetail: ${result.stdout.slice(-500)}`,
+            );
+        }
         return;
     }
+
+    // v0.5.53: 'ok' is recorded only HERE — after runPatcher exit 0 AND the
+    // post-verify marker check passed. (The marker-absent branch above also
+    // records a failure, so an exit-0-but-no-marker run retries too.)
+    dirStates.set(extDir, { status: "ok", attempts: 1, lastAttemptMs: Date.now() });
 
     // v0.5.45.1 (review finding #3): in-memory fallback for the reload bar —
     // if the child patch.js failed to write last-repatch.json (best-effort
@@ -889,8 +1022,32 @@ function startRepatchWatcher(extDir: string): void {
         // one readdir + one Set lookup.
         try {
             const curDir = detectTargetDir();
-            const ran = (globalThis as Record<string, unknown>)[ALREADY_RAN_KEY] as Set<string> | undefined;
-            if (curDir && !detectInFlight && !(ran && ran.has(curDir)) && ccPatchState(curDir) !== "fresh") {
+            const states = (globalThis as Record<string, unknown>)[ALREADY_RAN_KEY] as
+                Map<string, DirPatchState> | undefined;
+            // v0.5.53: 'ok' short-circuits (steady-state cost unchanged — one
+            // Map lookup); a 'failed' dir re-enters detectAndPatch only when
+            // the retry policy says 'run' (backoff elapsed, attempts left) —
+            // the inner gate re-checks and records, so the tick stays thin.
+            // v0.5.53 R1 HIGH regression fix: a MISSING entry means the dir was
+            // never attempted in this EH (e.g. a mid-session CC update just
+            // landed — the v0.5.45.1 disk-scan raison d'être). shouldRetry
+            // returns 'wait' for absent (its module contract), so the TICK
+            // must map absent→'run' itself; the inner gate stays the
+            // authority. Steady-state cost is preserved because every
+            // known-fresh dir carries an 'ok' entry (fresh-path recording).
+            const dec =
+                !states || !states.has(curDir ?? "") ? "run" : retryShouldRetry(states.get(curDir ?? ""), Date.now());
+            // R2: a {failed} entry whose disk self-healed (external npx run)
+            // never re-enters the inner gate (the freshness check below skips
+            // dispatch) — converge it HERE so the entry flips to ok instead of
+            // re-consulting state every backoff for the EH lifetime.
+            if (states && dec === "run") {
+                const st = states.get(curDir ?? "");
+                if (st && st.status === "failed" && ccPatchState(curDir ?? "") === "fresh") {
+                    states.set(curDir ?? "", { status: "ok", attempts: st.attempts, lastAttemptMs: Date.now() });
+                }
+            }
+            if (curDir && !detectInFlight && dec === "run" && ccPatchState(curDir) !== "fresh") {
                 void detectAndPatch();
             }
         } catch {

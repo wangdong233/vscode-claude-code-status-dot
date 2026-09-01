@@ -1218,9 +1218,13 @@ check(
   'a transient toast auto-dismisses; the bar stays until cleared. Conditions: (0a) ownPatchArmed (in-memory fallback when patch.js flag-write failed) OR (0b) flag.ts > EH_SINCE AND flag.extDir === detectTargetDir() (flavor scoping — mirrors the cross-window toast guard; a no-op npx re-run no longer bumps the flag either, see COMP.5); (1) CC extension isActive; (2) __ccsdSbi undefined (IIFE probe — self-hides after reload).',
 );
 check(
-  'COMP.3 v0.5.45.1 RC3 the 30s watcher tick re-runs detectAndPatch on a NOT-fresh DISK-highest target with inFlight + ranDirs guards ordered cheap-first',
+  'COMP.3 v0.5.53 the 30s watcher tick catches mid-session CC installs (missing entry→run) with shouldRetry (ok=short-circuit, failed=backoff) + inFlight, cheap-first',
   /const curDir = detectTargetDir\(\);/.test(companionSrc) &&
-    /!\(ran && ran\.has\(curDir\)\) && ccPatchState\(curDir\) !== "fresh"/.test(companionSrc) &&
+    /!states \|\| !states\.has\(curDir \?\? ""\)\s*\? "run"\s*: retryShouldRetry\(states\.get\(curDir \?\? ""\), Date\.now\(\)\)/.test(
+      companionSrc,
+    ) &&
+    /if \(state === "fresh"\) \{[\s\S]{0,700}?dirStates\.set\(extDir, \{ status: "ok"/.test(companionSrc) &&
+    /dec === "run" && ccPatchState\(curDir\) !== "fresh"/.test(companionSrc) &&
     /if \(detectInFlight\) return;\s*detectInFlight = true;/.test(companionSrc) &&
     /finally \{\s*detectInFlight = false;\s*\}/.test(companionSrc),
   'v0.5.45 used discoverCcInThisFlavor() whose vscode.extensions.all primary path cannot see a mid-session CC install (the EH keeps the old entry until reload) — the 08:39 incident window was NOT detected. v0.5.45.1 targets detectTargetDir() (disk-highest in this flavor, parent-dir scan keeps v0.2.3 flavor scoping). ranDirs is checked BEFORE ccPatchState so a permanently-failed patch does not re-read the ~3MB extension.js every 30s.',

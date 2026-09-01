@@ -201,6 +201,10 @@ cc-status-dot — token stats & config
 
 - 该会话在收藏/归档**之前**就已被 CC 的 30 天保留策略清理（v0.5.51 之前的收藏不受保活保护）——点击会明确询问是否开新会话。v0.5.51+ 新收藏/归档的会话受硬链接保活，永不过期。如希望未收藏的长会话也保得住，可在 `~/.claude/settings.json` 加 `"cleanupPeriodDays": 3650`。
 
+**CC 更新后自动修补失败/提示 auto-patch failed？**
+
+- v0.5.53 起自动修补带重试：失败后按 30s→4min 指数退避自动重试至多 5 次（约 11 分钟有界窗口），仅当重试耗尽才提示；瞬时类失败（机器高负载被 30s 超时杀 / 外部 OOM kill）通常在下一次重试自愈。诊断记录在 `~/.claude/cc-status-dot/last-failure.log`（最近 5 次尝试的退出码/信号/输出尾）。
+
 **patch 报 "Anchor mismatch"**
 
 - CC 的 minified 代码发生了结构性漂移（改名类漂移会被容错正则层自动兼容，不会报此错）。patcher 已零足迹拒绝写入，扩展未被破坏。到项目 issue 区提 issue 并附 CC 版本号。

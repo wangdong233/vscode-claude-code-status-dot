@@ -188,8 +188,47 @@ if (distInjectFallback[1] !== srcInjectFallback[1]) {
   );
 }
 
+// v0.6 R3 recommendation — CONTENT markers: the version/activation checks
+// above cannot see a .vsix whose embedded RUNTIME SET or canary judge is
+// STALE BYTES (the 0.6.0 rc3 incident: a pre-fix vsix carried the rc2
+// hostSid self-recursion + sidebar false-positive in extension/runtime/patch.js
+// and extension/dist/canary.js). Pin the load-bearing literals that must
+// exist in the packaged artifacts — a stale rebuild fails HERE, at the
+// release boundary, instead of shipping.
+{
+  const runtimePatch = readVsixEntry('extension/runtime/patch.js');
+  if (runtimePatch === null) {
+    fail(
+      `${vsixPath} missing extension/runtime/patch.js — run \`npm run build && npm run companion:package\` (embed-runtime step).`,
+    );
+  }
+  const markers = [
+    ['CTX_BY_SID registration present', /CTX_BY_SID\[sid\d?\]=ctx/.test(runtimePatch)],
+    ['no hostSid self-recursion residue (rc2 bug)', !/hostSid\(ctx,sid\d?\)}catch/.test(runtimePatch)],
+    ['directive scanner accepts newline terminator', /\(\[,;\]\|\\r\?\\n\)/.test(runtimePatch)],
+    ['boot heartbeat at module load', /hbWrite\(true\)/.test(runtimePatch)],
+  ];
+  for (const [name, ok] of markers) {
+    if (!ok)
+      fail(
+        `${vsixPath} embedded runtime/patch.js: ${name} — STALE artifact; re-run \`npm run build && npm run companion:package\`.`,
+      );
+  }
+  const canaryJs = readVsixEntry('extension/dist/canary.js');
+  if (canaryJs === null) {
+    fail(
+      `${vsixPath} missing extension/dist/canary.js — run \`npm run companion:build && npm run companion:package\`.`,
+    );
+  }
+  if (!/s\.panelSurfaces\s*>\s*0/.test(canaryJs)) {
+    fail(
+      `${vsixPath} embedded dist/canary.js missing the payload-drift panelSurfaces gate (rc2 bug) — STALE artifact; re-run \`npm run companion:build && npm run companion:package\`.`,
+    );
+  }
+}
+
 console.log(
   `[assert-companion-vsix] OK — vsix ${expectedVersion} present, embedded version matches, activationEvents clean (${JSON.stringify(
     innerActivation,
-  )}), compiled MIN_PATCHER_VERSION=${distMinPatcher[1]} + injectVersion fallback v${distInjectFallback[1]} match source`,
+  )}), compiled MIN_PATCHER_VERSION=${distMinPatcher[1]} + injectVersion fallback v${distInjectFallback[1]} match source, runtime/canary content markers verified`,
 );

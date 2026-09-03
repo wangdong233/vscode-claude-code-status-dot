@@ -2830,7 +2830,7 @@ function buildSeamPrelude() {
         `function shimViewProvider(viewId,provider){if(!provider||typeof provider!=="object")return provider;var shim=Object.create(provider);shim.resolveWebviewView=function(view,ctx2,tok){try{armSurface(view,viewId,"view")}catch(_){}var fn=provider.resolveWebviewView;if(typeof fn==="function")return fn.call(provider,view,ctx2,tok)};return shim}`,
         `function shimSerializer(viewType,serializer){if(!serializer||typeof serializer!=="object")return serializer;var shim=Object.create(serializer);function both(panel,state){try{armSurface(panel,viewType,"restore")}catch(_){}var fn=serializer.deserializeWebviewPanel;if(typeof fn!=="function")fn=serializer.resolveWebviewPanel;if(typeof fn==="function")return fn.call(serializer,panel,state)}shim.deserializeWebviewPanel=both;shim.resolveWebviewPanel=both;return shim}`,
         // === L4 registry + per-surface bookkeeping ===
-        `var CTXS=[],CTX_BY_SID=Object.create(null);function hostSid(ctx,sid){try{if(!sid)return;ctx.hosted=ctx.hosted||Object.create(null);ctx.hosted[sid]=true;hostSid(ctx,sid)}catch(_){}}`,
+        `var CTXS=[],CTX_BY_SID=Object.create(null);function hostSid(ctx,sid){try{if(!sid)return;ctx.hosted=ctx.hosted||Object.create(null);ctx.hosted[sid]=true;CTX_BY_SID[sid]=ctx}catch(_){}}`,
         `function unbindCtx(ctx){try{var h=ctx.hosted;if(h){for(var k in h){if(CTX_BY_SID[k]===ctx)delete CTX_BY_SID[k];if(G.__ccsdSidToPanel&&G.__ccsdSidToPanel[k]===ctx.panelTab)delete G.__ccsdSidToPanel[k]}}var sid=ctx.__ccsdSid;if(sid&&CTX_BY_SID[sid]===ctx)delete CTX_BY_SID[sid]}catch(_){}}`,
         // === L5 decoration shadows (design §6.6, mechanism 1) ===
         // Record-and-passthrough: the ORIGINAL setter always runs first (CC's
@@ -2955,7 +2955,7 @@ function seamInsertionOffset(src) {
         // operand of a string-concatenation expression ("a"+"b") was consumed
         // as a "directive" and the prelude could land MID-EXPRESSION (the G3
         // fixture caught it); a real directive statement always ends with , or ;.
-        if ((m = rest.match(/^("[^"\n\r]*"|'[^'\n\r]*')[\t ]*[,;]/))) {
+        if ((m = rest.match(/^("[^"\n\r]*"|'[^'\n\r]*')[\t ]*([,;]|\r?\n)/))) {
             i += m[0].length;
             continue;
         }

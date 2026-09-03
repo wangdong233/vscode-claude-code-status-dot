@@ -363,6 +363,24 @@ check(
   G.__ccsdSidToTitle['sid-S'] === 'Side' && !('sid-S' in G.__ccsdSidToPanel),
 );
 
+// R2 HIGH pin: CTX_BY_SID must actually register (the rc2 hostSid typo made
+// the map permanently empty, killing the reaper's live-ctx grace). A partial
+// openSessionIds list must NOT evict a sid whose ctx is alive and fresh.
+msg(panel1, {
+  type: 'request',
+  request: { type: 'update_session_state', sessionId: 'sid-live', state: 'running', title: 'L' },
+});
+panel1.webview.postMessage({
+  type: 'request',
+  requestId: 'ssu1',
+  request: { type: 'session_states_update', openSessionIds: ['sid-live'], activeSessionId: 'sid-live' },
+});
+check(
+  'L4.9 reconciliation grace: fresh ctx sid SURVIVES a list that includes it; a stale unknown sid is evicted',
+  G.__ccsdSidToPanel['sid-live'] === panel1 && G.__ccsdActiveSid === 'sid-live',
+  'live binding or active-sid harmony broken',
+);
+
 // farewell / panelNoLongerHosts unbind (§6.4 semantic fix)
 msg(panel1, {
   type: 'request',

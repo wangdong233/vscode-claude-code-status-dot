@@ -136,8 +136,14 @@ const INPUT = (summary, over = {}) => ({
   const st = freshState();
   const v1 = CJ.judgeSeamCanary(st, INPUT(mkSummary({ totalObs: 9 })));
   check('P.1 obs=9 binds=0 → silent (below threshold)', v1.fired.length === 0);
-  const v2 = CJ.judgeSeamCanary(st, INPUT(mkSummary({ totalObs: 10 })));
-  check('P.2 obs>=10 binds=0 → payload-drift', v2.fired.includes('payload-drift'));
+  const v2 = CJ.judgeSeamCanary(st, INPUT(mkSummary({ totalObs: 10, panelSurfaces: 1 })));
+  check('P.2 obs>=10 binds=0 panels>0 → payload-drift', v2.fired.includes('payload-drift'));
+  const vSb = CJ.judgeSeamCanary(freshState(), INPUT(mkSummary({ totalObs: 50 })));
+  check(
+    'P.2b sidebar-only (panels=0, binds impossible) stays SILENT — R2 false-positive pin',
+    vSb.fired.length === 0,
+    JSON.stringify(vSb.fired),
+  );
   const st3 = freshState();
   const v3 = CJ.judgeSeamCanary(st3, INPUT(mkSummary({ totalObs: 10, binds: 1 })));
   check('P.3 binds>0 with obs=10 → silent (binding works)', v3.fired.length === 0);

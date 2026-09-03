@@ -132,8 +132,11 @@ export function judgeSeamCanary(state: CanaryState, input: CanaryInput): CanaryV
             `cc-status-dot: CC protocol drift detected (${s.envelopeFail} malformed frames). Wait for a cc-status-dot update.`,
         );
     }
-    // (d) payload-field drift: messages parsed, bindings never landed.
-    if (s.totalObs >= 10 && s.binds === 0) {
+    // (d) payload-field drift: messages parsed, bindings never landed. Gated
+    // on panelSurfaces>0 — binds is panel-family-only by design, so a
+    // sidebar-only user (CC's DEFAULT surface, never binds) must stay silent
+    // (R2 false-positive finding).
+    if (s.totalObs >= 10 && s.binds === 0 && s.panelSurfaces > 0) {
         fire(
             "payload-drift",
             "cc-status-dot: CC messages are arriving but session binding never succeeds — a wire field likely changed. Wait for a cc-status-dot update.",

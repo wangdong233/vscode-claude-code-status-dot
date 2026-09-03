@@ -65,6 +65,7 @@ import {
     restoreForClick as kaRestoreForClick,
     type KeepaliveIO,
 } from "./keepalive";
+import { initCanaryState, judgeSeamCanary } from "./canary";
 import {
     classifyClose as retryClassifyClose,
     composeFailureDetail as retryComposeDetail,
@@ -773,6 +774,8 @@ async function detectAndPatchInner(): Promise<void> {
             timerFired: result.timerFired,
             class: failClass ?? cls.kind,
             failClass,
+            pid: process.pid,
+            ehSince: EH_SINCE,
             stderrTail: (result.stderr || "").slice(-500),
             stdoutTail: (result.stdout || "").slice(-500),
         });
@@ -796,6 +799,27 @@ async function detectAndPatchInner(): Promise<void> {
     // we DID see logged, but a future bug or a partial-write could exit 0
     // with no marker at all). Re-check the disk before claiming success.
     const postState = ccPatchState(extDir);
+    // v0.6 §8.1 stale-forever detector: a patcher that keeps exiting 0 while
+    // the disk version never converges (hand-copied patch.js, deleted config,
+    // WANT skew) gets exactly ONE clear reinstall notice after 3 consecutive
+    // stale outcomes — previously this state was silent forever.
+    if (postState === "stale") {
+        const gSf = globalThis as Record<string, unknown>;
+        const KEY = "__ccsdStaleForever";
+        const counts = (gSf[KEY] as Map<string, number> | undefined) ?? new Map<string, number>();
+        gSf[KEY] = counts;
+        const n = (counts.get(extDir) ?? 0) + 1;
+        counts.set(extDir, n);
+        if (n === 3) {
+            void vscode.window.showWarningMessage(
+                "cc-status-dot: the patch keeps succeeding without converging (3 stale checks). The install is inconsistent — reinstall completely (run `npx vscode-claude-code-status-dot`, or update the companion VSIX; pick ONE and let it finish fully).",
+            );
+        }
+    } else if (postState === "fresh") {
+        const gSf = globalThis as Record<string, unknown>;
+        const counts = gSf.__ccsdStaleForever as Map<string, number> | undefined;
+        if (counts) counts.delete(extDir);
+    }
     if (postState === "absent") {
         const prevPV = dirStates.get(extDir);
         dirStates.set(extDir, {
@@ -4083,7 +4107,13 @@ interface SeamHeartbeat {
     armed: number;
     envelopeFail: number;
     obs: Record<string, number>;
-    deco: { sbiCreated: boolean; titleShadowOk: number; iconAsserts: number; lastIconAssertTs: number };
+    deco: {
+        sbiCreated: boolean;
+        titleShadowOk: number;
+        iconAsserts: number;
+        ourWrites: number;
+        lastIconAssertTs: number;
+    };
     degraded: { requireRebind: boolean; outboundShadow: boolean; titleShadow: boolean };
     lastMsgTs: number;
 }
@@ -4153,40 +4183,64 @@ function hookStateActive(): boolean {
     return false;
 }
 
-/** Canary judgment matrix (§7.3), one-shot alarms per EH. */
-const seamCanaryAlarms = new Set<string>();
-let seamObsPrev = -1;
-let seamObsLastNonZeroTs = 0;
+/** Canary judgment (§7.3) — thin renderer over the pure judge in
+ *  companion/canary.ts (G9 fixture-tested there). One-shot per EH; a red
+ *  canary NEVER re-patches. */
+let canaryState = initCanaryState(Date.now());
 let seamCanaryBar: vscode.StatusBarItem | null = null;
 function seamCanaryTick(): void {
     const files = readSeamStates();
-    if (files.length === 0) return; // no seam heartbeat yet — canary off
+    // Aggregate the summary for the judge (R1-revised fields: binds for
+    // payload drift, ourWrites for deco-silent).
     let totalObs = 0;
+    let binds = 0;
     let envelopeFail = 0;
     let panelSurfaces = 0;
-    let iconAsserts = 0;
+    let ourWrites = 0;
+    let foreignClobbers = 0;
     const degraded: string[] = [];
     for (const hb of files) {
-        for (const k of Object.keys(hb.obs || {})) totalObs += Number(hb.obs[k]) || 0;
+        for (const k of Object.keys(hb.obs || {})) {
+            const v = Number(hb.obs[k]) || 0;
+            totalObs += v;
+            if (k === "binds") binds += v;
+        }
         envelopeFail += Number(hb.envelopeFail) || 0;
         panelSurfaces += Number(hb.surfaces?.panel) || 0;
-        iconAsserts += Number(hb.deco?.iconAsserts) || 0;
+        ourWrites += Number(hb.deco?.ourWrites) || 0;
+        foreignClobbers += Number(hb.deco?.iconAsserts) || 0;
         if (hb.degraded?.requireRebind) degraded.push("requireRebind");
         if (hb.degraded?.outboundShadow) degraded.push("outboundShadow");
         if (hb.degraded?.titleShadow) degraded.push("titleShadow");
     }
-    if (totalObs > 0) seamObsLastNonZeroTs = Date.now();
-    const hookActive = hookStateActive();
-    const sinceActivate = Date.now() - EH_SINCE;
-
-    const alarm = (key: string, msg: string) => {
-        if (seamCanaryAlarms.has(key)) return; // one-shot per EH
-        seamCanaryAlarms.add(key);
+    const verdict = judgeSeamCanary(canaryState, {
+        summary: {
+            files: files.length,
+            totalObs,
+            binds,
+            envelopeFail,
+            panelSurfaces,
+            ourWrites,
+            foreignClobbers,
+            degraded,
+        },
+        hookActive: hookStateActive(),
+        now: Date.now(),
+        sinceActivateMs: Date.now() - EH_SINCE,
+    });
+    // Passive surfacing for degraded flags: LOG ONLY (design §7.3
+    // "tooltip 透出（不打扰）" — R1 companion finding: an alarm bar for a
+    // benign degrade made healthy installs look broken).
+    for (const info of verdict.degradedInfo) {
+        console.warn(`[cc-status-dot][CANARY-INFO] ${info}`);
+    }
+    // Active alarms render on the one-shot bar.
+    for (const key of verdict.fired) {
+        const msg = verdict.messages[key];
         try {
             if (!seamCanaryBar) {
                 seamCanaryBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
                 seamCanaryBar.name = "cc-status-dot canary";
-                seamCanaryBar.command = "ccStatusDot.fav.focusSession";
             }
             seamCanaryBar.text = "$(alert) cc-status-dot";
             seamCanaryBar.tooltip = msg;
@@ -4195,54 +4249,7 @@ function seamCanaryTick(): void {
         } catch {
             /* never break the tick */
         }
-    };
-
-    // (a) observation-channel silent: hooks are actively writing session
-    //     state but NO live seam heartbeat has ever observed a message
-    //     (>10min past activation grace). Covers g4/createRequire escapes,
-    //     ESM-internal drift, envelope changes — the unified silent form.
-    if (hookActive && totalObs === 0 && sinceActivate > 10 * 60 * 1000) {
-        alarm(
-            "obs-silent",
-            "cc-status-dot: status-dot observation channel is silent while Claude Code sessions are active. CC likely changed its internal wiring — wait for a cc-status-dot update (this notice will not repeat this session).",
-        );
     }
-    // (b) protocol drift: envelope violations accumulated, or the observer
-    //     went quiet AFTER previously working. NEVER re-patches.
-    if (envelopeFail >= 10) {
-        alarm(
-            "env-fail",
-            `cc-status-dot: CC protocol drift detected (${envelopeFail} malformed frames). Wait for a cc-status-dot update.`,
-        );
-    } else if (
-        seamObsPrev > 0 &&
-        totalObs === 0 &&
-        hookActive &&
-        seamObsLastNonZeroTs > 0 &&
-        Date.now() - seamObsLastNonZeroTs > 10 * 60 * 1000
-    ) {
-        alarm(
-            "obs-dropped",
-            "cc-status-dot: the observation channel stopped seeing messages (was working earlier). CC likely changed its protocol — wait for an update.",
-        );
-    }
-    // (c) decoration-chain silent: messages flow but no icon was ever
-    //     asserted on a panel-carrying EH (two consecutive ticks, to skip
-    //     the boot race).
-    if (seamObsPrev >= 0 && totalObs > 0 && panelSurfaces > 0 && iconAsserts === 0) {
-        alarm(
-            "deco-silent",
-            "cc-status-dot: messages are observed but no tab decoration was asserted — decoration shadow/mismatch. Heartbeat data is under ~/.claude/cc-status-dot/seam-state-*.json.",
-        );
-    }
-    // (d) degraded flags: passive surface only (tooltip + log), no alarm bar.
-    if (degraded.length > 0) {
-        alarm(
-            "degraded",
-            `cc-status-dot is running degraded (${[...new Set(degraded)].join(", ")}) — dots still work; details in seam-state-*.json.`,
-        );
-    }
-    seamObsPrev = totalObs;
 }
 
 /** Retry-window visibility (§8.2): a lightweight bar while the backoff
@@ -4294,38 +4301,51 @@ function refreshEmbeddedRuntime(ctx: vscode.ExtensionContext): boolean {
         if (cmp(cfg.patcherVersion, MIN_PATCHER_VERSION) >= 0) return false; // INSTALL_DIR current (or newer — never downgrade)
         const embedded = path.join(ctx.extensionPath, "runtime");
         if (!fs.existsSync(path.join(embedded, "patch.js"))) return false; // VSIX without the embedded set — npx owns INSTALL_DIR
-        const copyAtomic = (srcP: string, dstP: string) => {
+        // R1 companion findings: (a) a PARTIAL copy must NOT bump the config —
+        // a swallowed EACCES on one file would leave a half runtime set every
+        // future activate considers healed; any failure now aborts the whole
+        // refresh (falls back to the warn path; next activate retries).
+        // (b) injectVersion must be bumped TOO — §8.1 row-2 convergence needs
+        // WANT to reach the embedded set's version, or every window spawns a
+        // patcher that no-ops as "stale" forever.
+        const copyOrFail = (srcP: string, dstP: string) => {
             fs.mkdirSync(path.dirname(dstP), { recursive: true });
             const tmp = dstP + ".ccsd-tmp";
             fs.copyFileSync(srcP, tmp);
             fs.renameSync(tmp, dstP);
         };
-        copyAtomic(path.join(embedded, "patch.js"), path.join(INSTALL_DIR, "patch.js"));
+        copyOrFail(path.join(embedded, "patch.js"), path.join(INSTALL_DIR, "patch.js"));
         for (const sub of ["src", "resources", "hooks"]) {
             const srcDir = path.join(embedded, sub);
             let names: string[] = [];
             try {
                 names = fs.readdirSync(srcDir);
-            } catch {
-                continue;
+            } catch (e) {
+                throw new Error(`embedded runtime missing ${sub}/: ${(e as Error).message}`);
             }
             for (const n of names) {
                 const sp = path.join(srcDir, n);
-                try {
-                    if (fs.statSync(sp).isFile()) copyAtomic(sp, path.join(INSTALL_DIR, sub, n));
-                } catch {
-                    /* best-effort per file */
-                }
+                if (fs.statSync(sp).isFile()) copyOrFail(sp, path.join(INSTALL_DIR, sub, n));
             }
         }
-        // Bump the config's patcherVersion so every accessor (injectVersion
-        // fallback included) sees the refreshed set. Merge-write, atomic.
-        const next = { ...cfg, patcherVersion: MIN_PATCHER_VERSION } as CompanionConfig;
+        // The embedded set's declared version (written at package time).
+        let wantVer = MIN_PATCHER_VERSION;
+        try {
+            const vj = JSON.parse(fs.readFileSync(path.join(embedded, "version.json"), "utf8")) as {
+                injectVersion?: string;
+            };
+            if (typeof vj.injectVersion === "string") wantVer = vj.injectVersion;
+        } catch {
+            /* no version.json — MIN is the floor */
+        }
+        const next = { ...cfg, patcherVersion: MIN_PATCHER_VERSION, injectVersion: wantVer } as CompanionConfig;
         const tmp = CONFIG_PATH + ".ccsd-tmp";
         fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
         fs.renameSync(tmp, CONFIG_PATH);
         effectiveConfig = next;
-        console.log("[cc-status-dot] refreshed stale INSTALL_DIR runtime set from the embedded VSIX copy");
+        console.log(
+            `[cc-status-dot] refreshed stale INSTALL_DIR runtime set from the embedded VSIX copy (patcher ${MIN_PATCHER_VERSION}, inject ${wantVer})`,
+        );
         return true;
     } catch (e) {
         console.warn(`[cc-status-dot][WARN] embedded runtime refresh failed: ${(e as Error)?.message ?? e}`);

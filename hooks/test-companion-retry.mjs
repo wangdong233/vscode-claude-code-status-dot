@@ -177,6 +177,46 @@ check(
   );
 }
 
+// --- v0.6 Part A2: machine fail-class parsing (§8.2 skip-retry contract) ---
+{
+  check(
+    'FC.1 parseFailClass extracts the LAST ccsd-fail-class line from noisy stdout',
+    RP.parseFailClass(
+      'boot log\nccsd-fail-class:cc-esm-detected\nmore log\nccsd-fail-class:stale-unknown-format\ntail',
+    ) === 'stale-unknown-format',
+  );
+  check(
+    'FC.2 parseFailClass tolerates CRLF line endings',
+    RP.parseFailClass('x\r\nccsd-fail-class:seam-precondition-failed\r\ny') === 'seam-precondition-failed',
+  );
+  check('FC.3 parseFailClass returns null on clean stdout', RP.parseFailClass('nothing here') === null);
+  check('FC.4 parseFailClass returns null on empty', RP.parseFailClass('') === null);
+  check(
+    'FC.5 does NOT match lookalike prefixes (ccsd-fail-classes: / ccsd-fail-classX:)',
+    RP.parseFailClass('ccsd-fail-classes:cc-esm-detected') === null &&
+      RP.parseFailClass('xccsd-fail-class:seam-precondition-failed') === null,
+  );
+  check(
+    'FC.6 SKIP_RETRY_FAIL_CLASSES covers exactly the three deterministic classes',
+    Array.isArray(RP.SKIP_RETRY_FAIL_CLASSES) &&
+      RP.SKIP_RETRY_FAIL_CLASSES.length === 3 &&
+      ['cc-esm-detected', 'seam-precondition-failed', 'stale-unknown-format'].every((c) =>
+        RP.SKIP_RETRY_FAIL_CLASSES.includes(c),
+      ),
+  );
+  check(
+    'FC.7 every skip class has non-empty user copy',
+    RP.SKIP_RETRY_FAIL_CLASSES.every((c) => typeof RP.failClassHint(c) === 'string' && RP.failClassHint(c).length > 20),
+  );
+  check('FC.8 unknown class yields empty hint (no misleading copy)', RP.failClassHint('nonsense-class') === '');
+  check(
+    'FC.9 source pin: the skip branch pins attempts to MAX + uses the class hint',
+    /const failClass = retryParseFailClass\(result\.stdout \|\| ""\);/.test(extSrc) &&
+      /if \(skipRetry\) attempts = RETRY_MAX_ATTEMPTS;/.test(extSrc) &&
+      /retryFailClassHint\(failClass \?\? ""\)/.test(extSrc),
+  );
+}
+
 if (fail === 0) console.log(`All ${pass} companion-retry checks passed.`);
 else {
   console.log(`${pass} passed, ${fail} failed.`);

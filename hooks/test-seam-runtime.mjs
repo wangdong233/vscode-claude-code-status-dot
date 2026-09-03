@@ -217,6 +217,16 @@ const BRIDGES = [
 for (const k of BRIDGES) savedGlobals[k] = globalThis[k];
 factory(moduleObj.exports, fakeRawRequire, moduleObj, path.join(SANDBOX, 'cc-ext'), path.join(SANDBOX, 'cc-ext'));
 const { __req: req, __G: G } = moduleObj.exports;
+// Three-hard-contract #1 (G3-companion): __ccsdSbi must be non-undefined at
+// MODULE LOAD — before any panel exists — so the companion's reload-bar
+// probes (:904/:952/:1077, `!== undefined`) never false-fire on a healthy
+// seam-loaded window that has not opened a panel yet. null is the sentinel
+// (probe-legit AND invisible to the IIFE's truthy singleton guards).
+check('T.1 __ccsdSbi probe sentinel present at module load (pre-panel)', G.__ccsdSbi === null);
+check(
+  'T.2 bridge maps exist at module load (Object.create(null) shape)',
+  G.__ccsdSidToPanel !== undefined && G.__ccsdSidToTitle !== undefined,
+);
 
 // ---------------------------------------------------------------- L1
 const vs = req('vscode');
@@ -245,6 +255,24 @@ const alien = vs.window.createWebviewPanel('claudePlanPreview', 'P', {}, {});
 check('L2.3 claudePlanPreview NOT armed (observer absent)', alien.webview._msgCb.length === 0);
 const alien2 = vs.window.createWebviewPanel('some.other.view', 'X', {}, {});
 check('L2.4 non-CC viewType NOT armed', alien2.webview._msgCb.length === 0);
+// R1 gates mutation survivors: the whitelist must be ANCHORED — a future
+// regression dropping PANEL_RE's ^ (or adding planPreview to VIEW_RE) must
+// fail HERE, not in production bridging.
+const alienMid = vs.window.createWebviewPanel('webviewClaudeVSCodePanelHost', 'M', {}, {});
+check('L2.4b mid-string panel family NOT armed (PANEL_RE ^ anchor)', alienMid.webview._msgCb.length === 0);
+const alienPfx = vs.window.createWebviewPanel('xclaudeVSCodePanel', 'P', {}, {});
+check('L2.4c leading-garbage viewType NOT armed', alienPfx.webview._msgCb.length === 0);
+const planProvider = { resolveWebviewView() {} };
+vs.window.registerWebviewViewProvider('claudePlanPreview', planProvider);
+check(
+  'L2.4d claudePlanPreview gets the PRISTINE provider (whitelist front-loaded in the wrapper)',
+  capturedRaw['view:claudePlanPreview'] === planProvider,
+  'host received a synthetic object',
+);
+const planView = new FakePanel('claudePlanPreview');
+if (capturedRaw['view:claudePlanPreview'] !== planProvider)
+  capturedRaw['view:claudePlanPreview'].resolveWebviewView(planView, {}, {});
+check('L2.4e planPreview view never armed even if driven', planView.webview._msgCb.length === 0);
 
 // view provider capture (sidebar family)
 let resolvedView = null;
@@ -272,7 +300,8 @@ const rawRegister = fakeVs.window.registerWebviewViewProvider; // not wrapped; w
 // (we re-declare fakeVs.window.registerWebviewViewProvider as a capturing fn
 //  BEFORE building a second wrapper run — instead, simpler: use serializer
 //  path below which we CAN capture symmetrically.)
-check('L2.5 view family: provider shim path exercised via serializer test below (see L2.7+)', true);
+// (L2.5 placeholder retired in R1's vacuous-assertion sweep — the view-provider
+// shim is now asserted for real at L2.5b/L2.5c below.)
 
 // serializer capture — the wrapper hands the HOST a shim; capturedRaw holds it
 const origSer = {
@@ -424,10 +453,35 @@ const ourUri = { fsPath: RES + '/claude-logo-running.svg' };
 panel1.iconPath = ourUri;
 const ccUri = { fsPath: '/Users/x/.vscode/extensions/anthropic.claude-code-2.1.259/resources/claude-logo-pending.svg' };
 panel1.iconPath = ccUri;
-check("L5.2 iconPath shadow: CC's overwrite is re-asserted to OUR uri synchronously", panel1.iconPath === ourUri);
+// v0.6 R1 fix: the shadow is OBSERVE-ONLY (R1 HIGH finding — the synchronous
+// re-assert killed the interrupted flash's deliberate CC_DEFAULT OFF-frame and
+// churned one forced heartbeat write per second). CC's write lands untouched;
+// the unchanged §H tick (clobber defense since v0.2.9) re-asserts OUR icon
+// within its 500ms cadence in production — zero-regression by construction.
+check("L5.2a iconPath shadow observe-only: CC's overwrite LANDS (flash OFF-frame survives)", panel1.iconPath === ccUri);
+panel1.iconPath = ourUri;
+check('L5.2b our RESDIR write recorded + passthrough', panel1.iconPath === ourUri);
 const pForHb2 = vs.window.createWebviewPanel('claudeVSCodePanel3x', 't2', {}, {}); // forces a heartbeat write
 const hb2 = JSON.parse(fs.readFileSync(hbPath, 'utf8'));
-check('L5.3 deco.iconAsserts counted in heartbeat', hb2.deco.iconAsserts >= 1, JSON.stringify(hb2.deco.iconAsserts));
+check(
+  'L5.3 deco.iconAsserts counts the FOREIGN clobber observation (no re-assert)',
+  hb2.deco.iconAsserts >= 1,
+  JSON.stringify(hb2.deco.iconAsserts),
+);
+check(
+  'L5.3b deco.ourWrites counted for our RESDIR writes',
+  (hb2.deco.ourWrites || 0) >= 2,
+  JSON.stringify(hb2.deco.ourWrites),
+);
+check(
+  'L5.3c obs.binds counter live (payload-field drift visibility)',
+  (hb2.obs.binds || 0) >= 1,
+  JSON.stringify(hb2.obs.binds),
+);
+check(
+  'L5.3d boot heartbeat file present (canary lifeline before any surface)',
+  hb2.pid === process.pid && hb2.armed >= 1,
+);
 check(
   'L5.4 Proxy never used (object identity preserved everywhere)',
   panel1 instanceof FakePanel && G.__ccsdSidToPanel['sid-B'] === panel1,

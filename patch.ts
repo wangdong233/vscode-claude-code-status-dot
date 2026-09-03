@@ -2904,7 +2904,7 @@ function buildSeamPrelude(): string {
         // the end-to-end canary proving webview messages reach our observer)
         // -> deco-alive (icon asserts) -> degraded flags. Reader = companion
         // RC3 30s tick (judgment matrix §7.3); canary red NEVER re-patches.
-        `var HB={v:SEAMV,pid:process.pid,bootTs:Date.now(),writtenTs:0,surfaces:{panel:0,sidebar:false,sessionsList:false},armed:0,envelopeFail:0,obs:{update_session_state:0,rename_tab:0,set_session_unread:0,update_panel_host_session:0,session_states_update:0,outboundFiltered:0},deco:{sbiCreated:false,titleShadowOk:0,iconAsserts:0,lastIconAssertTs:0},degraded:{requireRebind:false,outboundShadow:false,titleShadow:false},lastMsgTs:0};`,
+        `var HB={v:SEAMV,pid:process.pid,bootTs:Date.now(),writtenTs:0,surfaces:{panel:0,sidebar:false,sessionsList:false},armed:0,envelopeFail:0,obs:{update_session_state:0,rename_tab:0,set_session_unread:0,update_panel_host_session:0,session_states_update:0,outboundFiltered:0,binds:0},deco:{sbiCreated:false,titleShadowOk:0,iconAsserts:0,ourWrites:0,lastIconAssertTs:0},degraded:{requireRebind:false,outboundShadow:false,titleShadow:false},lastMsgTs:0};`,
         // Outbound request-id correlation (design §6.3): user_dialog_request /
         // tool_permission_request resolve when the matching {type:"response"}
         // envelope comes back INBOUND — the observer-era equivalent of the
@@ -2927,7 +2927,8 @@ function buildSeamPrelude(): string {
         // creation / §Z dispose), which overwrite it with the real SBI later.
         `function ensureBridges(){try{if(!G.__ccsdSidToPanel)G.__ccsdSidToPanel=Object.create(null);if(!G.__ccsdSidToTitle)G.__ccsdSidToTitle=Object.create(null);if(!G.__ccsdPendingSet)G.__ccsdPendingSet=Object.create(null);if(!G.__ccsdUserDialogSet)G.__ccsdUserDialogSet=Object.create(null);if(!G.__ccsdWireState)G.__ccsdWireState=Object.create(null);if(!G.__ccsdToolPermSet)G.__ccsdToolPermSet=Object.create(null);}catch(_){}}`,
         `ensureBridges();`,
-        `try{if(G.__ccsdSbi===undefined)G.__ccsdSbi=null}catch(_){}`,
+        `try{if(G.__ccsdSbi===undefined)G.__ccsdSbi=null}catch(_){}
+        hbWrite(true);`,
         // === L1 require parameter rebinding (design §6.1) ===
         // Assigning the undeclared-local name `require` writes the MODULE
         // WRAPPER'S PARAMETER — every subsequent require(...) anywhere in CC's
@@ -2938,7 +2939,7 @@ function buildSeamPrelude(): string {
         // TypeError against a bare function. Rebind failure = full degrade,
         // CC untouched, heartbeat records it.
         `var VS_CACHE=new WeakMap(),WIN_CACHE=new WeakMap();`,
-        `function wrapWindow(win){var w={};try{var ks=Object.getOwnPropertyNames(win);for(var i=0;i<ks.length;i++)(function(k){Object.defineProperty(w,k,{get:function(){return win[k]},enumerable:true,configurable:true})})(ks[i]);var CWP=win.createWebviewPanel,RVP=win.registerWebviewViewProvider,RPS=win.registerWebviewPanelSerializer;if(typeof CWP==="function")Object.defineProperty(w,"createWebviewPanel",{value:function(){var p=CWP.apply(win,arguments);try{armSurface(p,arguments[0],"panel")}catch(_){}return p},enumerable:true,configurable:true,writable:true});if(typeof RVP==="function")Object.defineProperty(w,"registerWebviewViewProvider",{value:function(viewId,provider,opts){try{provider=shimViewProvider(viewId,provider)}catch(_){}return RVP.call(win,viewId,provider,opts)},enumerable:true,configurable:true,writable:true});if(typeof RPS==="function")Object.defineProperty(w,"registerWebviewPanelSerializer",{value:function(viewType,serializer){try{serializer=shimSerializer(viewType,serializer)}catch(_){}return RPS.call(win,viewType,serializer)},enumerable:true,configurable:true,writable:true});}catch(_){}return w}`,
+        `function wrapWindow(win){var w={};try{var ks=Object.getOwnPropertyNames(win);for(var i=0;i<ks.length;i++)(function(k){Object.defineProperty(w,k,{get:function(){return win[k]},enumerable:true,configurable:true})})(ks[i]);var CWP=win.createWebviewPanel,RVP=win.registerWebviewViewProvider,RPS=win.registerWebviewPanelSerializer;if(typeof CWP==="function")Object.defineProperty(w,"createWebviewPanel",{value:function(){var p=CWP.apply(win,arguments);try{armSurface(p,arguments[0],"panel")}catch(_){}return p},enumerable:true,configurable:true,writable:true});if(typeof RVP==="function")Object.defineProperty(w,"registerWebviewViewProvider",{value:function(viewId,provider,opts){try{if(typeof viewId==="string"&&VIEW_RE.test(viewId))provider=shimViewProvider(viewId,provider)}catch(_){}return RVP.call(win,viewId,provider,opts)},enumerable:true,configurable:true,writable:true});if(typeof RPS==="function")Object.defineProperty(w,"registerWebviewPanelSerializer",{value:function(viewType,serializer){try{if(typeof viewType==="string"&&PANEL_RE.test(viewType))serializer=shimSerializer(viewType,serializer)}catch(_){}return RPS.call(win,viewType,serializer)},enumerable:true,configurable:true,writable:true});}catch(_){}return w}`,
         `function wrapVs(ns){try{var c=VS_CACHE.get(ns);if(c)return c;var w={};var ks=Object.getOwnPropertyNames(ns);for(var i=0;i<ks.length;i++)(function(k){Object.defineProperty(w,k,{get:function(){return ns[k]},enumerable:true,configurable:true})})(ks[i]);Object.defineProperty(w,"window",{get:function(){try{var win=ns.window;var cw=WIN_CACHE.get(win);if(!cw){cw=wrapWindow(win);WIN_CACHE.set(win,cw)}return cw}catch(_){return ns.window}},enumerable:true,configurable:true});VS_CACHE.set(ns,w);return w}catch(_){return ns}}`,
         `try{require=function(id){var m=RAW(id);if(id==="vscode"){try{return wrapVs(m)}catch(_){return m}}return m};Object.defineProperties(require,{resolve:{get:function(){return RAW.resolve},configurable:true},main:{get:function(){return RAW.main},configurable:true},cache:{get:function(){return RAW.cache},configurable:true}})}catch(_){HB.degraded.requireRebind=true}`,
         // === L2 surface shims (design §6.2) ===
@@ -2953,8 +2954,8 @@ function buildSeamPrelude(): string {
         `function shimViewProvider(viewId,provider){if(!provider||typeof provider!=="object")return provider;var shim=Object.create(provider);shim.resolveWebviewView=function(view,ctx2,tok){try{armSurface(view,viewId,"view")}catch(_){}var fn=provider.resolveWebviewView;if(typeof fn==="function")return fn.call(provider,view,ctx2,tok)};return shim}`,
         `function shimSerializer(viewType,serializer){if(!serializer||typeof serializer!=="object")return serializer;var shim=Object.create(serializer);function both(panel,state){try{armSurface(panel,viewType,"restore")}catch(_){}var fn=serializer.deserializeWebviewPanel;if(typeof fn!=="function")fn=serializer.resolveWebviewPanel;if(typeof fn==="function")return fn.call(serializer,panel,state)}shim.deserializeWebviewPanel=both;shim.resolveWebviewPanel=both;return shim}`,
         // === L4 registry + per-surface bookkeeping ===
-        `var CTXS=[],CTX_BY_SID=Object.create(null);`,
-        `function unbindCtx(ctx){try{var sid=ctx.__ccsdSid;if(sid&&CTX_BY_SID[sid]===ctx)delete CTX_BY_SID[sid]}catch(_){}}`,
+        `var CTXS=[],CTX_BY_SID=Object.create(null);function hostSid(ctx,sid){try{if(!sid)return;ctx.hosted=ctx.hosted||Object.create(null);ctx.hosted[sid]=true;hostSid(ctx,sid)}catch(_){}}`,
+        `function unbindCtx(ctx){try{var h=ctx.hosted;if(h){for(var k in h){if(CTX_BY_SID[k]===ctx)delete CTX_BY_SID[k];if(G.__ccsdSidToPanel&&G.__ccsdSidToPanel[k]===ctx.panelTab)delete G.__ccsdSidToPanel[k]}}var sid=ctx.__ccsdSid;if(sid&&CTX_BY_SID[sid]===ctx)delete CTX_BY_SID[sid]}catch(_){}}`,
         // === L5 decoration shadows (design §6.6, mechanism 1) ===
         // Record-and-passthrough: the ORIGINAL setter always runs first (CC's
         // write lands untouched), then our after-hook runs. iconPath
@@ -2963,8 +2964,8 @@ function buildSeamPrelude(): string {
         // RESDIR, CC's under the CC extension dir — disjoint. Proxy is never
         // used anywhere (MED#7: identity landmine).
         `function shadowTitle(ctx){try{var obj=ctx.panelTab;var d=Object.getOwnPropertyDescriptor(obj,"title")||Object.getOwnPropertyDescriptor(Object.getPrototypeOf(obj),"title");if(!d||!d.set||!d.configurable)return false;var rawSet=d.set;Object.defineProperty(obj,"title",{get:function(){try{return d.get.call(obj)}catch(_){return undefined}},set:function(v){try{rawSet.call(obj,v)}catch(_){}try{if(typeof v==="string"){ctx.__ccsdTitle=v;var sid=ctx.__ccsdSid;if(sid&&!ctx.__ccsdDisposed){ensureBridges();G.__ccsdSidToTitle[sid]=v}}}catch(_){}},configurable:true});return true}catch(_){return false}}`,
-        `function shadowIconPath(ctx){try{var obj=ctx.panelTab;var d=Object.getOwnPropertyDescriptor(obj,"iconPath")||Object.getOwnPropertyDescriptor(Object.getPrototypeOf(obj),"iconPath");if(!d||!d.set||!d.configurable)return false;var rawSet=d.set;Object.defineProperty(obj,"iconPath",{get:function(){try{return d.get.call(obj)}catch(_){return undefined}},set:function(v){try{rawSet.call(obj,v)}catch(_){}try{onIconSet(ctx,v,rawSet,obj)}catch(_){}},configurable:true});return true}catch(_){return false}}`,
-        `function onIconSet(ctx,v,rawSet,obj){try{var fp=null;if(v&&typeof v==="object"&&typeof v.fsPath==="string")fp=v.fsPath;if(fp!==null&&fp.indexOf(RESDIR)===0){ctx.icon=v;return}if(ctx.icon&&ctx.icon!==v){rawSet.call(obj,ctx.icon);HB.deco.iconAsserts++;HB.deco.lastIconAssertTs=Date.now();hbWrite(true)}}catch(_){}}`,
+        `function shadowIconPath(ctx){try{var obj=ctx.panelTab;var d=Object.getOwnPropertyDescriptor(obj,"iconPath")||Object.getOwnPropertyDescriptor(Object.getPrototypeOf(obj),"iconPath");if(!d||!d.set||!d.configurable)return false;var rawSet=d.set;Object.defineProperty(obj,"iconPath",{get:function(){try{return d.get.call(obj)}catch(_){return undefined}},set:function(v){try{rawSet.call(obj,v)}catch(_){}try{onIconSet(ctx,v)}catch(_){}},configurable:true});return true}catch(_){return false}}`,
+        `function onIconSet(ctx,v){try{var fp=null;if(v&&typeof v==="object"&&typeof v.fsPath==="string")fp=v.fsPath;if(fp!==null&&fp.indexOf(RESDIR)===0){ctx.icon=v;if(HB.deco.ourWrites!==undefined)HB.deco.ourWrites++;else HB.deco.ourWrites=1;return}if(ctx.icon&&ctx.icon!==v){HB.deco.iconAsserts++;HB.deco.lastIconAssertTs=Date.now();if(HB.deco.iconAsserts===1)hbWrite(true);else hbWrite(false)}}catch(_){}}`,
         // outbound postMessage shadow: whitelist gate FIRST (io_message fires
         // per streamed token — anything off the 3-value whitelist must not
         // pay beyond one property read). Failure = degrade to inbound-only
@@ -2980,14 +2981,14 @@ function buildSeamPrelude(): string {
         // from the observed wire frame instead of spliced statements. farewell /
         // panelNoLongerHosts unbinding (§6.4) is a semantic FIX the anchor path
         // could not express (2.1.257+ already broke the old unconditional stash).
-        `function seamOnMessage(ctx,m){try{if(!m||typeof m!=="object"){HB.envelopeFail++;return}if(m.type==="response"){try{var rid=m.requestId;if(rid&&OUT_REQ[rid]){var e2=OUT_REQ[rid];delete OUT_REQ[rid];if(e2.sid){ensureBridges();if(e2.k==="ud"){delete G.__ccsdUserDialogSet[e2.sid];delete UD_TS[e2.sid]}else{delete G.__ccsdToolPermSet[e2.sid];delete TP_TS[e2.sid]}}}}catch(_){}return}if(m.type!=="request")return;var req=m.request;if(!req||typeof req!=="object"||typeof req.type!=="string"){HB.envelopeFail++;return}ensureBridges();var rt=req.type;if(rt==="update_session_state"){bumpObs("update_session_state");var sid=typeof req.sessionId==="string"?req.sessionId:"";if(typeof req.title==="string")ctx.__ccsdTitle=req.title;if(sid){ctx.__ccsdSid=sid;ensureBridges();G.__ccsdWireState[sid]=typeof req.state==="string"?req.state:"";CTX_BY_SID[sid]=ctx}if(ctx.family==="panel"&&sid&&!ctx.__ccsdDisposed){G.__ccsdSidToPanel[sid]=ctx.panelTab;if(typeof req.title==="string")G.__ccsdSidToTitle[sid]=req.title}else if(sid&&typeof req.title==="string"){G.__ccsdSidToTitle[sid]=req.title}if(sid&&(req.panelNoLongerHosts===true||req.isFarewell===true)){try{if(ctx.family==="panel"&&G.__ccsdSidToPanel[sid]===ctx.panelTab)delete G.__ccsdSidToPanel[sid];delete G.__ccsdWireState[sid];unbindCtx(ctx)}catch(_){}}hbWrite(false);return}if(rt==="rename_tab"){bumpObs("rename_tab");var t2=typeof req.title==="string"?req.title:null;if(t2!==null)ctx.__ccsdTitle=t2;if(typeof req.sessionId==="string"&&req.sessionId)ctx.__ccsdSid=req.sessionId;var sid2=ctx.__ccsdSid;if(sid2){try{if(req.hasPendingPermissions===true)G.__ccsdPendingSet[sid2]=true;else delete G.__ccsdPendingSet[sid2];if(ctx.family==="panel"&&!ctx.__ccsdDisposed){if(t2!==null)G.__ccsdSidToTitle[sid2]=t2;G.__ccsdSidToPanel[sid2]=ctx.panelTab}else if(t2!==null){G.__ccsdSidToTitle[sid2]=t2}}catch(_){}}hbWrite(false);return}if(rt==="set_session_unread"){bumpObs("set_session_unread");return}if(rt==="update_panel_host_session"){bumpObs("update_panel_host_session");try{var sid3=typeof req.sessionId==="string"?req.sessionId:"";if(!sid3&&typeof req.sessionKey==="string"&&!/^remote:/.test(req.sessionKey))sid3=req.sessionKey;if(!sid3)sid3=ctx.__ccsdSid;var st3=typeof req.state==="string"?req.state:"";if(sid3){if(ctx.family==="panel"&&!ctx.__ccsdDisposed&&(st3==="teleport_resolved"||st3==="resolved"||st3==="restore_accepted")){G.__ccsdSidToPanel[sid3]=ctx.panelTab;ctx.__ccsdSid=sid3;CTX_BY_SID[sid3]=ctx}else if(st3==="abandoned"||st3==="restore_declined"||st3==="teleport_declined"){if(ctx.family==="panel"&&G.__ccsdSidToPanel[sid3]===ctx.panelTab)delete G.__ccsdSidToPanel[sid3];if(G.__ccsdWireState)delete G.__ccsdWireState[sid3]}}}catch(_){}return}}catch(_){}}`,
+        `function seamOnMessage(ctx,m){try{if(!m||typeof m!=="object"){HB.envelopeFail++;return}if(m.type==="response"){try{var rid=m.requestId;if(rid&&OUT_REQ[rid]){var e2=OUT_REQ[rid];delete OUT_REQ[rid];if(e2.sid){ensureBridges();if(e2.k==="ud"){delete G.__ccsdUserDialogSet[e2.sid];delete UD_TS[e2.sid]}else{delete G.__ccsdToolPermSet[e2.sid];delete TP_TS[e2.sid]}}}}catch(_){}return}if(m.type!=="request")return;var req=m.request;if(!req||typeof req!=="object"||typeof req.type!=="string"){HB.envelopeFail++;return}ensureBridges();var rt=req.type;if(rt==="update_session_state"){bumpObs("update_session_state");var sid=typeof req.sessionId==="string"?req.sessionId:"";if(typeof req.title==="string")ctx.__ccsdTitle=req.title;if(sid){ctx.__ccsdSid=sid;ensureBridges();G.__ccsdWireState[sid]=typeof req.state==="string"?req.state:"";hostSid(ctx,sid)}if(ctx.family==="panel"&&sid&&!ctx.__ccsdDisposed){bumpObs("binds");G.__ccsdSidToPanel[sid]=ctx.panelTab;if(typeof req.title==="string")G.__ccsdSidToTitle[sid]=req.title}else if(sid&&typeof req.title==="string"){G.__ccsdSidToTitle[sid]=req.title}if(sid&&(req.panelNoLongerHosts===true||req.isFarewell===true)){try{if(ctx.family==="panel"&&G.__ccsdSidToPanel[sid]===ctx.panelTab)delete G.__ccsdSidToPanel[sid];delete G.__ccsdWireState[sid];unbindCtx(ctx)}catch(_){}}hbWrite(false);return}if(rt==="rename_tab"){bumpObs("rename_tab");var t2=typeof req.title==="string"?req.title:null;if(t2!==null)ctx.__ccsdTitle=t2;if(typeof req.sessionId==="string"&&req.sessionId)ctx.__ccsdSid=req.sessionId;var sid2=ctx.__ccsdSid;if(sid2){try{if(req.hasPendingPermissions===true)G.__ccsdPendingSet[sid2]=true;else delete G.__ccsdPendingSet[sid2];if(ctx.family==="panel"&&!ctx.__ccsdDisposed){if(t2!==null)G.__ccsdSidToTitle[sid2]=t2;G.__ccsdSidToPanel[sid2]=ctx.panelTab}else if(t2!==null){G.__ccsdSidToTitle[sid2]=t2}}catch(_){}}hbWrite(false);return}if(rt==="set_session_unread"){bumpObs("set_session_unread");return}if(rt==="update_panel_host_session"){bumpObs("update_panel_host_session");try{var sid3=typeof req.sessionId==="string"?req.sessionId:"";if(!sid3&&typeof req.sessionKey==="string"&&!/^remote:/.test(req.sessionKey))sid3=req.sessionKey;if(!sid3)sid3=ctx.__ccsdSid;var st3=typeof req.state==="string"?req.state:"";if(sid3){if(ctx.family==="panel"&&!ctx.__ccsdDisposed&&(st3==="teleport_resolved"||st3==="resolved"||st3==="restore_accepted")){bumpObs("binds");G.__ccsdSidToPanel[sid3]=ctx.panelTab;ctx.__ccsdSid=sid3;hostSid(ctx,sid3)}else if(st3==="abandoned"||st3==="restore_declined"||st3==="teleport_declined"){if(ctx.family==="panel"&&G.__ccsdSidToPanel[sid3]===ctx.panelTab)delete G.__ccsdSidToPanel[sid3];if(G.__ccsdWireState)delete G.__ccsdWireState[sid3]}}}catch(_){}return}}catch(_){}}`,
         // === L3 outbound observer (design §6.3, whitelist 3 values) ===
         // user_dialog_request = the old ANCHOR_C equivalent (consent/refusal
         // windows where state AND hasPendingPermissions are both false);
         // tool_permission_request = new finer-grained pending source (§6.4
         // five-state table); session_states_update = authoritative open-set
         // reconciliation + activeSessionId harmony (§6.5).
-        `function onOutbound(ctx,msg){try{if(!msg||typeof msg!=="object"||msg.type!=="request")return;var req=msg.request;if(!req||typeof req!=="object"||typeof req.type!=="string")return;var rt=req.type;if(rt!=="user_dialog_request"&&rt!=="tool_permission_request"&&rt!=="session_states_update")return;bumpObs("outboundFiltered");ensureBridges();var sid=ctx.__ccsdSid||"";var rid=(typeof msg.requestId==="string"||typeof msg.requestId==="number")?String(msg.requestId):"";if(rt==="session_states_update"){bumpObs("session_states_update");try{var open=req.openSessionIds;var now=Date.now();if(Array.isArray(open)){var keep=Object.create(null);for(var i=0;i<open.length;i++)keep[open[i]]=true;for(var k in G.__ccsdSidToPanel){try{var c2=CTX_BY_SID[k];if(!keep[k]&&(!c2||c2.disposed||now-c2.lastMsgTs>600000)){delete G.__ccsdSidToPanel[k];if(G.__ccsdWireState)delete G.__ccsdWireState[k];if(CTX_BY_SID[k]===c2)delete CTX_BY_SID[k]}}catch(_){}}}}catch(_){}try{var act=req.activeSessionId;if(typeof act==="string"&&act&&G.__ccsdSidToPanel[act]){G.__ccsdActiveSid=act;G.__ccsdLastActiveSid=act}}catch(_){}return}if(!sid)return;if(rt==="user_dialog_request"){G.__ccsdUserDialogSet[sid]=true;UD_TS[sid]=Date.now();if(rid)OUT_REQ[rid]={k:"ud",sid:sid,ts:Date.now()}}else{G.__ccsdToolPermSet[sid]=true;TP_TS[sid]=Date.now();if(rid)OUT_REQ[rid]={k:"tp",sid:sid,ts:Date.now()}}}catch(_){}}`,
+        `function onOutbound(ctx,msg){try{if(!msg||typeof msg!=="object"||msg.type!=="request")return;var req=msg.request;if(!req||typeof req!=="object"||typeof req.type!=="string")return;var rt=req.type;if(rt!=="user_dialog_request"&&rt!=="tool_permission_request"&&rt!=="session_states_update")return;bumpObs("outboundFiltered");ensureBridges();var sid=ctx.__ccsdSid||"";var rid=(typeof msg.requestId==="string"||typeof msg.requestId==="number")?String(msg.requestId):"";if(rt==="session_states_update"){bumpObs("session_states_update");try{var open=req.openSessionIds;var now=Date.now();if(Array.isArray(open)){var keep=Object.create(null);for(var i=0;i<open.length;i++)keep[open[i]]=true;for(var k in G.__ccsdSidToPanel){try{var c2=CTX_BY_SID[k];if(!keep[k]&&(!c2||c2.__ccsdDisposed||now-c2.lastMsgTs>600000)){delete G.__ccsdSidToPanel[k];if(G.__ccsdWireState)delete G.__ccsdWireState[k];if(CTX_BY_SID[k]===c2)delete CTX_BY_SID[k]}}catch(_){}}}}catch(_){}try{var act=req.activeSessionId;if(typeof act==="string"&&act&&G.__ccsdSidToPanel[act]){G.__ccsdActiveSid=act;G.__ccsdLastActiveSid=act}}catch(_){}return}if(!sid)return;if(rt==="user_dialog_request"){G.__ccsdUserDialogSet[sid]=true;UD_TS[sid]=Date.now();if(rid)OUT_REQ[rid]={k:"ud",sid:sid,ts:Date.now()}}else{G.__ccsdToolPermSet[sid]=true;TP_TS[sid]=Date.now();if(rid)OUT_REQ[rid]={k:"tp",sid:sid,ts:Date.now()}}}catch(_){}}`,
         // === L5 ported §A..§Z machinery (buildIIFEInner — byte-reused) ===
         // Synthetic-t port: the anchor era invoked the IIFE as
         // (function(t){…})(this) with t = the handler's `this` carrying
@@ -3078,10 +3079,11 @@ function seamInsertionOffset(src: string): number {
             continue;
         }
         // A string-literal statement (directive): "use strict" / 'use asm'.
-        // The [,;] after the closing quote is optional only at EOF; a `+`
-        // (string concatenation expression) deliberately does NOT match, so
-        // `"a"+"b"` style code ends the scan instead of being consumed.
-        if ((m = rest.match(/^("[^"\n\r]*"|'[^'\n\r]*')[\t ]*[,;]?/))) {
+        // The [,;] terminator is MANDATORY — with it optional, the leading
+        // operand of a string-concatenation expression ("a"+"b") was consumed
+        // as a "directive" and the prelude could land MID-EXPRESSION (the G3
+        // fixture caught it); a real directive statement always ends with , or ;.
+        if ((m = rest.match(/^("[^"\n\r]*"|'[^'\n\r]*')[\t ]*[,;]/))) {
             i += m[0].length;
             continue;
         }
@@ -3669,8 +3671,13 @@ function patchExtensionLocked(extDir: string, extJs: string): void {
     } catch {
         /* unreadable package.json — treat as no type field */
     }
-    const hasTopExport = /(?:^|;)[ \t]*export[ \t]+[A-Za-z{*_]/.test(src);
-    const hasTopImport = /(?:^|;)[ \t]*import[ \t]*[{A-Za-z(*"]/.test(src);
+    // R1 flow finding: ESM markers are scanned in the HEAD only (first 8KB
+    // past the prologue) — a ';import ' inside any of a 3MB bundle's help
+    // strings/templates is a false ESM verdict on a deterministic skip-retry
+    // class. Real ESM puts its imports at the top by definition.
+    const head = src.slice(0, 8192);
+    const hasTopExport = /(?:^|;)[ \t]*export[ \t]+[A-Za-z{*_]/.test(head);
+    const hasTopImport = /(?:^|;)[ \t]*import[ \t]*[{A-Za-z(*"]/.test(head);
     if (ext === ".mjs" || pkgType === "module" || hasTopImport) {
         seamFail(
             "cc-esm-detected",
@@ -3801,6 +3808,25 @@ function restoreExtension(extDir: string): void {
     // open). restoreExtension is also the rollback path triggered by wireHooks
     // failure in run() (line ~4496) — a rollback under disk pressure must not
     // take the user from "install failed cleanly" to "CC installation broken".
+    // R1 flow finding: a .bak that ITSELF carries injected bytes (the latent
+    // v0.5 backupOnce-on-live hazard, or tampering) must not be silently
+    // copied back as "restored" — --revert would report success while the
+    // seam keeps running. Detect, try to clean it in place, else refuse.
+    const bakSrc = fs.readFileSync(bak, "utf8");
+    if (isExtensionPatched(bakSrc)) {
+        let clean: string | null = stripSeamInPlace(bakSrc);
+        if (clean === null) clean = stripIifeInPlace(bakSrc);
+        if (clean === null || isExtensionPatched(clean)) {
+            fail(
+                "extension.js.bak is itself patched and cannot be auto-cleaned — refusing to restore. Reinstall the Claude Code extension (it ships a pristine extension.js), then re-run cc-status-dot install.",
+            );
+        }
+        warn("extension.js.bak was itself patched — cleaned it via strip before restoring");
+        writeAtomicSync(extJs, clean);
+        writeAtomicSync(bak, clean);
+        log("restored extension.js from a cleaned extension.js.bak");
+        return;
+    }
     atomicCopyFileSync(bak, extJs);
     log("restored extension.js from extension.js.bak");
     // Intentionally keep extension.js.bak as a safety net.
@@ -5490,6 +5516,29 @@ function reportExtensionPatchHealth(extSrc: string): void {
     const patched = isExtensionPatched(extSrc);
     log(`extension.js patched: ${patched ? "YES" : "no"}`);
     if (!patched) return;
+    // v0.6: seam installs report through the seam lens — the anchor-era
+    // marker-count diagnostics below are LEGACY-only (a seam file carries
+    // exactly ONE marker by construction; reporting "A only / blue-dot fix
+    // INACTIVE" against it was a false degradation alarm — R1 flow finding).
+    if (hasSeam(extSrc)) {
+        const ver = injectedVersion(extSrc);
+        const diskHash = injectedIifeHash(extSrc);
+        const wantHash = currentSeamHash();
+        if (ver === INJECT_VERSION && diskHash === wantHash) {
+            log(`  seam prelude: ${ver} hash ${diskHash} (up to date)`);
+        } else {
+            log(
+                `  seam prelude: ${ver ?? "pre-v0.1.3"} hash ${diskHash ?? "-"} (STALE — expected ${INJECT_VERSION}:${wantHash}; re-run to re-inject)`,
+            );
+        }
+        const bakedS = bakedResPath(extSrc);
+        if (bakedS !== null && bakedS !== RUNTIME_RES_DIR) {
+            log(`  baked RES: ${bakedS} (STALE — expected ${RUNTIME_RES_DIR}; re-run to update)`);
+        } else {
+            log(`  baked RES: ${bakedS ?? "(not detectable)"} (matches INSTALL_DIR)`);
+        }
+        return;
+    }
     // Anchor injection health: INJECT_MARKER appears once per injection site
     // (Anchor A always, Anchor B when present). 1 = A only (the blue-dot fix
     // is INACTIVE); 2 = A+B (fix active). A CC update that drifted Anchor B's
@@ -6076,6 +6125,16 @@ function run(argv: string[]): void {
     if (args.includes("--check-iife")) {
         // Dev: dump the injected IIFE string for syntax verification (node --check).
         console.log(buildIIFE(RUNTIME_RES_DIR));
+        return;
+    }
+    if (args.includes("--restore-extension-only")) {
+        // v0.6 test seam (undocumented): restoreExtension against the sandbox
+        // dir ONLY — no hook unwiring, no companion uninstall, no INSTALL_DIR
+        // removal. The gate suite's strip round-trips must never run the full
+        // --revert (R1 HIGH finding: it uninstalled the contributor's real
+        // companion and rewrote their real settings.json).
+        const { dir } = discoverExtension();
+        restoreExtension(dir);
         return;
     }
     if (args.includes("--emit-seam-prelude")) {

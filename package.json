@@ -13,7 +13,7 @@
     "patch": "npx tsx patch.ts",
     "revert": "npx tsx patch.ts --revert",
     "status": "npx tsx patch.ts --status",
-    "test": "node hooks/test-cc-status.js && node hooks/test-iife.mjs && node hooks/test-sbi-aggregation.mjs && node hooks/test-smoke-journey.mjs && node hooks/test-patcher-io.mjs && node hooks/test-version-sync.mjs && node hooks/test-contract-sync.mjs && node hooks/test-favorites.mjs && node hooks/test-smoke-favorites.mjs && node hooks/test-strip-roundtrip.mjs && node hooks/test-anchor-tiers.mjs && node hooks/test-keepalive.mjs && node hooks/test-companion-retry.mjs && node hooks/test-seam-runtime.mjs && node hooks/test-seam-gates.mjs && node hooks/test-standalone-patch.mjs",
+    "test": "node hooks/test-cc-status.js && node hooks/test-iife.mjs && node hooks/test-sbi-aggregation.mjs && node hooks/test-smoke-journey.mjs && node hooks/test-patcher-io.mjs && node hooks/test-version-sync.mjs && node hooks/test-contract-sync.mjs && node hooks/test-favorites.mjs && node hooks/test-smoke-favorites.mjs && node hooks/test-strip-roundtrip.mjs && node hooks/test-anchor-tiers.mjs && node hooks/test-keepalive.mjs && node hooks/test-companion-retry.mjs && node hooks/test-seam-runtime.mjs && node hooks/test-seam-gates.mjs && node hooks/test-canary-judge.mjs && node hooks/test-standalone-patch.mjs",
     "test:writer": "node hooks/test-cc-status.js",
     "test:reader": "node hooks/test-iife.mjs",
     "test:aggregation": "node hooks/test-sbi-aggregation.mjs",
@@ -30,7 +30,7 @@
     "format:check": "prettier --check patch.ts hooks/**/*.js hooks/**/*.mjs companion/extension.ts companion/keepalive.ts companion/keepalive.ts",
     "format": "prettier --write patch.ts hooks/**/*.js hooks/**/*.mjs companion/extension.ts companion/keepalive.ts companion/keepalive.ts",
     "prepare": "husky",
-    "embed-runtime": "rm -rf companion/runtime && mkdir -p companion/runtime/hooks && cp dist/patch.js companion/runtime/ && cp -R dist/src companion/runtime/src && cp -R resources companion/runtime/resources && cp hooks/cc-status.js companion/runtime/hooks/cc-status.js && rm -rf companion/runtime/resources/.devteam"
+    "embed-runtime": "rm -rf companion/runtime && mkdir -p companion/runtime/hooks && cp dist/patch.js companion/runtime/ && cp -R dist/src companion/runtime/src && cp -R resources companion/runtime/resources && cp hooks/cc-status.js companion/runtime/hooks/cc-status.js && rm -rf companion/runtime/resources/.devteam && node -e 'require(\"fs\").writeFileSync(\"companion/runtime/version.json\", JSON.stringify({injectVersion:\"v\"+require(\"./package.json\").version}))'"
   },
   "keywords": [
     "claude-code",
@@ -66,6 +66,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
     "prettier": "^3.3.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.4.0"
   },
   "lint-staged": {

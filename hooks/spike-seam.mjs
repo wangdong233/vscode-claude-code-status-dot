@@ -201,15 +201,43 @@ while (Date.now() < deadline) {
   }
 }
 await new Promise((r) => setTimeout(r, 1500)); // let the 30s-throttled heartbeat land (armed forces one earlier)
+// v0.6 R1 fix: SIGTERM is sometimes ignored by the Electron fleet (R1 gates
+// observed leaked ~340MB fleets). Escalate: TERM → poll 2s → KILL pid+tree,
+// then remove the sandbox dir.
 try {
   vscodeProc.kill();
 } catch {
   /* already gone */
 }
-try {
-  spawnSync('pkill', ['-f', 'ccsd-spike-.*user-data']);
-} catch {
-  /* best effort */
+{
+  const pid = vscodeProc.pid;
+  const t0 = Date.now();
+  let alive = true;
+  while (Date.now() - t0 < 2000) {
+    const ps = spawnSync('ps', ['-p', String(pid), '-o', 'pid='], { encoding: 'utf8' });
+    if ((ps.stdout || '').trim() === '') {
+      alive = false;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  if (alive && pid) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      /* raced away */
+    }
+    try {
+      spawnSync('pkill', ['-9', '-P', String(pid)]);
+    } catch {
+      /* best effort */
+    }
+  }
+  try {
+    spawnSync('pkill', ['-9', '-f', 'ccsd-spike-.*user-data']);
+  } catch {
+    /* best effort */
+  }
 }
 
 check(
@@ -280,6 +308,12 @@ if (probe) {
   }
 }
 
+// sandbox removal LAST — the S2 checks read IDIR under SB above.
+try {
+  fs.rmSync(SB, { recursive: true, force: true });
+} catch {
+  /* best effort */
+}
 console.log(
   fail === 0
     ? `[spike] ALL ${pass} runtime checks PASSED — P4 milestone gate GREEN`

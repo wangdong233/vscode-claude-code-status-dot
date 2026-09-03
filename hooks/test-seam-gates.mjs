@@ -51,6 +51,7 @@ function mkSandbox(extJsContent, pkgJson = '{"name":"fake-cc","version":"2.1.259
   fs.writeFileSync(path.join(extDir, 'package.json'), pkgJson);
   return { sb, exts, extDir, extJs: path.join(extDir, 'extension.js') };
 }
+const ART_INSTALL = path.join(os.tmpdir(), 'ccsd-seam-artifacts-install'); // ONE install dir for emit + every spawn (baked IDIR literal => identical hash)
 function runPatcher(exts, extraEnv = {}) {
   // CCSD_INSTALL_DIR is ALWAYS redirected: --patch-only would otherwise
   // touch the production runtime dir (and --revert DELETES it — the G8/G12
@@ -61,7 +62,7 @@ function runPatcher(exts, extraEnv = {}) {
     env: {
       ...process.env,
       CCSD_EXT_SEARCH_DIR: exts,
-      CCSD_INSTALL_DIR: path.join(path.dirname(exts), 'install'),
+      CCSD_INSTALL_DIR: ART_INSTALL,
       ...extraEnv,
     },
     encoding: 'utf8',
@@ -70,12 +71,16 @@ function runPatcher(exts, extraEnv = {}) {
   return { code: r.status, out: (r.stdout || '') + (r.stderr || '') };
 }
 function runRevert(exts) {
-  const r = spawnSync('npx', ['tsx', PATCH_TS, '--revert'], {
+  // v0.6 R1 fix: gates drive the SANDBOXED strip subcommand — the full
+  // --revert ALSO unwires real ~/.claude/settings.json, uninstalls the real
+  // companion, and (without the INSTALL_DIR redirect) removes the runtime
+  // dir. R1 HIGH finding, bit twice.
+  const r = spawnSync('npx', ['tsx', PATCH_TS, '--restore-extension-only'], {
     cwd: ROOT,
     env: {
       ...process.env,
       CCSD_EXT_SEARCH_DIR: exts,
-      CCSD_INSTALL_DIR: path.join(path.dirname(exts), 'install'),
+      CCSD_INSTALL_DIR: ART_INSTALL,
     },
     encoding: 'utf8',
     timeout: 120_000,
@@ -95,13 +100,25 @@ execFileSync('npx', ['tsx', PATCH_TS, '--emit-seam-prelude', ART], {
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 const art = JSON.parse(fs.readFileSync(ART, 'utf8'));
+// Pre-warm the tsx runner (the first npx spawn after a cache expiry pays a
+// ~30-60s package install; G8's fresh-lock staleness window is 60s, so a cold
+// spin-up made the lock LOOK stale and the patcher legitimately broke it).
+execFileSync('npx', ['tsx', '--version'], { cwd: ROOT, stdio: 'ignore' });
 
 // ---------------------------------------------------------------- G1 banner matrix
-// Simplest robust contract: reuse the shape the companion documents —
-// `/*cc-status-dot-injected:vX.Y.Z(:hex4-16)?*/`. We parse with our own
-// regex mirroring it AND pin that the companion source still contains the
-// marker literal (cross-file sync sentinel).
-const bannerRe = /\/\*cc-status-dot-injected:v[0-9.]+(?::[0-9a-f]{4,16})?\*\//;
+// R1 gates fix: G1 must exercise the COMPANION'S PRODUCTION regex (the one
+// ccPatchState builds at companion/extension.ts), not a local copy — a drift
+// in the production pattern made every seam install read 'stale' forever
+// while this gate stayed green. Extracted from source like test-favorites'
+// comparator pin.
+const extSrcG1 = fs.readFileSync(path.join(ROOT, 'companion', 'extension.ts'), 'utf8');
+check(
+  'G1.x production banner regex shape found in companion source (stable fragments)',
+  extSrcG1.includes('}:v(') && extSrcG1.includes('(?::[0-9a-f]{4,16})?') && extSrcG1.includes('${markerRe}'),
+);
+const markerLit = 'cc-status-dot-injected';
+const markerRe = markerLit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const bannerRe = new RegExp(`${markerRe}:v(\\d+\\.\\d+\\.\\d+)(?::[0-9a-f]{4,16})?\\*`);
 const extSrc = fs.readFileSync(path.join(ROOT, 'companion', 'extension.ts'), 'utf8');
 check('G1.0 companion source still parses the versioned marker (sync sentinel)', /cc-status-dot-injected/.test(extSrc));
 {
@@ -163,6 +180,44 @@ check('G1.0 companion source still parses the versioned marker (sync sentinel)',
     r3.code === 0 && /reverted/.test(r3.out) && after === pristine,
     (after === pristine ? '' : 'BYTES DIFFER; ') + r3.out.slice(-160),
   );
+}
+
+// ---------------------------------------------------------------- G3 directive prologue
+// R1 gates mutation survivor: seamInsertionOffset(return 0) stayed green — a
+// future CC bundle opening with "use strict" would get the prelude BEFORE the
+// directive, silently demoting it (sloppy mode). These fixtures pin the scan.
+{
+  const mkG3 = (head) => head + 'var vscode=require("vscode");module.exports={activate(){}};';
+  const cases = [
+    // [name, bundle head, expected insertion = after the directive prologue]
+    ['plain CJS (byte 0)', '', 0],
+    ['"use strict" directive', '"use strict";', 13],
+    ['single-quote directive', "'use strict';", 13],
+    ['directive with leading comment + spaces', '/* header */\n  "use strict";\n', 29],
+    ['double directives', '"use strict";"use asm";', 23],
+    ['BOM only (insert AFTER BOM)', '\uFEFF', 1],
+    ['BOM + directive', '\uFEFF"use strict";', 14],
+    ['shebang', '#!/usr/bin/env node\n', 20],
+    ['comment-only head (prelude BEFORE comments is fine)', '/* (c) cc */', 12],
+    ['NOT a directive: string concat expression', '"a"+"b";', 0],
+  ];
+  for (const [name, head, want] of cases) {
+    const bundle = mkG3(head);
+    const { exts, extJs } = mkSandbox(bundle);
+    const r = runPatcher(exts);
+    const patched = r.code === 0 ? fs.readFileSync(extJs, 'utf8') : '';
+    // The seam is INSERTED at offset `want` inside the ORIGINAL — the exact
+    // byte contract: patched === original.slice(0,want) + stamped + original.slice(want)
+    // (proving BOTH the directive-aware offset AND byte preservation).
+    const expected = bundle.slice(0, want) + art.stamped + bundle.slice(want);
+    check(
+      `G3 ${name}: prelude inserted at offset ${want} (directive prologue preserved)`,
+      r.code === 0 && patched === expected,
+      r.code === 0
+        ? `BYTES DIFFER (len ${patched.length} vs ${expected.length})`
+        : `exit=${r.code} out=${r.out.slice(-140)}`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------- G2 legacy migration

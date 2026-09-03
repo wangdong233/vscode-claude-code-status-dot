@@ -79,12 +79,7 @@ export function classifyClose(code: number | null, signal: NodeJS.Signals | null
 }
 
 /** Compose the toast Detail: class line first, then stderr tail, then stdout tail. */
-export function composeFailureDetail(
-    cls: CloseClass,
-    stderr: string,
-    stdout: string,
-    tailChars = 500,
-): string {
+export function composeFailureDetail(cls: CloseClass, stderr: string, stdout: string, tailChars = 500): string {
     const parts = [cls.firstLine];
     const errTail = (stderr || "").trim().slice(-tailChars);
     const outTail = (stdout || "").trim().slice(-tailChars);
@@ -95,4 +90,36 @@ export function composeFailureDetail(
         parts.push("note: empty stderr + signal death = the failure produced no in-process error");
     }
     return parts.join("\n").slice(-tailChars * 3);
+}
+
+/** v0.6 seam: deterministic patcher failure classes (stdout machine line
+ *  `ccsd-fail-class:<class>` emitted by patch.ts seamFail before the human
+ *  error). Retrying these is a static no-hop: the SAME bytes will fail the
+ *  SAME way on the next backoff slot, so the companion sets attempts to MAX
+ *  immediately and shows the class-specific copy once. */
+export const SKIP_RETRY_FAIL_CLASSES = ["cc-esm-detected", "seam-precondition-failed", "stale-unknown-format"] as const;
+
+/** Extract the machine fail-class line from patcher stdout (last match wins;
+ *  null when the output carries none — i.e. a runtime-class failure). */
+export function parseFailClass(stdout: string): string | null {
+    if (!stdout) return null;
+    const re = /^ccsd-fail-class:([a-z-]+)\r?$/gm;
+    let m: RegExpExecArray | null = null;
+    let last: string | null = null;
+    while ((m = re.exec(stdout)) !== null) last = m[1];
+    return last;
+}
+
+/** Class-specific user copy for the skip-retry classes. */
+export function failClassHint(cls: string): string {
+    if (cls === "cc-esm-detected") {
+        return "CC extension has moved to an ES-module architecture: status dots need a NEW injection architecture. Wait for a cc-status-dot update — re-running the patcher manually will NOT help.";
+    }
+    if (cls === "seam-precondition-failed") {
+        return "CC architecture changed in a way the patcher cannot attach to. Wait for a cc-status-dot update; manual re-runs will not help.";
+    }
+    if (cls === "stale-unknown-format") {
+        return "extension.js carries an unrecognized cc-status-dot injection. Restore extension.js.bak manually or reinstall the Claude Code extension, then re-run.";
+    }
+    return "";
 }

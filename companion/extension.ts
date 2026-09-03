@@ -69,6 +69,9 @@ import {
     classifyClose as retryClassifyClose,
     composeFailureDetail as retryComposeDetail,
     shouldRetry as retryShouldRetry,
+    parseFailClass as retryParseFailClass,
+    SKIP_RETRY_FAIL_CLASSES,
+    failClassHint as retryFailClassHint,
     type DirPatchState,
     RETRY_MAX_ATTEMPTS,
 } from "./retry-policy";
@@ -109,7 +112,7 @@ const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
  *  to re-run `npx vscode-claude-code-status-dot` so both patch.js AND config
  *  get refreshed together. Bump this ONLY when the config schema or patch.js
  *  CLI contract changes — not on every patcher release. */
-const MIN_PATCHER_VERSION = "0.5.53";
+const MIN_PATCHER_VERSION = "0.6.0";
 
 /** Shape of the JSON config written by patch.ts:writeCompanionConfig(). Every
  *  field is optional from the companion's perspective — a missing or partial
@@ -168,7 +171,7 @@ function injectMarker(): string {
  *  the config is missing. Returned (not const) because it depends on the
  *  runtime-loaded config. */
 function injectVersion(): string {
-    return effectiveConfig?.injectVersion ?? "v0.5.53";
+    return effectiveConfig?.injectVersion ?? "v0.6.0";
 }
 
 /** Effective CC extension id prefix (`anthropic.claude-code`). Used by
@@ -661,6 +664,7 @@ function runPatcher(): Promise<PatchResult> {
  *  again be the only forensic record — the 2026-09-01 incident's true cause
  *  (signal death, empty stderr) was invisible in the stdout-only Detail. */
 function appendLastFailure(entry: Record<string, unknown>): void {
+    // v0.6: ring widened to 10 entries (design §8.2 — F3 post-mortem headroom)
     try {
         const logPath = path.join(INSTALL_DIR, "last-failure.log");
         let ring: unknown[] = [];
@@ -671,7 +675,7 @@ function appendLastFailure(entry: Record<string, unknown>): void {
             /* fresh file */
         }
         ring.push(entry);
-        while (ring.length > 5) ring.shift();
+        while (ring.length > 10) ring.shift();
         const tmp = logPath + ".tmp";
         fs.writeFileSync(tmp, JSON.stringify(ring, null, 1));
         fs.renameSync(tmp, logPath);
@@ -747,8 +751,17 @@ async function detectAndPatchInner(): Promise<void> {
         // under load, external OOM kills — heals on the next backoff retry;
         // toasting on the FIRST failure was the 2026-09-01 UX bug).
         const prev = dirStates.get(extDir);
-        const attempts = (prev && prev.status === "failed" ? prev.attempts : 0) + 1;
+        let attempts = (prev && prev.status === "failed" ? prev.attempts : 0) + 1;
         const cls = retryClassifyClose(result.exitCode, result.closeSignal, result.timerFired);
+        // v0.6: deterministic fail-class (patcher stdout `ccsd-fail-class:…`)
+        // → skip the whole retry ladder (§8.2): same bytes, same verdict on
+        // every backoff slot. attempts is pinned to MAX so the tick's
+        // shouldRetry returns "done" and the one-shot class-specific toast
+        // fires immediately — the silent window exists for TRANSIENT classes
+        // only.
+        const failClass = retryParseFailClass(result.stdout || "");
+        const skipRetry = failClass !== null && (SKIP_RETRY_FAIL_CLASSES as readonly string[]).includes(failClass);
+        if (skipRetry) attempts = RETRY_MAX_ATTEMPTS;
         const nowMs = Date.now();
         dirStates.set(extDir, { status: "failed", attempts, lastAttemptMs: nowMs });
         appendLastFailure({
@@ -758,16 +771,18 @@ async function detectAndPatchInner(): Promise<void> {
             exitCode: result.exitCode,
             signal: result.closeSignal,
             timerFired: result.timerFired,
-            class: cls.kind,
+            class: failClass ?? cls.kind,
+            failClass,
             stderrTail: (result.stderr || "").slice(-500),
             stdoutTail: (result.stdout || "").slice(-500),
         });
         if (attempts >= RETRY_MAX_ATTEMPTS) {
             const detail = retryComposeDetail(cls, result.stderr, result.stdout);
-            const hint =
-                cls.kind === "hard-error"
-                    ? "Run `npx vscode-claude-code-status-dot` manually."
-                    : "Transient class (machine load / external kill) — a later VSCode restart will retry; or run npx manually.";
+            const hint = skipRetry
+                ? retryFailClassHint(failClass ?? "")
+                : cls.kind === "hard-error"
+                  ? "Run `npx vscode-claude-code-status-dot` manually."
+                  : "Transient class (machine load / external kill) — a later VSCode restart will retry; or run npx manually.";
             vscode.window.showErrorMessage(
                 `cc-status-dot: auto-patch failed (${attempts} attempts). ${hint}\nDetail: ${detail}`,
             );
@@ -1057,6 +1072,13 @@ function startRepatchWatcher(extDir: string): void {
         // reality (shows for post-start patches with stale in-memory CC, hides
         // once the user reloads and the IIFE probe __ccsdSbi appears).
         updateReloadBar();
+        // v0.6 seam canary (read-only; NEVER re-patches) + retry-window bar.
+        try {
+            seamCanaryTick();
+            updateRetryBar();
+        } catch {
+            /* canary must never break the tick */
+        }
         const flag = readRepatchFlag();
         if (!flag || flag.ts <= lastTs) return;
         lastTs = flag.ts;
@@ -4044,7 +4066,274 @@ function registerFavorites(ctx: vscode.ExtensionContext): void {
 // 'invisible unless it needs to act' comment was true for v0.2.3–v0.3.1 (no
 // contributions declared, sole job = re-run the patcher) but is stale as of
 // v0.4.0 — the Favorites view IS a declared contribution.
-export function activate(_ctx: vscode.ExtensionContext): void {
+// ---------------------------------------------------------------------------
+// v0.6 seam: heartbeat canary (design §7) + retry-window visibility + the
+// embedded-runtime-set refresh (§5.5). All three are READ-ONLY with respect
+// to the patch decision: a red canary NEVER re-patches (§7.3 — the failure
+// it reports is protocol/architectural, and re-running the patcher on the
+// same bytes cannot change the verdict).
+// ---------------------------------------------------------------------------
+
+interface SeamHeartbeat {
+    v: string;
+    pid: number;
+    bootTs: number;
+    writtenTs: number;
+    surfaces: { panel: number; sidebar: boolean; sessionsList: boolean };
+    armed: number;
+    envelopeFail: number;
+    obs: Record<string, number>;
+    deco: { sbiCreated: boolean; titleShadowOk: number; iconAsserts: number; lastIconAssertTs: number };
+    degraded: { requireRebind: boolean; outboundShadow: boolean; titleShadow: boolean };
+    lastMsgTs: number;
+}
+
+/** Live seam-state-<pid>.json files under INSTALL_DIR (>24h stale ones are
+ *  GC'd best-effort). Liveness = our own pid, a kill(pid,0) probe success, or
+ *  a fresh mtime (<5min) for pids we cannot probe. */
+function readSeamStates(): SeamHeartbeat[] {
+    const out: SeamHeartbeat[] = [];
+    let names: string[] = [];
+    try {
+        names = fs.readdirSync(INSTALL_DIR);
+    } catch {
+        return out;
+    }
+    const now = Date.now();
+    for (const name of names) {
+        if (!/^seam-state-\d+\.json$/.test(name)) continue;
+        const p = path.join(INSTALL_DIR, name);
+        try {
+            const st = fs.statSync(p);
+            if (now - st.mtimeMs > 24 * 60 * 60 * 1000) {
+                try {
+                    fs.unlinkSync(p); // >24h residue — GC (design §7.1)
+                } catch {
+                    /* best-effort */
+                }
+                continue;
+            }
+            const hb = JSON.parse(fs.readFileSync(p, "utf8")) as SeamHeartbeat;
+            if (!hb || typeof hb.pid !== "number") continue;
+            let alive = hb.pid === process.pid;
+            if (!alive) {
+                try {
+                    process.kill(hb.pid, 0);
+                    alive = true;
+                } catch {
+                    alive = now - st.mtimeMs < 5 * 60 * 1000;
+                }
+            }
+            if (alive) out.push(hb);
+        } catch {
+            /* unreadable file — skip */
+        }
+    }
+    return out;
+}
+
+/** Is any hook state file fresh (<5min)? The canary's "hook active but
+ *  observer silent" judgment needs this side of the equation. */
+function hookStateActive(): boolean {
+    try {
+        const names = fs.readdirSync(FAV_STATE_DIR);
+        const now = Date.now();
+        for (const n of names) {
+            if (!n.endsWith(".json") || n === "favorites.json") continue;
+            try {
+                const st = fs.statSync(path.join(FAV_STATE_DIR, n));
+                if (now - st.mtimeMs < 5 * 60 * 1000) return true;
+            } catch {
+                /* raced away */
+            }
+        }
+    } catch {
+        /* no state dir yet — nothing active */
+    }
+    return false;
+}
+
+/** Canary judgment matrix (§7.3), one-shot alarms per EH. */
+const seamCanaryAlarms = new Set<string>();
+let seamObsPrev = -1;
+let seamObsLastNonZeroTs = 0;
+let seamCanaryBar: vscode.StatusBarItem | null = null;
+function seamCanaryTick(): void {
+    const files = readSeamStates();
+    if (files.length === 0) return; // no seam heartbeat yet — canary off
+    let totalObs = 0;
+    let envelopeFail = 0;
+    let panelSurfaces = 0;
+    let iconAsserts = 0;
+    const degraded: string[] = [];
+    for (const hb of files) {
+        for (const k of Object.keys(hb.obs || {})) totalObs += Number(hb.obs[k]) || 0;
+        envelopeFail += Number(hb.envelopeFail) || 0;
+        panelSurfaces += Number(hb.surfaces?.panel) || 0;
+        iconAsserts += Number(hb.deco?.iconAsserts) || 0;
+        if (hb.degraded?.requireRebind) degraded.push("requireRebind");
+        if (hb.degraded?.outboundShadow) degraded.push("outboundShadow");
+        if (hb.degraded?.titleShadow) degraded.push("titleShadow");
+    }
+    if (totalObs > 0) seamObsLastNonZeroTs = Date.now();
+    const hookActive = hookStateActive();
+    const sinceActivate = Date.now() - EH_SINCE;
+
+    const alarm = (key: string, msg: string) => {
+        if (seamCanaryAlarms.has(key)) return; // one-shot per EH
+        seamCanaryAlarms.add(key);
+        try {
+            if (!seamCanaryBar) {
+                seamCanaryBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+                seamCanaryBar.name = "cc-status-dot canary";
+                seamCanaryBar.command = "ccStatusDot.fav.focusSession";
+            }
+            seamCanaryBar.text = "$(alert) cc-status-dot";
+            seamCanaryBar.tooltip = msg;
+            seamCanaryBar.show();
+            console.warn(`[cc-status-dot][CANARY] ${msg}`);
+        } catch {
+            /* never break the tick */
+        }
+    };
+
+    // (a) observation-channel silent: hooks are actively writing session
+    //     state but NO live seam heartbeat has ever observed a message
+    //     (>10min past activation grace). Covers g4/createRequire escapes,
+    //     ESM-internal drift, envelope changes — the unified silent form.
+    if (hookActive && totalObs === 0 && sinceActivate > 10 * 60 * 1000) {
+        alarm(
+            "obs-silent",
+            "cc-status-dot: status-dot observation channel is silent while Claude Code sessions are active. CC likely changed its internal wiring — wait for a cc-status-dot update (this notice will not repeat this session).",
+        );
+    }
+    // (b) protocol drift: envelope violations accumulated, or the observer
+    //     went quiet AFTER previously working. NEVER re-patches.
+    if (envelopeFail >= 10) {
+        alarm(
+            "env-fail",
+            `cc-status-dot: CC protocol drift detected (${envelopeFail} malformed frames). Wait for a cc-status-dot update.`,
+        );
+    } else if (
+        seamObsPrev > 0 &&
+        totalObs === 0 &&
+        hookActive &&
+        seamObsLastNonZeroTs > 0 &&
+        Date.now() - seamObsLastNonZeroTs > 10 * 60 * 1000
+    ) {
+        alarm(
+            "obs-dropped",
+            "cc-status-dot: the observation channel stopped seeing messages (was working earlier). CC likely changed its protocol — wait for an update.",
+        );
+    }
+    // (c) decoration-chain silent: messages flow but no icon was ever
+    //     asserted on a panel-carrying EH (two consecutive ticks, to skip
+    //     the boot race).
+    if (seamObsPrev >= 0 && totalObs > 0 && panelSurfaces > 0 && iconAsserts === 0) {
+        alarm(
+            "deco-silent",
+            "cc-status-dot: messages are observed but no tab decoration was asserted — decoration shadow/mismatch. Heartbeat data is under ~/.claude/cc-status-dot/seam-state-*.json.",
+        );
+    }
+    // (d) degraded flags: passive surface only (tooltip + log), no alarm bar.
+    if (degraded.length > 0) {
+        alarm(
+            "degraded",
+            `cc-status-dot is running degraded (${[...new Set(degraded)].join(", ")}) — dots still work; details in seam-state-*.json.`,
+        );
+    }
+    seamObsPrev = totalObs;
+}
+
+/** Retry-window visibility (§8.2): a lightweight bar while the backoff
+ *  ladder is climbing, so an ~11min silent self-heal window is not mistaken
+ *  for "nothing is happening". */
+let retryBar: vscode.StatusBarItem | null = null;
+function updateRetryBar(): void {
+    try {
+        const g = globalThis as Record<string, unknown>;
+        const states = g[ALREADY_RAN_KEY] as Map<string, DirPatchState> | undefined;
+        let retrying: { attempts: number } | null = null;
+        if (states) {
+            for (const st of states.values()) {
+                if (st.status === "failed" && st.attempts < RETRY_MAX_ATTEMPTS) {
+                    if (!retrying || st.attempts > retrying.attempts) retrying = { attempts: st.attempts };
+                }
+            }
+        }
+        if (retrying) {
+            if (!retryBar) {
+                retryBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 98);
+                retryBar.name = "cc-status-dot retry";
+            }
+            retryBar.text = `$(sync~spin) cc-status-dot: retrying injection (${retrying.attempts}/${RETRY_MAX_ATTEMPTS})`;
+            retryBar.tooltip =
+                "Auto-patch failed once; retrying with exponential backoff (up to ~11 minutes total). Nothing to do — this bar disappears when it succeeds.";
+            retryBar.show();
+        } else if (retryBar) {
+            retryBar.hide();
+        }
+    } catch {
+        /* never break the tick */
+    }
+}
+
+/** v0.6 §5.5: the VSIX embeds a full runtime set (runtime/patch.js + src/ +
+ *  resources/ + hooks/cc-status.js, copied at package time). When
+ *  INSTALL_DIR's patcherVersion is OLDER than this companion, refresh the
+ *  set from the embedded copy so a VSIX-first upgrade never leaves the
+ *  companion re-execing a stale patcher (the old flow only WARNED). Atomic
+ *  per file (tmp+rename); never downgrades — we only run when config is
+ *  older than MIN_PATCHER_VERSION, and the embedded set is by definition at
+ *  MIN. */
+function refreshEmbeddedRuntime(ctx: vscode.ExtensionContext): boolean {
+    try {
+        const cfg = readCompanionConfig();
+        const cmp = getCmpVerStr();
+        if (!cfg || typeof cfg.patcherVersion !== "string" || !cmp) return false;
+        if (cmp(cfg.patcherVersion, MIN_PATCHER_VERSION) >= 0) return false; // INSTALL_DIR current (or newer — never downgrade)
+        const embedded = path.join(ctx.extensionPath, "runtime");
+        if (!fs.existsSync(path.join(embedded, "patch.js"))) return false; // VSIX without the embedded set — npx owns INSTALL_DIR
+        const copyAtomic = (srcP: string, dstP: string) => {
+            fs.mkdirSync(path.dirname(dstP), { recursive: true });
+            const tmp = dstP + ".ccsd-tmp";
+            fs.copyFileSync(srcP, tmp);
+            fs.renameSync(tmp, dstP);
+        };
+        copyAtomic(path.join(embedded, "patch.js"), path.join(INSTALL_DIR, "patch.js"));
+        for (const sub of ["src", "resources", "hooks"]) {
+            const srcDir = path.join(embedded, sub);
+            let names: string[] = [];
+            try {
+                names = fs.readdirSync(srcDir);
+            } catch {
+                continue;
+            }
+            for (const n of names) {
+                const sp = path.join(srcDir, n);
+                try {
+                    if (fs.statSync(sp).isFile()) copyAtomic(sp, path.join(INSTALL_DIR, sub, n));
+                } catch {
+                    /* best-effort per file */
+                }
+            }
+        }
+        // Bump the config's patcherVersion so every accessor (injectVersion
+        // fallback included) sees the refreshed set. Merge-write, atomic.
+        const next = { ...cfg, patcherVersion: MIN_PATCHER_VERSION } as CompanionConfig;
+        const tmp = CONFIG_PATH + ".ccsd-tmp";
+        fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
+        fs.renameSync(tmp, CONFIG_PATH);
+        effectiveConfig = next;
+        console.log("[cc-status-dot] refreshed stale INSTALL_DIR runtime set from the embedded VSIX copy");
+        return true;
+    } catch (e) {
+        console.warn(`[cc-status-dot][WARN] embedded runtime refresh failed: ${(e as Error)?.message ?? e}`);
+        return false;
+    }
+}
+
+export function activate(ctx: vscode.ExtensionContext): void {
     // v0.2.3: load the patcher-written config FIRST so all subsequent
     // accessors (injectMarker / injectVersion / searchDirs / ccExtIdPrefix)
     // see the refreshed values. If the config is missing (older patcher
@@ -4059,16 +4348,15 @@ export function activate(_ctx: vscode.ExtensionContext): void {
         // -hash mismatch on the next patcher run.
         const cmp = getCmpVerStr();
         if (typeof cfgVer === "string" && cmp && cmp(cfgVer, MIN_PATCHER_VERSION) < 0) {
-            // Stale INSTALL_DIR/patch.js snapshot: the user did
-            // `npm install -g ...@latest` (refreshed the .vsix + companion)
-            // WITHOUT re-running the bin (so INSTALL_DIR/patch.js is still
-            // the older version that wrote this older config). Warn so they
-            // know to re-run `npx vscode-claude-code-status-dot` — the
-            // companion will otherwise keep re-execing the older patch.js
-            // logic (which may lack anchor updates for newer CC versions).
-            void vscode.window.showWarningMessage(
-                `cc-status-dot: INSTALL_DIR/patch.js is older (v${cfgVer}) than the companion expects (v${MIN_PATCHER_VERSION}+). Run \`npx vscode-claude-code-status-dot\` to refresh the patcher copy so auto-re-patch keeps up with new Claude Code releases.`,
-            );
+            // v0.6 (§5.5): VSIX-first upgrade with a stale INSTALL_DIR — the
+            // embedded runtime set heals it automatically. Only when the VSIX
+            // carries no embedded set (npx-installed flow, where the npm
+            // package owns INSTALL_DIR) do we fall back to the v0.5 warn.
+            if (!refreshEmbeddedRuntime(ctx)) {
+                void vscode.window.showWarningMessage(
+                    `cc-status-dot: INSTALL_DIR/patch.js is older (v${cfgVer}) than the companion expects (v${MIN_PATCHER_VERSION}+). Run \`npx vscode-claude-code-status-dot\` to refresh the patcher copy so auto-re-patch keeps up with new Claude Code releases.`,
+                );
+            }
         }
     }
 
@@ -4104,7 +4392,7 @@ export function activate(_ctx: vscode.ExtensionContext): void {
     // patched CC simply shows "(closed)" for every session favorite until the
     // patch lands + the user reloads (R5 mitigation per FAVORITES-DESIGN.md).
     try {
-        registerFavorites(_ctx);
+        registerFavorites(ctx);
     } catch (e) {
         // Surface but do not break activation — the safety net (detectAndPatch)
         // is the load-bearing half of this extension.

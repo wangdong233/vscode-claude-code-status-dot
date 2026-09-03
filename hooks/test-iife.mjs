@@ -407,7 +407,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.5.53 stamp', /\/\*cc-status-dot-injected:v0.5.53:/.test(iife));
+check('IIFE.21c banner carries v0.6.0 stamp', /\/\*cc-status-dot-injected:v0\.6\.0:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -524,8 +524,8 @@ check(
   'v0.5.12 perf: guard prevents duplicate timers; tick extracted to named __ccsdSbiTick + invoked once immediately after setInterval registration (four-light first paint without waiting 500ms)',
 );
 check(
-  'IIFE.25b v0.5.23 §H per-panel tick reads sid.json DIRECTLY (no __ccsdAgCache — fixes §H/§F decay divergence; v0.5.35: pend carries the third __ccsdUserDialogSet OR term)',
-  /st=j\.state;since=j\.since;err=j\.error\|\|"";pend=\(j\.pending===true\)\|\|\(globalThis\.__ccsdPendingSet&&globalThis\.__ccsdPendingSet\[sid\]===true\)\|\|\(globalThis\.__ccsdUserDialogSet&&globalThis\.__ccsdUserDialogSet\[sid\]===true\)\}catch\(e\)\{\}/.test(
+  'IIFE.25b v0.5.23 §H per-panel tick reads sid.json DIRECTLY (no __ccsdAgCache; v0.5.35 pend +__ccsdUserDialogSet OR term; v0.6 seam pend +__ccsdToolPermSet/__ccsdWireState OR terms — five-state table §6.4)',
+  /st=j\.state;since=j\.since;err=j\.error\|\|"";pend=\(j\.pending===true\)\|\|\(globalThis\.__ccsdPendingSet&&globalThis\.__ccsdPendingSet\[sid\]===true\)\|\|\(globalThis\.__ccsdUserDialogSet&&globalThis\.__ccsdUserDialogSet\[sid\]===true\)\|\|\(globalThis\.__ccsdToolPermSet&&globalThis\.__ccsdToolPermSet\[sid\]===true\)\|\|\(globalThis\.__ccsdWireState&&globalThis\.__ccsdWireState\[sid\]==="waiting_input"\)\}catch\(e\)\{\}/.test(
     iife,
   ) && !/__ccsdAgCache[\s\S]{0,100}?__ch\.j/.test(iife),
   'v0.5.23: §H reads sid.json directly (JSON.parse(readFileSync)), NOT via §F cache. QW4 (v0.5.12 cache reuse) caused §H/§F tick desync — §H read stale cache (running, since=old) while §F read fresh (done, since=Stop) → §H decayed to idle (gray) while §F stayed done (green). Direct read ensures §H always reads latest, same as §F. v0.5.35: pend OR-chain extended with __ccsdUserDialogSet (consent/refusal coverage) mirroring §F.',

@@ -149,8 +149,8 @@ check(
     /exitCode: code,/.test(extSrc),
 );
 check(
-  'W.7 last-failure.log lives under INSTALL_DIR with a 5-entry ring',
-  /path\.join\(INSTALL_DIR, "last-failure\.log"\)/.test(extSrc) && /ring\.length > 5/.test(extSrc),
+  'W.7 last-failure.log lives under INSTALL_DIR with a 10-entry ring (v0.6 widened)',
+  /path\.join\(INSTALL_DIR, "last-failure\.log"\)/.test(extSrc) && /ring\.length > 10/.test(extSrc),
 );
 check(
   'W.8 marker-absent post-verify branch also records a failure for retry',
@@ -163,13 +163,19 @@ check(
   'P.1 assertCompiles execFileSync has timeout: 10000',
   /execFileSync\(process\.execPath, \["--check", tmp\], \{[\s\S]{0,900}?timeout: 10000,/.test(patchSrc),
 );
-check(
-  'P.2 stall markers precede assertCompiles and writeAtomicSync',
-  patchSrc.indexOf('log("syntax gate (node --check)…")') > 0 &&
-    patchSrc.indexOf('log("syntax gate (node --check)…")') <
-      patchSrc.indexOf('assertCompiles(next, "patched extension.js")') &&
-    patchSrc.indexOf('log("writing extension.js…")') < patchSrc.indexOf('writeAtomicSync(extJs, next)'),
-);
+{
+  // v0.6: TWO call sites (legacy injectFresh retired; injectSeamFresh live).
+  // Pin the LIVE one (seam) and its write marker ordering.
+  const gateIdx = patchSrc.indexOf('assertCompiles(next, "patched extension.js (seam prelude)")');
+  const markerIdx = patchSrc.indexOf('log("syntax gate (node --check)…")');
+  const writeMarkerIdx = patchSrc.indexOf('log("writing extension.js…")');
+  const writeIdx = patchSrc.indexOf('writeAtomicSync(extJs, next)');
+  check(
+    'P.2 stall markers precede the seam assertCompiles and writeAtomicSync',
+    gateIdx > 0 && markerIdx > 0 && markerIdx < gateIdx && writeMarkerIdx > 0 && writeMarkerIdx < writeIdx,
+    `gate=${gateIdx} marker=${markerIdx} writeMarker=${writeMarkerIdx} write=${writeIdx}`,
+  );
+}
 
 if (fail === 0) console.log(`All ${pass} companion-retry checks passed.`);
 else {

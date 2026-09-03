@@ -217,6 +217,16 @@ cc-status-dot — token stats & config
 
 - CC 自动更新覆盖了 patched `extension.js`。重跑 `npx vscode-claude-code-status-dot`（SVG/hook 运行时副本在 `INSTALL_DIR`，CC 更新不碰它；项目源目录删了也不影响）。
 
+### 4.x v0.6 seam 架构(状态点对 CC 更新免疫)
+
+v0.6 起注入方式从"锚点字符串替换"换为 **seam 零锚注入**(bundle 头部自包含前导 + require 重绑 + API 表面观察)。不再依赖 CC 内部代码形状——CC 正常更新不再需要等本插件适配。你可能会看到的新提示:
+
+- **`cc-status-dot: retrying injection (n/5)`** 状态栏项:注入失败后正在指数退避重试(总计约 11 分钟内自愈),无需操作。
+- **`$(alert) cc-status-dot`** 金丝雀:观察通道静默/协议漂移/装饰失配的一次性提醒——这表示 CC 变更了内部接线,等待本插件更新即可,**重跑 npx 无效**(金丝雀只读,永不触发重复注入)。
+- **`CC extension has moved to an ES-module architecture`**:CC 若 ESM 化,当前注入架构到寿;等待新版(继任方案已预研,见 docs/ADR-001)。
+
+诊断数据:`~/.claude/cc-status-dot/seam-state-<pid>.json`(分层心跳:表面/观察计数/装饰断言/降级旗标)与 `last-failure.log`(最近 10 次注入失败取证)。
+
 ## 5. 还原
 
 ```bash

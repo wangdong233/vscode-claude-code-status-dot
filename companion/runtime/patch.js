@@ -60,7 +60,6 @@
  *   - Each CC panel instance runs its own 500 ms timer (N tabs = N timers).
  *     Each tick is one tiny readFileSync; acceptable for normal use.
  * ------------------------------------------------------------------------- */
-
 import * as cp from "child_process";
 import * as crypto from "crypto";
 import * as fs from "fs";
@@ -86,27 +85,26 @@ import { fileURLToPath } from "url";
 import { cmpVerStr } from "./src/semver.js";
 import { stripJsonc } from "./src/jsonc.js";
 import { surgicalSetTopLevelKey, surgicalRemoveTopLevelKey } from "./src/surgical-json.js";
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
 /** Directory this script FILE lives in.
  *  Works under `tsx` (patch.ts at project root) and compiled ESM
  *  (dist/patch.js in the published package): this package is always ESM
  *  (package.json "type":"module" + tsconfig NodeNext), so import.meta.url is
  *  always available and is the reliable locator (under ESM __dirname is unset). */
-const SCRIPT_DIR: string = (() => {
+const SCRIPT_DIR = (() => {
     try {
-        const url = (import.meta as { url?: string }).url;
-        if (url) return path.dirname(fileURLToPath(url));
-    } catch {
+        const url = import.meta.url;
+        if (url)
+            return path.dirname(fileURLToPath(url));
+    }
+    catch {
         /* import.meta unavailable — extremely unlikely under our ESM setup */
     }
     // Last-resort fallback (only if import.meta.url ever surprises us).
     return path.dirname(path.resolve(process.argv[1] ?? process.cwd()));
 })();
-
 /** Project root = the directory holding the SOURCE `resources/` and `hooks/` we
  *  copy FROM at install time.
  *  - Dev (`npx tsx patch.ts`): SCRIPT_DIR is the project root → resources/ and
@@ -114,7 +112,7 @@ const SCRIPT_DIR: string = (() => {
  *  - Compiled (`node dist/patch.js`): SCRIPT_DIR is dist/; the published package
  *    ships resources/ and hooks/ one level up, so resolve to the parent.
  *  Auto-detect by checking which candidate actually holds BOTH dirs. */
-const PROJECT_ROOT: string = (() => {
+const PROJECT_ROOT = (() => {
     for (const c of [SCRIPT_DIR, path.dirname(SCRIPT_DIR)]) {
         if (fs.existsSync(path.join(c, "resources")) && fs.existsSync(path.join(c, "hooks"))) {
             return c;
@@ -122,7 +120,6 @@ const PROJECT_ROOT: string = (() => {
     }
     return SCRIPT_DIR;
 })();
-
 /** Substring baked into the injected JS block. Presence in extension.js === "already patched".
  *  MUST be a block comment (/* *​/) — a // line comment would comment out the rest of the
  *  minified single line and brick the extension.
@@ -134,7 +131,6 @@ const PROJECT_ROOT: string = (() => {
  *  detect an IIFE whose *logic* is stale even though the marker is present —
  *  see patchExtension. */
 const INJECT_MARKER = "cc-status-dot-injected";
-
 /** Version stamped into the injected IIFE banner comment. Bump whenever the
  *  IIFE *logic* changes (NOT just the baked RES path). On install, if the
  *  marker is present but the stamped version differs from this const,
@@ -147,7 +143,6 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
 const INJECT_VERSION = "v0.6.0";
-
 /** v0.6 seam: the second prelude line identifies the seam architecture + its
  *  own version. Byte form `/*ccsd2:begin:seam:vX.Y.Z*​/` … `/*ccsd2:end*​/`
  *  brackets a DETERMINISTIC region (by construction — the prelude never
@@ -157,13 +152,6 @@ const INJECT_VERSION = "v0.6.0";
  *  working across a mixed npx/VSIX skew — see docs/design-v0.6-seam.md §5.2. */
 const SEAM_BEGIN_TAG = "ccsd2:begin:seam:";
 const SEAM_END_TAG = "ccsd2:end";
-
-/** v0.6 seam patcher machine-readable failure classes (stdout line
- *  `ccsd-fail-class:<class>`; companion parses these to branch the retry
- *  policy — deterministic classes skip retry entirely, see §8.2 of the
- *  design doc). */
-type SeamFailClass = "seam-precondition-failed" | "cc-esm-detected" | "stale-unknown-format";
-
 /** Length (hex chars) of the content-hash suffix appended to the version stamp
  *  in the IIFE banner (cc-status-dot-injected:vX.Y.Z:HASH). The hash captures
  *  intra-version drift — dev iterations that change buildIIFE() output without
@@ -173,11 +161,9 @@ type SeamFailClass = "seam-precondition-failed" | "cc-esm-detected" | "stale-unk
  *  content change forces a .bak restore + re-inject. 8 hex chars = 32 bits =
  *  collision space of ~4 billion, plenty for a per-version stamp. */
 const STAMP_HASH_LEN = 8;
-
 /** Substring appended (as a shell comment) to every hook command we own in settings.json.
  *  Used for idempotent dedupe on install and surgical removal on --revert. */
 const HOOK_MARKER = "cc-status-dot-managed";
-
 /** Version banner stamped at the top of hooks/cc-status.js
  *  (`cc-status-dot-hook:vX.Y.Z`). Mirrors the IIFE's INJECT_VERSION+hash gate
  *  so installRuntimeFiles can detect a stale on-disk hook copy the same way
@@ -193,7 +179,6 @@ const HOOK_MARKER = "cc-status-dot-managed";
  *  hooks/cc-status.js. */
 const HOOK_VERSION = "v0.2.3";
 const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
-
 /** CC extension version against which the anchor strings (ANCHOR_A / ANCHOR_B)
  *  were last verified byte-exact. Historical rationale: the
  *  'verified byte-exact against CC X.Y.Z' comment lived inline at the anchor
@@ -205,7 +190,6 @@ const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
  *  upgrade; install does NOT hard-gate (preserves forward compat — a future CC
  *  that keeps the anchor bytes identical still installs cleanly). */
 const LAST_VERIFIED_CC = "2.1.240";
-
 /** Length (hex chars) of the content-hash suffix appended to the writer hook
  *  banner (`cc-status-dot-hook:vX.Y.Z:HASH`). Mirrors STAMP_HASH_LEN — same
  *  sha1-over-body scheme as the IIFE hash, so a dev iteration on
@@ -220,7 +204,6 @@ const LAST_VERIFIED_CC = "2.1.240";
  *  hash closes that gap: install compares BOTH version AND body hash,
  *  --status surfaces either drift. */
 const HOOK_HASH_LEN = 8;
-
 /** Redraw cadence (ms). 500 drives:
  *   - the interrupted on/off flash (flashSeq%2 → ~500 ms on, ~500 ms off — an
  *     alert-grade fast flash),
@@ -232,16 +215,13 @@ const HOOK_HASH_LEN = 8;
  *   needs it and the static states are a cheap no-op read. One tiny
  *   readFileSync per tick. */
 const TICK_MS = 500;
-
 /** Per-session state directory read by the injected timer. */
 const STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status");
-
 // --- v0.2.4: writer↔reader contract constants (single source of truth) -----
 // These mirror the writer's same-named consts in hooks/cc-status.js. The
 // writer is a standalone .js (no import from this ESM patcher), so each side
 // holds a copy — hooks/test-contract-sync.mjs pins the literal values so
 // drift fails CI. Any contract change touches BOTH files in lockstep.
-
 /** Token-stats window keys + insertion order. The writer (TOK_WIN_KEYS in
  *  cc-status.js) derives TOK_WINDOWS from this same array; the reader IIFE
  *  bakes the array (via JSON.stringify) into both the QuickPick detail string
@@ -251,8 +231,7 @@ const STATE_DIR = path.join(os.homedir(), ".claude", "cc-tab-status");
  *  would have required hunting 5 sites. Now the IIFE sites derive from this
  *  const; the writer derives from its own copy; the test corpus is the
  *  cross-file pin. */
-const TOK_WIN_KEYS = ["5min", "10min", "1h", "24h", "3d", "7d", "30d", "all"] as const;
-
+const TOK_WIN_KEYS = ["5min", "10min", "1h", "24h", "3d", "7d", "30d", "all"];
 /** Token-stats window key → millisecond span. Mirrors the writer's TOK_WINDOWS
  *  in hooks/cc-status.js (line 503) — the writer is the source of truth for
  *  the bucket cutoff (deriveTokensField iterates TOK_WINDOWS via Object.keys,
@@ -267,7 +246,7 @@ const TOK_WIN_KEYS = ["5min", "10min", "1h", "24h", "3d", "7d", "30d", "all"] as
  *  into the IIFE); hooks/test-contract-sync.mjs pins the values against the
  *  writer's TOK_WINDOWS so a future tuning edit (e.g. 15min) touching only
  *  one side fails CI. */
-const TOK_WIN_MS: Record<(typeof TOK_WIN_KEYS)[number], number> = {
+const TOK_WIN_MS = {
     "5min": 5 * 60 * 1000,
     "10min": 10 * 60 * 1000,
     "1h": 60 * 60 * 1000,
@@ -277,7 +256,6 @@ const TOK_WIN_MS: Record<(typeof TOK_WIN_KEYS)[number], number> = {
     "30d": 30 * 24 * 60 * 60 * 1000,
     all: Infinity,
 };
-
 /** Extension for the per-source byte-offset sidecar (writer↔reader contract).
  *  The writer (TOK_OFFSET_EXT in cc-status.js) writes JSON to this file; the
  *  IIFE reader never reads it (only the writer does). v0.2.4 round-3
@@ -311,14 +289,12 @@ const TOK_WIN_MS: Record<(typeof TOK_WIN_KEYS)[number], number> = {
  *  IIFE bytes automatically (the cross-file contract test catches a writer
  *  rename; this catches the IIFE drift on the reader side). */
 const TOK_OFFSET_EXT = ".offset";
-
 /** Extension for the "force full re-read next fire" marker (writer↔reader
  *  contract). The QuickPick reset handler writes a `<sid>.forcereread` marker;
  *  the writer's TOK_EVENTS branch consumes it on the next fire. The writer
  *  also GCs stale markers under the same name. Naming it here + baking into
  *  the IIFE makes a future rename touch both sides at once. */
 const TOK_FORCEREREAD_EXT = ".forcereread";
-
 /** Extension for the independent token-snapshot file (writer↔reader contract).
  *  v0.2.7 (Q1 fix): the hook writes `<sid>.tokens.json` on every TOK_EVENT
  *  fire alongside `<sid>.json`. The IIFE reader (readTok below) prefers this
@@ -330,7 +306,6 @@ const TOK_FORCEREREAD_EXT = ".forcereread";
  *  truth: this const + the writer's TOK_TOKENS_EXT are pinned by
  *  hooks/test-contract-sync.mjs. */
 const TOK_TOKENS_EXT = ".tokens.json";
-
 /** Interrupted-state retention threshold (writer↔reader contract, §7.5).
  *  Crashed/killed CC sessions whose writer wrote state=interrupted never send
  *  SessionEnd, so without a retention heuristic the 🔴 light would grow
@@ -359,7 +334,6 @@ const TOK_TOKENS_EXT = ".tokens.json";
  *  terminal session" horizon on both the interrupted-preservation path
  *  (§7.5) and the drift-prune path (§7.5 contract). */
 const INTERRUPTED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-
 /** Done-state to idle decay threshold (writer↔reader contract, §4).
  *  Reader-side: a `done` session older than this decays to idle for COUNTING
  *  (the green 🟢 light only reflects ACTIVELY-done sessions; a session done
@@ -369,7 +343,6 @@ const INTERRUPTED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  *  not have its own decay threshold for done (it just writes state=done and
  *  lets the reader apply the rule). */
 const DONE_TO_IDLE_MS = 5 * 60 * 1000;
-
 /** Stale-running heuristic threshold (writer↔reader contract, §7.2).
  *  Reader-side: SBI aggregation decay — a `running` file whose `since` is older
  *  than this decays to idle for COUNTING (the 🟡 light only reflects sessions
@@ -395,7 +368,6 @@ const DONE_TO_IDLE_MS = 5 * 60 * 1000;
  *  preserved (drifted Stop heartbeats refresh the state-file mtime but NOT
  *  the transcript → stale transcript → decay still fires). */
 const SBI_RUNNING_STALE_MS = 30 * 60 * 1000;
-
 /** v0.5.49 (as-protection expiry): mtime is the per-EVENT liveness witness for
  *  the running-decay activeSubagents gate. Every non-null deriveStatus hook
  *  event rewrites <sid>.json via atomic tmp+rename (incl. SubagentStart /
@@ -418,7 +390,6 @@ const SBI_RUNNING_STALE_MS = 30 * 60 * 1000;
  *  true). mt missing (stat miss) fails TOWARD decay, mirroring the §F
  *  cache-miss precedent. */
 const SBI_AS_PROTECT_MAX_MS = 24 * 60 * 60 * 1000;
-
 /** v0.5.52 (mtime fallback witness): a running file with NO tokens.last_ts
  *  (the spawn's UserPromptSubmit wrote running, then zero follow-up events —
  *  the cc-control SDK test/council spawn class) previously NEVER decayed
@@ -435,7 +406,6 @@ const SBI_MISSING_LT_STALE_MS = 2 * 60 * 60 * 1000;
  *  record phantom suspends = stay-yellow-longer (the safe direction). */
 const CCSD_SUSPEND_GAP_MS = 5 * 1000;
 const CCSD_LEDGER_MAX_IV = 64;
-
 /** Persistent runtime install dir. A copy of resources/*.svg + hooks/cc-status.js
  *  lives here so the patched extension and the CC hook keep working even if the
  *  source project dir is removed or the npx cache is purged. The injected IIFE
@@ -453,16 +423,14 @@ const CCSD_LEDGER_MAX_IV = 64;
  *  covered). The override is consumed at process start (here) so every downstream
  *  reference (RUNTIME_RES_DIR, COMPANION_CONFIG_PATH, LAST_REPATCH_PATH, the
  *  status reporter) tracks it automatically. */
-const INSTALL_DIR: string = process.env.CCSD_INSTALL_DIR
+const INSTALL_DIR = process.env.CCSD_INSTALL_DIR
     ? path.resolve(process.env.CCSD_INSTALL_DIR)
     : path.join(os.homedir(), ".claude", "cc-status-dot");
-
 /** Runtime resources dir — the absolute path baked into the injected IIFE.
  *  A const (not a fn) because INSTALL_DIR is itself a const: the path is fixed
  *  once the patcher starts and never varies between call sites. Keeps it in
  *  line with the sibling UPPER_SNAKE path consts. */
 const RUNTIME_RES_DIR = path.join(INSTALL_DIR, "resources");
-
 /** All SVGs the IIFE can reference + installRuntimeFiles copies + cleanup
  *  keeps. Since v0.1.4 running is again a **single static yellow dot**
  *  (`claude-logo-running.svg`, fill #CCA700) — the v0.1.3 8-frame breathing
@@ -497,7 +465,6 @@ const OUR_SVGS = [
     "claude-logo-error-arch.svg",
     "claude-logo-pending-arch.svg",
 ];
-
 /** Extension directories to search, highest version wins. */
 // v0.6 test seam: CCSD_EXT_SEARCH_DIR (when set) REPLACES the search list —
 // sandboxed gates (hooks/test-seam*.mjs) + the runtime spike point the patcher
@@ -505,13 +472,12 @@ const OUR_SVGS = [
 const SEARCH_DIRS = process.env.CCSD_EXT_SEARCH_DIR
     ? [process.env.CCSD_EXT_SEARCH_DIR]
     : [
-          path.join(os.homedir(), ".vscode", "extensions"),
-          path.join(os.homedir(), ".vscode-insiders", "extensions"),
-          path.join(os.homedir(), ".vscode-server", "extensions"), // remote/SSH scenarios
-          path.join(os.homedir(), ".cursor", "extensions"),
-          path.join(os.homedir(), ".vscodium", "extensions"),
-      ];
-
+        path.join(os.homedir(), ".vscode", "extensions"),
+        path.join(os.homedir(), ".vscode-insiders", "extensions"),
+        path.join(os.homedir(), ".vscode-server", "extensions"), // remote/SSH scenarios
+        path.join(os.homedir(), ".cursor", "extensions"),
+        path.join(os.homedir(), ".vscodium", "extensions"),
+    ];
 /** CC hook events that feed session-state transitions to cc-status.js.
  *  MUST equal the event set handled by hooks/cc-status.js (docs/STATES.md §2).
  *  SubagentStart / SubagentStop feed the activeSubagents early-signal counter
@@ -547,12 +513,10 @@ const HOOK_EVENTS = [
     "StopFailure",
     "SessionEnd",
     "PostCompact",
-] as const;
-
+];
 // ---------------------------------------------------------------------------
 // SBI 4-light definitions (visual rationale: see docs/STATES.md §7 + companion/CHANGELOG.md (up to 0.5.9))
 // ---------------------------------------------------------------------------
-
 /** v0.2.3 — companion VS Code extension (NOT published to Marketplace; shipped
  *  inside this npm package as dist/cc-status-dot-companion-<ver>.vsix and
  *  installed into the user's VS Code via `code --install-extension` at install
@@ -577,9 +541,11 @@ const COMPANION_VERSION = (() => {
     // (vsix filename + --status + downgrade guard + log lines).
     try {
         const p = path.join(PROJECT_ROOT, "companion", "package.json");
-        const meta = JSON.parse(fs.readFileSync(p, "utf8")) as { version?: string };
-        if (meta.version && /^\d+\.\d+\.\d+/.test(meta.version)) return meta.version;
-    } catch {
+        const meta = JSON.parse(fs.readFileSync(p, "utf8"));
+        if (meta.version && /^\d+\.\d+\.\d+/.test(meta.version))
+            return meta.version;
+    }
+    catch {
         // fall through — corrupt or missing companion/package.json
     }
     // Last-resort fallback so the patcher never hard-fails on a missing
@@ -588,7 +554,6 @@ const COMPANION_VERSION = (() => {
     return "0.2.0";
 })();
 const COMPANION_VSIX = `dist/cc-status-dot-companion-${COMPANION_VERSION}.vsix`;
-
 /** This patcher's own version — single source of truth is the top-level
  *  package.json (`version` field). Read at runtime so a bump in package.json
  *  flows everywhere automatically. Used to stamp `INSTALL_DIR/companion-config.json`
@@ -602,15 +567,16 @@ const COMPANION_VSIX = `dist/cc-status-dot-companion-${COMPANION_VERSION}.vsix`;
 const PATCHER_VERSION = (() => {
     try {
         const p = path.join(PROJECT_ROOT, "package.json");
-        const meta = JSON.parse(fs.readFileSync(p, "utf8")) as { version?: string };
-        if (meta.version && /^\d+\.\d+\.\d+/.test(meta.version)) return meta.version;
-    } catch {
+        const meta = JSON.parse(fs.readFileSync(p, "utf8"));
+        if (meta.version && /^\d+\.\d+\.\d+/.test(meta.version))
+            return meta.version;
+    }
+    catch {
         // fall through — corrupt or missing top-level package.json
     }
     // Last-resort fallback. Bump only when bumping the package version itself.
     return "0.2.0";
 })();
-
 /** Path of the JSON config the patcher writes into INSTALL_DIR at install time
  *  so the companion can read its constants (INSTALL_DIR / INJECT_MARKER /
  *  INJECT_VERSION / SEARCH_DIRS / ccExtIdPrefix / patchJsPath / patcherVersion)
@@ -620,7 +586,6 @@ const PATCHER_VERSION = (() => {
  *  requires shipping a new .vsix; the next `npx` run refreshes the config and
  *  the already-installed companion picks it up. */
 const COMPANION_CONFIG_PATH = path.join(INSTALL_DIR, "companion-config.json");
-
 /** Path of the JSON "repatch flag" the patcher writes after every successful
  *  --patch-only run (so the companion that did the patch writes it, AND so do
  *  subsequent companion runs in OTHER VS Code windows / a manual `npx` run).
@@ -630,12 +595,10 @@ const COMPANION_CONFIG_PATH = path.join(INSTALL_DIR, "companion-config.json");
  *  closing the "Window 2/3 still have stale CC memory after Window 1 patched"
  *  gap. */
 const LAST_REPATCH_PATH = path.join(INSTALL_DIR, "last-repatch.json");
-
 /** Marker stamped into CC's package.json by the abandoned v0.1.13 commandCenter
  *  patch. Kept only so install can DETECT stale v0.1.13 residue (and --revert
  *  can clean it) — v0.1.14+ no longer writes this field. */
 const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
-
 /** The 4 lights, in fixed left→right display order. Each entry pins the
  *  light's "on" emoji ball. This table is the SINGLE source of truth consumed
  *  by buildIIFE (baked into the IIFE's `var CFG=[...]` via JSON.stringify)
@@ -675,13 +638,12 @@ const PKG_MARKER_FIELD = "__ccStatusDotPkgManaged";
  *
  *  Visual-design rationale (why emoji balls vs ThemeColor blocks, why these
  *  4 codepoints, why single-SBI concat vs v0.1.16 4-SBI): see docs/STATES.md §7. */
-const SBI_LIGHTS_CFG: ReadonlyArray<{ key: string; em: string }> = [
+const SBI_LIGHTS_CFG = [
     { key: "done", em: "\u{1F7E2}" }, // 🟢 leftmost
     { key: "running", em: "\u{1F7E1}" }, // 🟡
     { key: "pending", em: "\u{1F535}" }, // 🔵
     { key: "interrupted", em: "\u{1F534}" }, // 🔴 rightmost
 ];
-
 /** Priority of the single v0.1.17 StatusBarItem (StatusBarAlignment.Left).
  *  Replaces the v0.1.15/v0.1.16 per-light `pri` field that used to live in
  *  SBI_LIGHTS_CFG. -9996 keeps the SBI rightmost among Left items (closest
@@ -690,7 +652,6 @@ const SBI_LIGHTS_CFG: ReadonlyArray<{ key: string; em: string }> = [
  *  (the user's "位置固定" (fixed-position) requirement covers BOTH per-light slot position
  *  AND whole-bar position — this const holds the latter). */
 const SBI_PRIORITY = -9996;
-
 /** Dim/zero emoji — used in place of any light's colored ball when its count
  *  is 0. Paired with digit "0" so the slot width at zero matches the non-zero
  *  width exactly (ball + 1 digit) — the position-stability guarantee (the
@@ -706,7 +667,6 @@ const SBI_PRIORITY = -9996;
  *  regardless of block, so the practical risk is zero on mainstream fonts).
  *  See docs/STATES.md §7.5 for the full v0.1.17 → v0.2.3 trail. */
 const SBI_DIM_EM = "\u{26AA}"; // ⚪ (white/gray medium circle; user prefers gray over brown)
-
 /** The SBI click-command id. Registered at runtime via
  *  vs.commands.registerCommand (no package.json contribution needed for
  *  registerCommand). Single source of truth — baked into the IIFE at the
@@ -716,11 +676,9 @@ const SBI_DIM_EM = "\u{26AA}"; // ⚪ (white/gray medium circle; user prefers gr
  *  Renaming the command touches this const once; the IIFE bytes + the test
  *  assertions both follow. */
 const SBI_CLICK_CMD = "ccStatusDot.sbiClick";
-
 // ---------------------------------------------------------------------------
 // v0.2.4: Token stats SBI (right-side, second SBI beside the 4-light aggregate)
 // ---------------------------------------------------------------------------
-
 /** Priority for the v0.2.4 token-stats StatusBarItem. Positioned at
  *  StatusBarAlignment.Right with priority -9995 so it sits as the rightmost
  *  Right-aligned item (closest to the visible center on the right half).
@@ -733,14 +691,12 @@ const SBI_CLICK_CMD = "ccStatusDot.sbiClick";
  *  the user a natural "left = sessions, right = cost" mental model and avoids
  *  visual contention at the same anchor. */
 const TOK_SBI_PRIORITY = -9995;
-
 /** Click-command id for the token SBI. Triggers the QuickPick config panel
  *  (window selector / display mode / notify toggle / sound / fast commands).
  *  Single source of truth — baked into the IIFE at the registerCommand site
  *  AND assigned to the token SBI's `.command` field. Mirrors SBI_CLICK_CMD's
  *  pattern. */
 const TOK_CLICK_CMD = "ccStatusDot.tokClick";
-
 // ---------------------------------------------------------------------------
 // v0.4.0: Favorites session-focus command (companion ↔ IIFE EH bridge)
 // ---------------------------------------------------------------------------
@@ -764,7 +720,6 @@ const TOK_CLICK_CMD = "ccStatusDot.tokClick";
 // the IIFE at the registerCommand site AND surfaced to the companion via the
 // shared command id string. Mirrors the SBI/Token click command discipline.
 const FAV_FOCUS_CMD = "ccStatusDot.fav.focusSession";
-
 // ---------------------------------------------------------------------------
 // v0.2.4 (intra-version): QuickPick + token SBI tooltip i18n
 // ---------------------------------------------------------------------------
@@ -806,10 +761,8 @@ const FAV_FOCUS_CMD = "ccStatusDot.fav.focusSession";
 // survive JSON.stringify unchanged into the baked IIFE bytes (VSCode parses
 // the IIFE as UTF-8). The 8-language completeness is asserted in
 // hooks/test-iife.mjs (IIFE.68-IIFE.71 series).
-const I18N_LANGS = ["zh", "en", "ja", "de", "es", "fr", "pt", "ru"] as const;
-type I18NLang = (typeof I18N_LANGS)[number];
-type I18NEntry = Record<I18NLang, string>;
-const I18N_DICT: Record<string, I18NEntry> = {
+const I18N_LANGS = ["zh", "en", "ja", "de", "es", "fr", "pt", "ru"];
+const I18N_DICT = {
     // === QuickPick main panel (showTokQuickPick) ===
     qpPlaceHolder: {
         zh: "cc-status-dot — token 统计与配置",
@@ -1133,7 +1086,6 @@ const I18N_DICT: Record<string, I18NEntry> = {
         pt: "todos os ajustes ccStatusDot.*",
         ru: "все настройки ccStatusDot.*",
     },
-
     // === Sub-picker placeHolders (二级 picker) ===
     spSelectWindow: {
         zh: "选择窗口",
@@ -1165,7 +1117,6 @@ const I18N_DICT: Record<string, I18NEntry> = {
         pt: "Selecionar som",
         ru: "Выбрать звук",
     },
-
     // === Feedback messages ===
     // fbCopiedTpl: count {n} is placed as a SUFFIX after a colon (not as a
     // determiner before the noun). This avoids plural-agreement issues across
@@ -1214,7 +1165,6 @@ const I18N_DICT: Record<string, I18NEntry> = {
         pt: "cc-status-dot: painel de tokens falhou: ",
         ru: "cc-status-dot: сбой панели токенов: ",
     },
-
     // === Token SBI tooltip (§G tick) ===
     ttWindowTpl: {
         zh: "窗口：{win}",
@@ -1357,7 +1307,6 @@ const I18N_DICT: Record<string, I18NEntry> = {
         pt: "cc-status-dot: estatísticas de tokens (sem painel CC ativo)",
         ru: "cc-status-dot: статистика токенов (нет активной панели CC)",
     },
-
     // === 4-light SBI tooltip (§F tick + creation-time zero tooltip) ===
     // Placeholders {done}/{running}/{pending}/{interrupted} are filled at call
     // sites via .replace() chains. "Claude Code: " is a brand prefix kept
@@ -1372,7 +1321,6 @@ const I18N_DICT: Record<string, I18NEntry> = {
         pt: "Claude Code: {done} concluídos, {running} em execução, {pending} pendentes, {interrupted} interrompidos",
         ru: "Claude Code: {done} завершено, {running} выполняется, {pending} ожидает, {interrupted} прервано",
     },
-
     // === notify() messages (§B — turn-complete / error feedback) ===
     // ntTurnComplete carries the "Claude Code: " brand prefix baked in (it is
     // the FULL notification body for the done state). ntRateLimit /
@@ -1419,7 +1367,6 @@ const I18N_DICT: Record<string, I18NEntry> = {
         pt: "interrompido",
         ru: "прервано",
     },
-
     // === Threshold alert (dispatchNotify direct call in §G tick) ===
     alCostAlertTpl: {
         zh: "CC 费用告警：{cost}（24h）",
@@ -1473,69 +1420,22 @@ const I18N_DICT: Record<string, I18NEntry> = {
     //   cross-reload continuity via <sid>.rate sidecar. fbPanelFailPrefix is
     //   KEPT (still used by the SBI click handler's showTokQuickPick catch).
 };
-
-// ---------------------------------------------------------------------------
-// --- Anchor strings (verified byte-exact against CC 2.1.238) ---------------
-
-/**
- * Anchor A — the `update_session_state` handler. Same `vs` (per-panel) class
- * as rename_tab, and its request carries sessionId. v0.5.47 (CC 2.1.238): CC
- * hardened this handler — the consequent is now a BLOCK that routes the raw
- * request through a zod schema (uNe/Ihr: sessionId + state enum + optional
- * title truncated to 200 chars) and gates CC's own callback on if(r), while
- * the response return stays unconditional:
- *   `else if(e.request.type==="update_session_state"){let r=uNe(e.request);
- *    if(r)this.onSessionStateChanged?.(r.sessionId,r.state,r.title);
- *    return{type:"update_session_state_response"}}`
- * Our side effects are spliced as STATEMENTS at the BLOCK START (before
- * `let r=uNe(`) — the pre-2.1.238 "no block or the trailing else orphans"
- * constraint does NOT apply to inserting inside an existing block consequent
- * (the else binds via the block). The block-start seam preserves the old
- * semantics exactly: our stashes ALWAYS fire (not gated on schema success)
- * and read the RAW untruncated e.request.sessionId / e.request.title. Exact,
- * must match ONCE — keep the else-if prefix + the `}}` tail (a shorter form
- * aliases the generic SDK-side switch handler at ~offset 2609115 which has
- * no panelTab/onSessionStateChanged).
- */
-// v0.5.49: anchors are now GENERATED from captured identifier sets. The
-// 2.1.239/240 incident was a 2-char minifier rename (uNe->rMe) breaking a
-// 178-char exact literal — the anchor machinery now has TWO tiers per anchor:
-// tier 1 = exact literal from IDS_*_DEFAULT (fast path, byte-identical when CC
-// is unchanged); tier 2 = TOL_* tolerant regex (protocol-stable tokens as
-// bytes, minifiable identifiers as captures) resolved by matchAnchor*. See
-// TOL_A/B/C below for the verified shapes. anchorXFrom re-derives the exact
-// literal from any ids so inject/strip stay byte-exact per install.
-interface IdsA {
-    param: string;
-    rvar: string;
-    zod: string;
-}
-interface IdsB {
-    param: string;
-    rvar: string;
-}
-interface IdsC {
-    param: string;
-    dlg: string;
-    cbsink: string;
-}
 /** CC 2.1.240 bytes (verified 2026-08-23; 2.1.238 used zod=uNe -> tier 2). */
-const IDS_A_DEFAULT: IdsA = { param: "e", rvar: "r", zod: "rMe" };
-const IDS_B_DEFAULT: IdsB = { param: "e", rvar: "r" };
-const IDS_C_DEFAULT: IdsC = { param: "e", dlg: "t", cbsink: "r" };
-function anchorAFrom(ids: IdsA): string {
+const IDS_A_DEFAULT = { param: "e", rvar: "r", zod: "rMe" };
+const IDS_B_DEFAULT = { param: "e", rvar: "r" };
+const IDS_C_DEFAULT = { param: "e", dlg: "t", cbsink: "r" };
+function anchorAFrom(ids) {
     return `else if(${ids.param}.request.type==="update_session_state"){let ${ids.rvar}=${ids.zod}(${ids.param}.request);if(${ids.rvar})this.onSessionStateChanged?.(${ids.rvar}.sessionId,${ids.rvar}.state,${ids.rvar}.title);return{type:"update_session_state_response"}}`;
 }
-function anchorBFrom(ids: IdsB): string {
+function anchorBFrom(ids) {
     return `this.panelTab.title=${ids.param}.request.title;let ${ids.rvar};if(${ids.param}.request.hasPendingPermissions)`;
 }
-function anchorCFrom(ids: IdsC): string {
+function anchorCFrom(ids) {
     return `return(await this.sendRequest(${ids.param},{type:"user_dialog_request",dialogKind:${ids.dlg}.dialogKind,payload:${ids.dlg}.payload,toolUseID:${ids.dlg}.toolUseID},${ids.cbsink})).result`;
 }
 const ANCHOR_A = anchorAFrom(IDS_A_DEFAULT);
 const ANCHOR_B = anchorBFrom(IDS_B_DEFAULT);
 const ANCHOR_C = anchorCFrom(IDS_C_DEFAULT);
-
 /**
  * Anchor B — inside the `rename_tab` handler, just after the title is set and
  * before CC chooses its own icon. We insert the same guarded starter here so
@@ -1556,7 +1456,6 @@ const ANCHOR_C = anchorCFrom(IDS_C_DEFAULT);
  *     on disk, which previously caused the yellow running dot to cover the
  *     blue pending dot).
  */
-
 /**
  * Anchor C — INSIDE `uq.prototype.requestUserDialog` (inherited by each `go`
  * panel instance), the tail of the method after the
@@ -1595,23 +1494,21 @@ const ANCHOR_C = anchorCFrom(IDS_C_DEFAULT);
  * session start before rename_tab: acceptable degradation, same class as
  * v0.5.22 sid-inference uncertainty).
  */
-
 // ---------------------------------------------------------------------------
 // Logging — plain text, no emojis (kept terminal-friendly & greppable)
 // ---------------------------------------------------------------------------
-
-function log(msg: string): void {
+function log(msg) {
     console.log(`[cc-status-dot] ${msg}`);
 }
-function warn(msg: string): void {
+function warn(msg) {
     console.warn(`[cc-status-dot][WARN] ${msg}`);
 }
-function fail(msg: string): never {
+function fail(msg) {
     // Tag anchor problems so the top-level handler can append a version hint.
-    if (/anchor/i.test(msg)) throw new Error(`Anchor mismatch: ${msg}`);
+    if (/anchor/i.test(msg))
+        throw new Error(`Anchor mismatch: ${msg}`);
     throw new Error(msg);
 }
-
 // ---------------------------------------------------------------------------
 // v0.5.49 tolerant anchor tier: identifier-agnostic, protocol-stable. The
 // regex bytes pin ONLY what crosses the IPC boundary (RPC method strings +
@@ -1624,43 +1521,47 @@ function fail(msg: string): never {
 // alias arm (case"update_session_state":return{...}, no else-if prefix / no
 // onSessionStateChanged) can never match.
 // ---------------------------------------------------------------------------
-const TOL_A =
-    /else if\(([A-Za-z0-9_$]+)\.request\.type==="update_session_state"\)\{let ([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\(\1\.request\);if\(\2\)this\.onSessionStateChanged\?\.\(\2\.sessionId,\2\.state,\2\.title\);return\{type:"update_session_state_response"\}\}/g;
-const TOL_B =
-    /this\.panelTab\.title=([A-Za-z0-9_$]+)\.request\.title;let ([A-Za-z0-9_$]+);if\(\1\.request\.hasPendingPermissions\)/g;
-const TOL_C =
-    /return\(await this\.sendRequest\(([A-Za-z0-9_$]+),\{type:"user_dialog_request",dialogKind:([A-Za-z0-9_$]+)\.dialogKind,payload:\2\.payload,toolUseID:\2\.toolUseID\},([A-Za-z0-9_$]+)\)\)\.result/g;
-
+const TOL_A = /else if\(([A-Za-z0-9_$]+)\.request\.type==="update_session_state"\)\{let ([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\(\1\.request\);if\(\2\)this\.onSessionStateChanged\?\.\(\2\.sessionId,\2\.state,\2\.title\);return\{type:"update_session_state_response"\}\}/g;
+const TOL_B = /this\.panelTab\.title=([A-Za-z0-9_$]+)\.request\.title;let ([A-Za-z0-9_$]+);if\(\1\.request\.hasPendingPermissions\)/g;
+const TOL_C = /return\(await this\.sendRequest\(([A-Za-z0-9_$]+),\{type:"user_dialog_request",dialogKind:([A-Za-z0-9_$]+)\.dialogKind,payload:\2\.payload,toolUseID:\2\.toolUseID\},([A-Za-z0-9_$]+)\)\)\.result/g;
 /** Tier-1 (exact default literal) -> tier-2 (tolerant regex, exactly-once +
  *  re-derivation count gate). Returns the resolved ids, or null when neither
  *  tier yields a unique match (caller fails closed). */
-function matchAnchorA(src: string): IdsA | null {
+function matchAnchorA(src) {
     // Ambiguity is checked across BOTH tiers first (T7): an exact default hit
     // PLUS any other tolerant shape (renamed duplicate) must fail closed.
     const ms = [...src.matchAll(TOL_A)];
-    if (ms.length > 1) return null;
-    if (countOccurrences(src, ANCHOR_A) === 1) return IDS_A_DEFAULT;
-    if (ms.length !== 1) return null;
-    const ids: IdsA = { param: ms[0][1]!, rvar: ms[0][2]!, zod: ms[0][3]! };
+    if (ms.length > 1)
+        return null;
+    if (countOccurrences(src, ANCHOR_A) === 1)
+        return IDS_A_DEFAULT;
+    if (ms.length !== 1)
+        return null;
+    const ids = { param: ms[0][1], rvar: ms[0][2], zod: ms[0][3] };
     return countOccurrences(src, anchorAFrom(ids)) === 1 ? ids : null;
 }
-function matchAnchorB(src: string): IdsB | null {
+function matchAnchorB(src) {
     const ms = [...src.matchAll(TOL_B)];
-    if (ms.length > 1) return null;
-    if (countOccurrences(src, ANCHOR_B) === 1) return IDS_B_DEFAULT;
-    if (ms.length !== 1) return null;
-    const ids: IdsB = { param: ms[0][1]!, rvar: ms[0][2]! };
+    if (ms.length > 1)
+        return null;
+    if (countOccurrences(src, ANCHOR_B) === 1)
+        return IDS_B_DEFAULT;
+    if (ms.length !== 1)
+        return null;
+    const ids = { param: ms[0][1], rvar: ms[0][2] };
     return countOccurrences(src, anchorBFrom(ids)) === 1 ? ids : null;
 }
-function matchAnchorC(src: string): IdsC | null {
+function matchAnchorC(src) {
     const ms = [...src.matchAll(TOL_C)];
-    if (ms.length > 1) return null;
-    if (countOccurrences(src, ANCHOR_C) === 1) return IDS_C_DEFAULT;
-    if (ms.length !== 1) return null;
-    const ids: IdsC = { param: ms[0][1]!, dlg: ms[0][2]!, cbsink: ms[0][3]! };
+    if (ms.length > 1)
+        return null;
+    if (countOccurrences(src, ANCHOR_C) === 1)
+        return IDS_C_DEFAULT;
+    if (ms.length !== 1)
+        return null;
+    const ids = { param: ms[0][1], dlg: ms[0][2], cbsink: ms[0][3] };
     return countOccurrences(src, anchorCFrom(ids)) === 1 ? ids : null;
 }
-
 // ---------------------------------------------------------------------------
 // JSONC: settings.json may contain // and /* */ comments + trailing commas.
 // Strip them with a tiny scanner that respects string literals, then JSON.parse.
@@ -1670,38 +1571,23 @@ function matchAnchorC(src: string): IdsC | null {
 // modules (pure functions with no closure deps). parseJsonc stays here
 // because it depends on the local fail() helper for anchor-tagged error
 // formatting; it calls the imported stripJsonc via the import above.
-
-function parseJsonc(text: string, sourceLabel: string): Record<string, unknown> {
+function parseJsonc(text, sourceLabel) {
     try {
         return JSON.parse(stripJsonc(text));
-    } catch (e) {
-        fail(
-            `Could not parse ${sourceLabel} as JSON/JSONC (${(e as Error).message}). ` +
-                `Fix it manually, then re-run. No files were changed.`,
-        );
+    }
+    catch (e) {
+        fail(`Could not parse ${sourceLabel} as JSON/JSONC (${e.message}). ` +
+            `Fix it manually, then re-run. No files were changed.`);
     }
 }
-
-// ---------------------------------------------------------------------------
-// Extension discovery — find the highest-version anthropic.claude-code-* dir
-// ---------------------------------------------------------------------------
-// v0.2.4 round-2 (ARCH-1 first slice): scanJsonValueEnd / KeyRange /
-// findTopLevelKey / surgicalSetTopLevelKey / surgicalRemoveTopLevelKey moved
-// to src/surgical-json.ts (pure helpers, no closure deps). cmpVerStr moved
-// to src/semver.ts. discoverExtension below uses the imported cmpVerStr.
-
-interface DiscoveredExt {
-    dir: string;
-    version: string;
-}
-
-function discoverExtension(): DiscoveredExt {
-    const candidates: { dir: string; version: number[] }[] = [];
+function discoverExtension() {
+    const candidates = [];
     for (const base of SEARCH_DIRS) {
-        let entries: string[];
+        let entries;
         try {
             entries = fs.readdirSync(base);
-        } catch {
+        }
+        catch {
             continue; // dir absent or unreadable
         }
         for (const name of entries) {
@@ -1709,18 +1595,18 @@ function discoverExtension(): DiscoveredExt {
             // (publisher "anthropic" + "." + extension "claude-code" + "-<version>"...)
             // Note the hyphen between "claude" and "code" — not a dot.
             const m = name.match(/^anthropic\.claude-code-(\d+)\.(\d+)\.(\d+)/);
-            if (!m) continue;
+            if (!m)
+                continue;
             const dir = path.join(base, name);
-            if (!fs.existsSync(path.join(dir, "extension.js"))) continue;
+            if (!fs.existsSync(path.join(dir, "extension.js")))
+                continue;
             candidates.push({ dir, version: [Number(m[1]), Number(m[2]), Number(m[3])] });
         }
     }
     if (candidates.length === 0) {
-        fail(
-            `No anthropic.claude-code-* (with extension.js) found under:\n` +
-                SEARCH_DIRS.map((d) => "  " + d).join("\n") +
-                `\nIs the Claude Code extension installed?`,
-        );
+        fail(`No anthropic.claude-code-* (with extension.js) found under:\n` +
+            SEARCH_DIRS.map((d) => "  " + d).join("\n") +
+            `\nIs the Claude Code extension installed?`);
     }
     candidates.sort((a, b) => cmpVerStr(b.version.join("."), a.version.join(".")));
     const top = candidates[0];
@@ -1731,26 +1617,23 @@ function discoverExtension(): DiscoveredExt {
         // the other CC tab isn't getting a status dot. Re-running install
         // after the lower-version one updates will pick the new top.
         for (let i = 1; i < candidates.length; i++) {
-            log(
-                `  skipping lower version ${candidates[i].version.join(".")} at ${candidates[i].dir} (only one CC install is patched per run)`,
-            );
+            log(`  skipping lower version ${candidates[i].version.join(".")} at ${candidates[i].dir} (only one CC install is patched per run)`);
         }
     }
     return { dir: top.dir, version: top.version.join(".") };
 }
-
 // ---------------------------------------------------------------------------
 // Backup helper — copy once, never overwrite an existing .bak (keep original)
 // ---------------------------------------------------------------------------
-
-function backupOnce(srcPath: string, bakPath: string): boolean {
+function backupOnce(srcPath, bakPath) {
     if (fs.existsSync(bakPath)) {
         log(`backup already exists: ${path.basename(bakPath)}`);
         return false;
     }
     // Nothing to back up if the source doesn't exist yet (e.g. first-created
     // settings.json). In that case there's no original to preserve.
-    if (!fs.existsSync(srcPath)) return false;
+    if (!fs.existsSync(srcPath))
+        return false;
     // v0.2.6 round-3 HIGH (integrity): atomic copy. fs.copyFileSync does NOT
     // unlink the destination on partial failure (libuv opens with
     // O_CREAT|O_WRONLY|O_TRUNC and copies in chunks), so a partial .bak left
@@ -1764,7 +1647,6 @@ function backupOnce(srcPath: string, bakPath: string): boolean {
     log(`backed up → ${path.basename(bakPath)}`);
     return true;
 }
-
 /**
  * Atomic write — tmp file + rename. Mirrors the writer's `writeJsonAtomic` in
  * hooks/cc-status.js (line ~308): write a sibling .tmp suffixed with
@@ -1779,12 +1661,13 @@ function backupOnce(srcPath: string, bakPath: string): boolean {
  * extension.js path; it does NOT protect against writeFileSync being
  * interrupted by disk full / SIGKILL / power loss mid-write. This helper does.
  */
-function writeAtomicSync(filePath: string, content: string, encoding: BufferEncoding = "utf8"): void {
+function writeAtomicSync(filePath, content, encoding = "utf8") {
     const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmp, content, encoding);
     try {
         fs.renameSync(tmp, filePath);
-    } catch (e) {
+    }
+    catch (e) {
         // v0.2.6 round-3 LOW (integrity): best-effort cleanup of orphan .tmp
         // when renameSync fails (EPERM / EXDEV / EACCES / antivirus lock on
         // Windows). Without this, every failed rename leaves a .tmp on disk
@@ -1793,13 +1676,13 @@ function writeAtomicSync(filePath: string, content: string, encoding: BufferEnco
         // STATE_DIR .tmp GC, so orphans accumulated across install cycles.
         try {
             fs.unlinkSync(tmp);
-        } catch {
+        }
+        catch {
             /* best-effort — orphan is no worse than today */
         }
         throw e;
     }
 }
-
 /**
  * Atomic write — Buffer variant. Identical tmp+rename discipline as
  * writeAtomicSync but accepts a Buffer for binary safety. v0.2.6 round-3 HIGH
@@ -1817,21 +1700,22 @@ function writeAtomicSync(filePath: string, content: string, encoding: BufferEnco
  * (CC's minified extension.js is valid UTF-8 but a Buffer-based copy is the
  * canonical zero-loss form for file→file duplication).
  */
-function writeAtomicSyncBuf(filePath: string, bytes: Buffer): void {
+function writeAtomicSyncBuf(filePath, bytes) {
     const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmp, bytes);
     try {
         fs.renameSync(tmp, filePath);
-    } catch (e) {
+    }
+    catch (e) {
         try {
             fs.unlinkSync(tmp);
-        } catch {
+        }
+        catch {
             /* best-effort */
         }
         throw e;
     }
 }
-
 /**
  * Atomic file copy — read source as Buffer, write via writeAtomicSyncBuf.
  * v0.2.6 round-3 HIGH/MEDIUM (integrity): replaces every bare
@@ -1846,13 +1730,13 @@ function writeAtomicSyncBuf(filePath: string, bytes: Buffer): void {
  * patch.js ~600KB) and writes via the atomic tmp+rename discipline. POSIX
  * rename is atomic so the destination is never observed half-written.
  */
-function atomicCopyFileSync(srcPath: string, dstPath: string): void {
+function atomicCopyFileSync(srcPath, dstPath) {
     const bytes = fs.readFileSync(srcPath);
     writeAtomicSyncBuf(dstPath, bytes);
 }
-
-function countOccurrences(haystack: string, needle: string): number {
-    if (!needle) return 0;
+function countOccurrences(haystack, needle) {
+    if (!needle)
+        return 0;
     let n = 0;
     let i = 0;
     while ((i = haystack.indexOf(needle, i)) !== -1) {
@@ -1861,7 +1745,6 @@ function countOccurrences(haystack: string, needle: string): number {
     }
     return n;
 }
-
 // ---------------------------------------------------------------------------
 // Syntax gate — refuse to write a malformed extension.js. Validates the FINAL
 // spliced bytes the way Node/VSCode actually load CC's bundle (`node --check`),
@@ -1877,8 +1760,7 @@ function countOccurrences(haystack: string, needle: string): number {
 // legitimately contain. If node can't be spawned at all (broken execPath), we
 // warn and skip rather than block install on an environment issue.
 // ---------------------------------------------------------------------------
-
-function assertCompiles(code: string, label: string): void {
+function assertCompiles(code, label) {
     const tmp = path.join(os.tmpdir(), `cc-status-dot-syntax-${process.pid}.js`);
     try {
         fs.writeFileSync(tmp, code, "utf8");
@@ -1896,33 +1778,33 @@ function assertCompiles(code: string, label: string): void {
                 // parent ceiling so the run finishes and reports honestly.
                 timeout: 10000,
             });
-        } catch (e) {
-            const err = e as { status?: number; stderr?: string; code?: string; message?: string };
+        }
+        catch (e) {
+            const err = e;
             // Spawn failure (e.g. execPath unusable) — don't block install on environment.
             if (typeof err.status !== "number") {
                 warn(`could not run 'node --check' to validate ${label} (${err.message}); skipping syntax gate`);
                 return;
             }
             const stderr = (err.stderr || err.message || "").trim();
-            fail(
-                `${label} would be a SyntaxError — refusing to write (would break the Claude Code extension, so the patch was aborted).\n` +
-                    `This is an internal patcher bug, not a Claude Code update. No files were changed. Please report it (with the node --check output below) at the project's issue tracker.\n` +
-                    `node --check output:\n` +
-                    stderr
-                        .split("\n")
-                        .map((l) => "    " + l)
-                        .join("\n"),
-            );
+            fail(`${label} would be a SyntaxError — refusing to write (would break the Claude Code extension, so the patch was aborted).\n` +
+                `This is an internal patcher bug, not a Claude Code update. No files were changed. Please report it (with the node --check output below) at the project's issue tracker.\n` +
+                `node --check output:\n` +
+                stderr
+                    .split("\n")
+                    .map((l) => "    " + l)
+                    .join("\n"));
         }
-    } finally {
+    }
+    finally {
         try {
             fs.unlinkSync(tmp);
-        } catch {
+        }
+        catch {
             /* best-effort cleanup of the probe file */
         }
     }
 }
-
 // ---------------------------------------------------------------------------
 // Build the injected IIFE. Single line, version-robust, no minified refs.
 //   t = the `ts` panel instance (has panelTab, context.extensionPath).
@@ -1951,8 +1833,7 @@ function assertCompiles(code: string, label: string): void {
 //       v0.1.16 emoji-ball restoration → v0.1.17 single-SBI compact concat):
 //       git history (pre-0.5.10 CHANGELOG — root CHANGELOG.md removed in 1d45a9e).
 // ---------------------------------------------------------------------------
-
-function buildIIFE(resDir: string): string {
+function buildIIFE(resDir) {
     // JSON.stringify yields a safely-quoted, escaped JS string literal for the path
     // (also handles the non-ASCII chars in the project path correctly).
     const resLiteral = JSON.stringify(resDir);
@@ -1999,8 +1880,7 @@ function buildIIFE(resDir: string): string {
     // literal with `Infinity` for the "all" key (valid JS, not valid JSON).
     // hooks/test-contract-sync.mjs pins these ms values against the writer's
     // TOK_WINDOWS so a future tuning edit touching only one side fails CI.
-    const tokWinMsLiteral =
-        "{" + TOK_WIN_KEYS.map((k) => JSON.stringify(k) + ":" + String(TOK_WIN_MS[k])).join(",") + "}";
+    const tokWinMsLiteral = "{" + TOK_WIN_KEYS.map((k) => JSON.stringify(k) + ":" + String(TOK_WIN_MS[k])).join(",") + "}";
     // v0.2.4 (code-style MEDIUM fix): bake the writer↔reader contract
     // extensions as JSON-stringified literals so the IIFE bytes follow a
     // future patch.ts rename (the writer is a standalone .js that cannot
@@ -2818,7 +2698,6 @@ function buildIIFE(resDir: string): string {
     const hash = crypto.createHash("sha1").update(body).digest("hex").slice(0, STAMP_HASH_LEN);
     return `/*${INJECT_MARKER}:${INJECT_VERSION}:${hash}*/` + body;
 }
-
 // ---------------------------------------------------------------------------
 // v0.6 Seam prelude (docs/design-v0.6-seam.md + docs/ADR-001). The anchor
 // era injected by REPLACING three byte patterns inside CC's minified control
@@ -2858,14 +2737,12 @@ function buildIIFE(resDir: string): string {
  *  same shape the anchor era sourced from the handler's `this`). Assertions
  *  below make any drift from the assumed wrapper shape fail loudly at build
  *  time instead of silently splicing wrong bytes. */
-function buildIIFEInner(resDir: string): string {
+function buildIIFEInner(resDir) {
     const stamped = buildIIFE(resDir);
     const head = "(function(t){";
     const tail = "})(this)";
     if (!stamped.startsWith(`/*${INJECT_MARKER}:`)) {
-        throw new Error(
-            "buildIIFE output no longer starts with the legacy banner — buildIIFEInner slicing contract broken",
-        );
+        throw new Error("buildIIFE output no longer starts with the legacy banner — buildIIFEInner slicing contract broken");
     }
     const i = stamped.indexOf(head);
     const j = stamped.lastIndexOf(tail);
@@ -2874,14 +2751,13 @@ function buildIIFEInner(resDir: string): string {
     }
     return stamped.slice(i + head.length, j);
 }
-
 /** The seam prelude body (everything between the `/*ccsd2:begin*​/` line and
  *  `/*ccsd2:end*​/`, banner NOT included — the banner is stamped by
  *  seamStamp() below). ASCII-only, sloppy mode, self-contained: the only
  *  outer bindings it touches are `require` (module wrapper parameter —
  *  rebound in place), `globalThis`, `process`, `__dirname`, and the baked
  *  absolute-path literals. */
-function buildSeamPrelude(): string {
+function buildSeamPrelude() {
     // (STATE_DIR and the IIFE's own baked literals need no seam-level copies —
     // buildIIFEInner embeds them; the seam only adds IDIR/RES/SEAMV.)
     const resLiteral = JSON.stringify(RUNTIME_RES_DIR);
@@ -3011,18 +2887,17 @@ function buildSeamPrelude(): string {
     // __ccsdPanelInit.)
     const SLOT = `function __ccsdPanelInit(t){${""}`;
     const idx = lines.indexOf(SLOT);
-    if (idx < 0) throw new Error("seam prelude slot marker missing — buildSeamPrelude composition broken");
+    if (idx < 0)
+        throw new Error("seam prelude slot marker missing — buildSeamPrelude composition broken");
     lines[idx] = `function __ccsdPanelInit(t){` + buildIIFEInner(RUNTIME_RES_DIR);
     return lines.join("");
 }
-
 /** Current seam prelude body hash — the value seamStamp() bakes into the
  *  legacy-format banner. Any prelude OR IIFE content change flips it, which
  *  the staleness gate in patchExtensionSeam turns into a restore+re-inject. */
-function currentSeamHash(): string {
+function currentSeamHash() {
     return crypto.createHash("sha1").update(buildSeamPrelude()).digest("hex").slice(0, STAMP_HASH_LEN);
 }
-
 /** Stamp the seam prelude with the byte-identical legacy banner format
  *  (companion :501 parses it across generations — §5.2) + the ccsd2 identity
  *  line. Full injected block:
@@ -3032,22 +2907,18 @@ function currentSeamHash(): string {
  *      /*ccsd2:end*​/
  *  Leading `;` guards ASI against any preceding expression; trailing newline
  *  guarantees the following original first statement starts its own line. */
-function seamStamp(): string {
+function seamStamp() {
     const body = buildSeamPrelude();
     const hash = crypto.createHash("sha1").update(body).digest("hex").slice(0, STAMP_HASH_LEN);
-    return (
-        `/*${INJECT_MARKER}:${INJECT_VERSION}:${hash}*/\n` +
+    return (`/*${INJECT_MARKER}:${INJECT_VERSION}:${hash}*/\n` +
         `;/*${SEAM_BEGIN_TAG}${INJECT_VERSION}*/\n` +
         body +
-        `\n/*${SEAM_END_TAG}*/\n`
-    );
+        `\n/*${SEAM_END_TAG}*/\n`);
 }
-
 /** Does the content carry a v0.6 seam block? (ccsd2 identity line.) */
-function hasSeam(content: string): boolean {
+function hasSeam(content) {
     return content.includes(`/*${SEAM_BEGIN_TAG}`);
 }
-
 /** Compute the insertion offset for the seam block: after BOM, after a
  *  shebang line, then after the ENTIRE directive prologue (string-literal
  *  statements interleaved with whitespace/comments). Inserting before a
@@ -3055,16 +2926,17 @@ function hasSeam(content: string): boolean {
  *  statement ends the directive prologue) and silently change CC's mode —
  *  the scan exists solely to prevent that. Comments/whitespace before the
  *  first statement are also skipped so the prelude never splits a comment. */
-function seamInsertionOffset(src: string): number {
+function seamInsertionOffset(src) {
     let i = 0;
-    if (src.charCodeAt(0) === 0xfeff) i = 1;
+    if (src.charCodeAt(0) === 0xfeff)
+        i = 1;
     if (src.slice(i, i + 2) === "#!") {
         const nl = src.indexOf("\n", i);
         i = nl < 0 ? src.length : nl + 1;
     }
     for (;;) {
         const rest = src.slice(i);
-        let m: RegExpMatchArray | null;
+        let m;
         if ((m = rest.match(/^[\s]+/))) {
             i += m[0].length;
             continue;
@@ -3089,63 +2961,58 @@ function seamInsertionOffset(src: string): number {
     }
     return i;
 }
-
 /** Strip a v0.6 seam block (banner line + ccsd2 region) and return the
  *  recovered original, or null when the content is not a recognizable seam
  *  form (caller falls through to the legacy strip / fail-closed paths). */
-function stripSeamInPlace(content: string): string | null {
-    const re =
-        /\/\*cc-status-dot-injected:[^*\n]*\*\/\n?;\s*\/\*ccsd2:begin:seam:[^*\n]*\*\/[\s\S]*?\/\*ccsd2:end\*\/\n?/;
-    if (!re.test(content)) return null;
+function stripSeamInPlace(content) {
+    const re = /\/\*cc-status-dot-injected:[^*\n]*\*\/\n?;\s*\/\*ccsd2:begin:seam:[^*\n]*\*\/[\s\S]*?\/\*ccsd2:end\*\/\n?/;
+    if (!re.test(content))
+        return null;
     const out = content.replace(re, "");
     try {
         assertCompiles(out, "stripSeamInPlace output (recovered original)");
-    } catch {
+    }
+    catch {
         return null;
     }
-    if (out.includes(INJECT_MARKER) || out.includes(SEAM_BEGIN_TAG)) return null;
+    if (out.includes(INJECT_MARKER) || out.includes(SEAM_BEGIN_TAG))
+        return null;
     return out;
 }
-
 // ---------------------------------------------------------------------------
 // Patch / restore extension.js
 // ---------------------------------------------------------------------------
-
-function isExtensionPatched(content: string): boolean {
+function isExtensionPatched(content) {
     return content.includes(INJECT_MARKER);
 }
-
 /** Parse the version stamp from an already-patched extension.js.
  *  Returns the stamped version (e.g. "v<INJECT_VERSION>"), or null when the
  *  marker is present but has no version suffix (pre-v0.1.3 injection) — null
  *  is treated as "stale, re-inject" by patchExtension. Accepts an optional
  *  `:HASH` suffix after the version (added when the content-hash scheme landed)
  *  so a hash-bearing banner still parses cleanly. */
-function injectedVersion(content: string): string | null {
+function injectedVersion(content) {
     const m = content.match(/cc-status-dot-injected:v(\d+\.\d+\.\d+)(?::[0-9a-f]{4,16})?\*/);
     return m ? "v" + m[1] : null;
 }
-
 /** Parse the content-hash suffix from an already-patched extension.js banner.
  *  Returns null when the marker is present but pre-dates the hash scheme (the
  *  banner has only `vX.Y.Z` and no `:HASH`) — patchExtension treats null as
  *  "stale, re-inject" so legacy same-version installs pick up the new scheme. */
-function injectedIifeHash(content: string): string | null {
+function injectedIifeHash(content) {
     const m = content.match(/cc-status-dot-injected:v\d+\.\d+\.\d+:([0-9a-f]{4,16})\*/);
     return m ? m[1] : null;
 }
-
 /** Current IIFE body hash — the value a fresh buildIIFE() stamps into its
  *  banner. patchExtension compares this to injectedIifeHash(on-disk extension.js)
  *  to detect intra-version drift (dev iterations within the same INJECT_VERSION).
  *  The body excludes the banner line, so the hash does not depend on itself. */
-function currentIifeHash(): string {
+function currentIifeHash() {
     const full = buildIIFE(RUNTIME_RES_DIR);
     const markerEnd = full.indexOf("*/");
     const body = markerEnd === -1 ? full : full.slice(markerEnd + 2);
     return crypto.createHash("sha1").update(body).digest("hex").slice(0, STAMP_HASH_LEN);
 }
-
 // ---------------------------------------------------------------------------
 // Writer-hook content hash. The writer hook (hooks/cc-status.js) carries a banner
 // `/*cc-status-dot-hook:vX.Y.Z:HASH*/` on its first line; the hash is sha1 of
@@ -3156,24 +3023,21 @@ function currentIifeHash(): string {
 // Symmetric to the IIFE gate so writer/reader drift detection is no longer
 // the half-rounded thing an earlier round left.
 // ---------------------------------------------------------------------------
-
 /** Parse `vX.Y.Z` out of a `cc-status-dot-hook:vX.Y.Z[:HASH]` banner line.
  *  Returns null if the line has no recognizable banner (e.g. hand-edited or
  *  pre-v0.1.14 hook). Tolerates a missing hash segment (pre-hash-scheme banner). */
-function parseHookBannerVersion(bannerLine: string): string | null {
+function parseHookBannerVersion(bannerLine) {
     const m = bannerLine.match(/cc-status-dot-hook:v(\d+\.\d+\.\d+)/);
     return m ? "v" + m[1] : null;
 }
-
 /** Parse the `:HASH` suffix out of a `cc-status-dot-hook:vX.Y.Z:HASH` banner.
  *  Returns null when the banner pre-dates the hash scheme — callers
  *  treat null as "stale, re-stamp" so legacy same-version hooks pick up the
  *  new scheme on the next install. */
-function parseHookBannerHash(bannerLine: string): string | null {
+function parseHookBannerHash(bannerLine) {
     const m = bannerLine.match(/cc-status-dot-hook:v\d+\.\d+\.\d+:([0-9a-f]{4,16})/);
     return m ? m[1] : null;
 }
-
 /** Split a hook file's content into (bannerLine, body). The writer hook
  *  (hooks/cc-status.js) starts with `#!/usr/bin/env node` + `'use strict';`
  *  so the cc-status-dot-hook banner lives on line 3 — find it by regex over
@@ -3183,11 +3047,12 @@ function parseHookBannerHash(bannerLine: string): string | null {
  *  itself — the banner's hash claims to be the hash of everything that is
  *  NOT the banner). Returns { banner: "", body: content } when no banner is
  *  recognizable so callers can hash uniformly. */
-function splitHookBanner(content: string): { banner: string; body: string } {
+function splitHookBanner(content) {
     const lines = content.split("\n");
     const head = lines.slice(0, 10);
     const idx = head.findIndex((l) => /cc-status-dot-hook:v\d+\.\d+\.\d+/.test(l));
-    if (idx === -1) return { banner: "", body: content };
+    if (idx === -1)
+        return { banner: "", body: content };
     const banner = head[idx];
     // Replace the banner line with an empty string (preserving line count so
     // byte offsets elsewhere in the file are unaffected — important if a
@@ -3195,45 +3060,41 @@ function splitHookBanner(content: string): { banner: string; body: string } {
     lines[idx] = "";
     return { banner, body: lines.join("\n") };
 }
-
 /** Body hash for a hook file's content (sha1 over the body after the first
  *  line, truncated to HOOK_HASH_LEN). Used both for the source hook
  *  (currentHookBodyHash) and for installed hooks (installRuntimeFiles /
  *  reportStatus compare the two). */
-function hookBodyHashOf(content: string): string {
+function hookBodyHashOf(content) {
     const { body } = splitHookBanner(content);
     return crypto.createHash("sha1").update(body).digest("hex").slice(0, HOOK_HASH_LEN);
 }
-
 /** Current source-hook body hash — sha1 over PROJECT_ROOT/hooks/cc-status.js
  *  body (everything after the first banner line). installRuntimeFiles and
  *  reportStatus compare this to the on-disk installed hook's body hash to
  *  detect intra-HOOK_VERSION drift. Returns null when the source hook is
  *  absent (caller treats as "skip hash check" — the copy already warned). */
-function currentHookBodyHash(): string | null {
+function currentHookBodyHash() {
     const srcHook = path.join(PROJECT_ROOT, "hooks", "cc-status.js");
     try {
         const src = fs.readFileSync(srcHook, "utf8");
         return hookBodyHashOf(src);
-    } catch {
+    }
+    catch {
         return null;
     }
 }
-
 /** v0.5.47: module-level replC builder (same hoist rationale as
  *  buildReplA/buildReplB — the --self-test-strip round-trip splices Anchor C
  *  with the EXACT production string). Pure constant. */
-function buildReplC(ids: IdsC = IDS_C_DEFAULT): string {
+function buildReplC(ids = IDS_C_DEFAULT) {
     return `try{var __csd=this.__ccsdSid;if(__csd){var __ud=globalThis.__ccsdUserDialogSet||(globalThis.__ccsdUserDialogSet=Object.create(null));__ud[__csd]=true}var __ccsdUdRes=await this.sendRequest(${ids.param},{type:"user_dialog_request",dialogKind:${ids.dlg}.dialogKind,payload:${ids.dlg}.payload,toolUseID:${ids.dlg}.toolUseID},${ids.cbsink});return __ccsdUdRes.result}finally{try{if(__csd&&globalThis.__ccsdUserDialogSet)delete globalThis.__ccsdUserDialogSet[__csd]}catch(_){}}`;
 }
-
 /** v0.5.47: module-level replB builder (same hoist rationale as
  *  buildReplA — the --self-test-strip round-trip splices with the EXACT
  *  production strings). Pure function of the iife string. */
-function buildReplB(iife: string, ids: IdsB = IDS_B_DEFAULT): string {
+function buildReplB(iife, ids = IDS_B_DEFAULT) {
     const e = ids.param;
-    return (
-        `this.panelTab.title=${e}.request.title;this.__ccsdTitle=${e}.request.title;this.__ccsdPending=!!${e}.request.hasPendingPermissions;` +
+    return (`this.panelTab.title=${e}.request.title;this.__ccsdTitle=${e}.request.title;this.__ccsdPending=!!${e}.request.hasPendingPermissions;` +
         // v0.5.35 FIX: the v0.2.5 premise "rename_tab carries sessionId" is FALSE
         // (verified: webview renameTab producer sends {title,hasPendingPermissions,
         // hasUnseenCompletion}, NO sessionId). The unconditional this.__ccsdSid=
@@ -3288,19 +3149,16 @@ function buildReplB(iife: string, ids: IdsB = IDS_B_DEFAULT): string {
         // identical to var.
         `try{let __ps=globalThis.__ccsdPendingSet||(globalThis.__ccsdPendingSet=Object.create(null));if(this.__ccsdSid){if(${e}.request.hasPendingPermissions){__ps[this.__ccsdSid]=true}else{delete __ps[this.__ccsdSid]}}}catch(_){}` +
         iife +
-        `;let ${ids.rvar};if(${e}.request.hasPendingPermissions)`
-    );
+        `;let ${ids.rvar};if(${e}.request.hasPendingPermissions)`);
 }
-
 /** v0.5.47: module-level replA builder (hoisted out of injectFresh so the
  *  --self-test-strip round-trip can splice with the EXACT production strings
  *  — the strip patterns and this builder are now lockstep-tested together;
  *  see the LIFECYCLE-LOCKSTEP comment in stripIifeInPlace). Pure function of
  *  the iife string; behavior byte-identical to the former inline const. */
-function buildReplA(iife: string, ids: IdsA = IDS_A_DEFAULT): string {
+function buildReplA(iife, ids = IDS_A_DEFAULT) {
     const e = ids.param;
-    return (
-        `else if(${e}.request.type==="update_session_state"){` +
+    return (`else if(${e}.request.type==="update_session_state"){` +
         `this.__ccsdSid=${e}.request.sessionId;this.__ccsdTitle=${e}.request.title;` +
         // v0.5.44 BUG1+BUG2 Layer 1a (v0.5.47 statement form): synchronously
         // mirror sid→title AND sid→panel into the globalThis bridge HERE, on
@@ -3347,16 +3205,13 @@ function buildReplA(iife: string, ids: IdsA = IDS_A_DEFAULT): string {
         // validated callback → unconditional response). Our stashes above read
         // the RAW fields, so the 200-char title truncation in the parsed r.*
         // does not affect __ccsdTitle / the bridge.
-        `let ${ids.rvar}=${ids.zod}(${e}.request);if(${ids.rvar})this.onSessionStateChanged?.(${ids.rvar}.sessionId,${ids.rvar}.state,${ids.rvar}.title);return{type:"update_session_state_response"}}`
-    );
+        `let ${ids.rvar}=${ids.zod}(${e}.request);if(${ids.rvar})this.onSessionStateChanged?.(${ids.rvar}.sessionId,${ids.rvar}.state,${ids.rvar}.title);return{type:"update_session_state_response"}}`);
 }
-
 // v0.6: the anchor-era injectFresh (validate anchors -> backupOnce ->
 // splice replA/replB/replC -> syntax gate -> write) is RETIRED for live
 // injection — patchExtension now runs the seam flow (patchExtensionLocked).
 // The three repl builders above survive ONLY as --self-test-strip fixtures
 // pinning stripIifeInPlace's patterns (the legacy-migration reader path).
-
 /** Extract the baked `var RES="..."` path from an already-patched extension.js.
  *  The IIFE bakes `var RES=<JSON.stringify(resDir)>;` once per injection site
  *  (Anchor A, optionally Anchor B → 1 or 2 occurrences, all identical). We read
@@ -3372,13 +3227,14 @@ function buildReplA(iife: string, ids: IdsA = IDS_A_DEFAULT): string {
  *  IIFE recomputed DIR via `pth.join(os.homedir(),".claude","cc-tab-status")`)
  *  is retained as a fallback so already-patched installs from older versions
  *  still detect + migrate cleanly. */
-function bakedResPath(content: string): string | null {
+function bakedResPath(content) {
     // v0.4.0+ IIFE shape: `var DIR="<absolute-state-dir>";var RES="<res>";`.
     const mNew = content.match(/var DIR="[^"]+";var RES=("[^"]*");/);
     if (mNew) {
         try {
             return JSON.parse(mNew[1]);
-        } catch {
+        }
+        catch {
             /* fall through to legacy anchor */
         }
     }
@@ -3387,14 +3243,15 @@ function bakedResPath(content: string): string | null {
     // patcher (otherwise a v0.4.0 install running over a v0.3.x-patched CC
     // would fail to detect + refresh the stale baked RES path).
     const m = content.match(/cc-tab-status"\);var RES=("[^"]*");/);
-    if (!m) return null;
+    if (!m)
+        return null;
     try {
         return JSON.parse(m[1]);
-    } catch {
+    }
+    catch {
         return null;
     }
 }
-
 /** Inverse of injectFresh — strip our injected IIFE + the stash-field
  *  assignments we added around ANCHOR_A / ANCHOR_B from a patched
  *  extension.js. Returns the recovered original (suitable for re-inject), or
@@ -3432,7 +3289,7 @@ function bakedResPath(content: string): string | null {
  *  replB in injectFresh. A future refactor that changes those forms MUST
  *  update the patterns here in lockstep — the post-strip INJECT_MARKER-free
  *  check is the safety net if a pattern drifts undetected. */
-function stripIifeInPlace(content: string): string | null {
+function stripIifeInPlace(content) {
     // Anchor A segment: stash fields + IIFE + trailing comma. The leading
     // `this.__ccsdSid=…` is unique to our injection (never appears in fresh
     // CC code), so a failed match here means the on-disk form is something we
@@ -3464,10 +3321,8 @@ function stripIifeInPlace(content: string): string | null {
     // sid stash between __ccsdPending and the try-block). The post-strip
     // INJECT_MARKER-free + assertCompiles checks remain the safety net; the
     // --self-test-strip round-trip now pins patterns↔builders mechanically.
-    const segA_block =
-        /this\.__ccsdSid=([A-Za-z0-9_$]+)\.request\.sessionId;this\.__ccsdTitle=\1\.request\.title;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
-    const segA =
-        /this\.__ccsdSid=e\.request\.sessionId,this\.__ccsdTitle=e\.request\.title,[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\),/g;
+    const segA_block = /this\.__ccsdSid=([A-Za-z0-9_$]+)\.request\.sessionId;this\.__ccsdTitle=\1\.request\.title;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
+    const segA = /this\.__ccsdSid=e\.request\.sessionId,this\.__ccsdTitle=e\.request\.title,[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\),/g;
     // Anchor B segment: stash fields + (v0.2.5: optional pending-set sync) +
     // IIFE + trailing semicolon. The leading
     // `this.__ccsdTitle=…;this.__ccsdPending=…` pair is unique to our injection.
@@ -3477,15 +3332,13 @@ function stripIifeInPlace(content: string): string | null {
     // the v0.5.35 guarded sid stash, the v0.5.44 Layer-1b bridge block) and
     // whatever future revisions add; the historical optional-group forms are
     // retired (see the segA note above).
-    const segB =
-        /this\.__ccsdTitle=([A-Za-z0-9_$]+)\.request\.title;this\.__ccsdPending=!!\1\.request\.hasPendingPermissions;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
-
+    const segB = /this\.__ccsdTitle=([A-Za-z0-9_$]+)\.request\.title;this\.__ccsdPending=!!\1\.request\.hasPendingPermissions;[\s\S]*?\/\*cc-status-dot-injected:[^*]*?\*\/\(function\(t\){[\s\S]*?}\)\(this\);/g;
     // Pre-check: at least one segment must match, otherwise this isn't ours.
-    if (!segA_block.test(content) && !segA.test(content) && !segB.test(content)) return null;
+    if (!segA_block.test(content) && !segA.test(content) && !segB.test(content))
+        return null;
     segA_block.lastIndex = 0;
     segA.lastIndex = 0;
     segB.lastIndex = 0;
-
     // v0.5.47 round-2 [2]: ALSO invert Anchor C. The C splice (replC) wraps
     // ANCHOR_C's sendRequest in a try/finally maintaining __ccsdUserDialogSet
     // and carries NO banner, so the marker-free check cannot see it — without
@@ -3496,8 +3349,7 @@ function stripIifeInPlace(content: string): string | null {
     // ANCHOR_C (replace, not remove — C's original bytes were consumed by
     // replC at inject time). Widened middles absorb future replC tweaks; the
     // --self-test-strip round-trip now splices C too, pinning this inversion.
-    const segC =
-        /try\{var __csd=this\.__ccsdSid;if\(__csd\)\{[\s\S]*?await this\.sendRequest\(([A-Za-z0-9_$]+),\{type:"user_dialog_request",dialogKind:([A-Za-z0-9_$]+)\.dialogKind,payload:\2\.payload,toolUseID:\2\.toolUseID\},([A-Za-z0-9_$]+)\);return __ccsdUdRes\.result\}finally\{try\{[\s\S]*?catch\(_\)\{\}\}/g;
+    const segC = /try\{var __csd=this\.__ccsdSid;if\(__csd\)\{[\s\S]*?await this\.sendRequest\(([A-Za-z0-9_$]+),\{type:"user_dialog_request",dialogKind:([A-Za-z0-9_$]+)\.dialogKind,payload:\2\.payload,toolUseID:\2\.toolUseID\},([A-Za-z0-9_$]+)\);return __ccsdUdRes\.result\}finally\{try\{[\s\S]*?catch\(_\)\{\}\}/g;
     // v0.5.49 capture-aware C reversal: a tolerant-matched install may carry
     // RENAMED identifiers in replC's sendRequest copy — re-emitting the
     // default ANCHOR_C constant would restore different names than the
@@ -3507,16 +3359,14 @@ function stripIifeInPlace(content: string): string | null {
         .replace(segA_block, "")
         .replace(segA, "")
         .replace(segB, "")
-        .replace(segC, (_m, cParam: string, cDlg: string, cCb: string) =>
-            anchorCFrom({ param: cParam, dlg: cDlg, cbsink: cCb }),
-        );
-
+        .replace(segC, (_m, cParam, cDlg, cCb) => anchorCFrom({ param: cParam, dlg: cDlg, cbsink: cCb }));
     // Sanity check the result compiles (anchor shape preserved). If anything
     // looks off, return null so the caller falls through to the safe RES
     // rewrite path.
     try {
         assertCompiles(out, "stripIifeInPlace output (recovered original)");
-    } catch {
+    }
+    catch {
         return null;
     }
     if (out.includes(INJECT_MARKER)) {
@@ -3526,7 +3376,6 @@ function stripIifeInPlace(content: string): string | null {
     }
     return out;
 }
-
 // ---------------------------------------------------------------------------
 // v0.6 seam patch flow (design §5.3/§5.4). Replaces the anchor-era
 // patchExtension body wholesale; injectFresh/buildReplA/B/C above are retired
@@ -3534,18 +3383,16 @@ function stripIifeInPlace(content: string): string | null {
 // MIGRATION + --self-test-strip fixture path for v0.5.x anchor-injected
 // installs.
 // ---------------------------------------------------------------------------
-
 /** Emit the machine-readable fail-class line (stdout) BEFORE the human
  *  error, then fail(). The companion parses `ccsd-fail-class:<class>` from
  *  the spawn output to branch the retry policy: deterministic classes
  *  (cc-esm-detected / seam-precondition-failed / stale-unknown-format) set
  *  attempts straight to MAX — retrying a static no-hop cannot help and only
  *  burns the toast budget (design §8.2). */
-function seamFail(cls: SeamFailClass, msg: string): never {
+function seamFail(cls, msg) {
     console.log(`ccsd-fail-class:${cls}`);
     return fail(msg);
 }
-
 /** Cross-process O_EXCL lock over the whole read→judge→backup→inject→syntax-
  *  gate→write→last-repatch window (design §5.4). Returns false when a live
  *  peer (<60s) holds it — the CALLER treats that as a no-op success (exit 0,
@@ -3553,25 +3400,29 @@ function seamFail(cls: SeamFailClass, msg: string): never {
  *  concurrent writers HARMLESS-but-interleaved, and the lock removes even the
  *  trace. A holder killed mid-run leaves a lock file; ≥60s staleness breaks
  *  it. */
-function acquireSeamLock(extJs: string): boolean {
+function acquireSeamLock(extJs) {
     const lockPath = extJs + ".ccsd.lock";
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
             const fd = fs.openSync(lockPath, "wx");
             try {
                 fs.writeSync(fd, JSON.stringify({ pid: process.pid, ts: Date.now() }));
-            } finally {
+            }
+            finally {
                 fs.closeSync(fd);
             }
             return true;
-        } catch (e: unknown) {
-            if (e && typeof e === "object" && (e as { code?: string }).code === "EEXIST") {
+        }
+        catch (e) {
+            if (e && typeof e === "object" && e.code === "EEXIST") {
                 try {
                     const st = fs.statSync(lockPath);
-                    if (Date.now() - st.mtimeMs < 60_000) return false;
+                    if (Date.now() - st.mtimeMs < 60000)
+                        return false;
                     fs.unlinkSync(lockPath); // stale — previous holder died; break it
                     continue;
-                } catch {
+                }
+                catch {
                     return false;
                 }
             }
@@ -3580,14 +3431,14 @@ function acquireSeamLock(extJs: string): boolean {
     }
     return false;
 }
-function releaseSeamLock(extJs: string): void {
+function releaseSeamLock(extJs) {
     try {
         fs.unlinkSync(extJs + ".ccsd.lock");
-    } catch {
+    }
+    catch {
         /* already gone — nothing to do */
     }
 }
-
 /** Fresh seam injection: pristine backup → stamp → directive-aware insert →
  *  syntax gate → atomic write. Zero-footprint on any failure (same contract
  *  as the anchor-era injectFresh).
@@ -3600,12 +3451,13 @@ function releaseSeamLock(extJs: string): void {
  *  restore-from-.bak (latent since v0.5; the strip-recovery-without-.bak
  *  path never executed until the seam migration). Never overwrites an
  *  existing .bak (backupOnce discipline preserved). */
-function injectSeamFresh(extJs: string, original: string): void {
+function injectSeamFresh(extJs, original) {
     const bakPath = extJs + ".bak";
     if (!fs.existsSync(bakPath)) {
         writeAtomicSync(bakPath, original);
         log(`backed up pristine original → ${path.basename(bakPath)}`);
-    } else {
+    }
+    else {
         log(`backup already exists: ${path.basename(bakPath)}`);
     }
     const stamped = seamStamp();
@@ -3620,39 +3472,33 @@ function injectSeamFresh(extJs: string, original: string): void {
     writeAtomicSync(extJs, next);
     log("patched extension.js (seam prelude)");
 }
-
-function patchExtension(extDir: string): void {
+function patchExtension(extDir) {
     const extJs = path.join(extDir, "extension.js");
-    if (!fs.existsSync(extJs)) fail(`extension.js not found in ${extDir}`);
+    if (!fs.existsSync(extJs))
+        fail(`extension.js not found in ${extDir}`);
     if (!acquireSeamLock(extJs)) {
         log("another patcher holds the lock (<60s) — assuming it succeeds; nothing to do");
         return;
     }
     try {
         patchExtensionLocked(extDir, extJs);
-    } finally {
+    }
+    finally {
         releaseSeamLock(extJs);
     }
 }
-
-function patchExtensionLocked(extDir: string, extJs: string): void {
+function patchExtensionLocked(extDir, extJs) {
     const src = fs.readFileSync(extJs, "utf8");
-
     // ---- static preconditions (fail-closed, zero footprint) ----
     // P1: the seam attaches via the module-local require("vscode") call(s).
     //    A CC that stops CJS-requiring vscode cannot be wrapped this way.
     const vsRequires = countOccurrences(src, 'require("vscode")');
     if (vsRequires < 1) {
-        seamFail(
-            "seam-precondition-failed",
-            `require("vscode") not found in extension.js (0 occurrences) — the CC extension no longer loads the vscode API through a CommonJS require, so the seam cannot attach. No files were modified.`,
-        );
+        seamFail("seam-precondition-failed", `require("vscode") not found in extension.js (0 occurrences) — the CC extension no longer loads the vscode API through a CommonJS require, so the seam cannot attach. No files were modified.`);
     }
     const createRequires = countOccurrences(src, "createRequire(");
     if (createRequires > 0) {
-        warn(
-            `secondary require channel present (createRequire x${createRequires}) — the runtime canary (seam-state heartbeat obs counters) is the detector if a future CC loads vscode through it`,
-        );
+        warn(`secondary require channel present (createRequire x${createRequires}) — the runtime canary (seam-state heartbeat obs counters) is the detector if a future CC loads vscode through it`);
     }
     // P2 four-way ESM detection (design §5.3): the require-PARAMETER rebinding
     // is CJS-only; an ESM CC bundle has no require parameter to rebind. ① .mjs
@@ -3660,42 +3506,32 @@ function patchExtensionLocked(extDir: string, extJs: string): void {
     // (architecture lifetime boundary — successor spec pre-filed in
     // docs/ADR-001); ③ top-level export alone → generic precondition fail.
     const ext = path.extname(extJs).toLowerCase();
-    let pkgType: string | undefined;
+    let pkgType;
     try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(extDir, "package.json"), "utf8")) as {
-            type?: unknown;
-        };
-        if (typeof pkg.type === "string") pkgType = pkg.type;
-    } catch {
+        const pkg = JSON.parse(fs.readFileSync(path.join(extDir, "package.json"), "utf8"));
+        if (typeof pkg.type === "string")
+            pkgType = pkg.type;
+    }
+    catch {
         /* unreadable package.json — treat as no type field */
     }
     const hasTopExport = /(?:^|;)[ \t]*export[ \t]+[A-Za-z{*_]/.test(src);
     const hasTopImport = /(?:^|;)[ \t]*import[ \t]*[{A-Za-z(*"]/.test(src);
     if (ext === ".mjs" || pkgType === "module" || hasTopImport) {
-        seamFail(
-            "cc-esm-detected",
-            `CC extension has moved to an ES-module shape${
-                ext === ".mjs"
-                    ? " (.mjs extension)"
-                    : pkgType === "module"
-                      ? ' (package.json type:"module")'
-                      : " (top-level import statements)"
-            }. The CJS require-rebinding seam cannot attach to ESM. The successor architecture is pre-specified (docs/ADR-001-seam-architecture.md) — wait for a cc-status-dot update; re-running the patcher manually will NOT help. No files were modified.`,
-        );
+        seamFail("cc-esm-detected", `CC extension has moved to an ES-module shape${ext === ".mjs"
+            ? " (.mjs extension)"
+            : pkgType === "module"
+                ? ' (package.json type:"module")'
+                : " (top-level import statements)"}. The CJS require-rebinding seam cannot attach to ESM. The successor architecture is pre-specified (docs/ADR-001-seam-architecture.md) — wait for a cc-status-dot update; re-running the patcher manually will NOT help. No files were modified.`);
     }
     if (hasTopExport) {
-        seamFail(
-            "seam-precondition-failed",
-            "top-level export statements found in extension.js — the bundle is no longer a classic CJS script. No files were modified.",
-        );
+        seamFail("seam-precondition-failed", "top-level export statements found in extension.js — the bundle is no longer a classic CJS script. No files were modified.");
     }
-
     // ---- fresh path ----
     if (!isExtensionPatched(src)) {
         injectSeamFresh(extJs, src);
         return;
     }
-
     // ---- already patched: staleness triage ----
     const ver = injectedVersion(src);
     const diskHash = injectedIifeHash(src);
@@ -3723,13 +3559,13 @@ function patchExtensionLocked(extDir: string, extJs: string): void {
         log(`updated stale baked RES path: ${baked} → ${wantRes}`);
         return;
     }
-
     // ---- stale: recover a pristine original, then re-inject the seam ----
-    let original: string | null = null;
+    let original = null;
     const bak = extJs + ".bak";
     if (fs.existsSync(bak)) {
         const bakSrc = fs.readFileSync(bak, "utf8");
-        if (!isExtensionPatched(bakSrc)) original = bakSrc;
+        if (!isExtensionPatched(bakSrc))
+            original = bakSrc;
     }
     if (original === null && hasSeam(src)) {
         const stripped = stripSeamInPlace(src);
@@ -3749,27 +3585,24 @@ function patchExtensionLocked(extDir: string, extJs: string): void {
         }
     }
     if (original === null) {
-        seamFail(
-            "stale-unknown-format",
-            `extension.js carries the cc-status-dot marker but is neither a seam block nor a recognizable v0.5.x anchor injection (marker version ${ver ?? "pre-v0.1.3"}). Refusing to write. Restore extension.js from extension.js.bak manually (or reinstall the Claude Code extension), then re-run. No files were modified.`,
-        );
+        seamFail("stale-unknown-format", `extension.js carries the cc-status-dot marker but is neither a seam block nor a recognizable v0.5.x anchor injection (marker version ${ver ?? "pre-v0.1.3"}). Refusing to write. Restore extension.js from extension.js.bak manually (or reinstall the Claude Code extension), then re-run. No files were modified.`);
     }
     const why = hasSeam(src) ? `seam ${ver}:${diskHash}` : `legacy anchors ${ver ?? "pre-v0.1.3"}`;
     log(`stale injection (${why}) — re-injecting current seam prelude`);
     injectSeamFresh(extJs, original);
 }
-
-function restoreExtension(extDir: string): void {
+function restoreExtension(extDir) {
     const extJs = path.join(extDir, "extension.js");
     const bak = extJs + ".bak";
     if (!fs.existsSync(bak)) {
         // v0.6: no .bak — try in-place strip (seam region first, then the
         // v0.5.x anchor forms) so --revert still works when the backup was
         // lost. Zero-footprint if neither form is recognized.
-        let src: string | null = null;
+        let src = null;
         try {
             src = fs.readFileSync(extJs, "utf8");
-        } catch {
+        }
+        catch {
             src = null;
         }
         if (src !== null) {
@@ -3787,9 +3620,7 @@ function restoreExtension(extDir: string): void {
                 return;
             }
         }
-        log(
-            "no extension.js.bak found and no recognizable injection to strip — extension.js was not patched by this tool (nothing to restore)",
-        );
+        log("no extension.js.bak found and no recognizable injection to strip — extension.js was not patched by this tool (nothing to restore)");
         return;
     }
     // v0.2.6 round-3 HIGH (integrity): atomic restore. The forward-write path
@@ -3805,7 +3636,6 @@ function restoreExtension(extDir: string): void {
     log("restored extension.js from extension.js.bak");
     // Intentionally keep extension.js.bak as a safety net.
 }
-
 // ---------------------------------------------------------------------------
 // Webview restore — removes the legacy aggregate status bar injected by
 //   v0.1.2 (ACQUIRE_RE / WV_JS_MARKER / WV_API_MARKER / WV_CSS_MARKER).
@@ -3824,24 +3654,23 @@ function restoreExtension(extDir: string): void {
 //   Constants block) on purpose — it's a tombstone scoped to the removed
 //   injection code.
 // ---------------------------------------------------------------------------
-
 /** Literal marker baked into webview/index.js by v0.1.2's patchWebview (the
  *  banner comment at the head of the injected block). Presence === "legacy
  *  aggregate bar present, please clean". */
 const LEGACY_WV_MARKER = "cc-status-bar-injected";
-
 /** Does webview/index.js still carry the v0.1.2 aggregate-bar injection? */
-function hasLegacyWebviewPatch(extDir: string): boolean {
+function hasLegacyWebviewPatch(extDir) {
     const wvJs = path.join(extDir, "webview", "index.js");
-    if (!fs.existsSync(wvJs)) return false;
+    if (!fs.existsSync(wvJs))
+        return false;
     try {
         return fs.readFileSync(wvJs, "utf8").includes(LEGACY_WV_MARKER);
-    } catch {
+    }
+    catch {
         return false;
     }
 }
-
-function restoreWebview(extDir: string): void {
+function restoreWebview(extDir) {
     for (const name of ["index.js", "index.css"]) {
         const f = path.join(extDir, "webview", name);
         const bak = f + ".bak";
@@ -3851,12 +3680,12 @@ function restoreWebview(extDir: string): void {
             // every CC webview the user opens.
             atomicCopyFileSync(bak, f);
             log(`restored webview/${name} from .bak`);
-        } else {
+        }
+        else {
             log(`no webview/${name}.bak — was not patched (nothing to restore)`);
         }
     }
 }
-
 // ---------------------------------------------------------------------------
 // CC package.json — v0.1.14 residue cleanup only (no install-time patching)
 // ---------------------------------------------------------------------------
@@ -3873,17 +3702,15 @@ function restoreWebview(extDir: string): void {
 // never affected CC's behavior, but the contrib arrays it shipped alongside
 // DID register 20 phantom commands whose handlers existed only inside the
 // v0.1.13 IIFE; cleaning those up on upgrade/revert is the job here.
-
 /** Does CC's package.json still carry the v0.1.13 commandCenter patch? Presence
  *  of the marker string === "v0.1.13-patched; restore on sight". The check is
  *  a plain substring test (no JSON parse) so a corrupt package.json still
  *  answers correctly — the caller (run() install path) then defers to
  *  restorePackageJson which DOES parse + .bak-restore. */
-function isPackageJsonPatched(content: string): boolean {
+function isPackageJsonPatched(content) {
     return content.includes(`"${PKG_MARKER_FIELD}"`);
 }
-
-function restorePackageJson(extDir: string): void {
+function restorePackageJson(extDir) {
     const pkgPath = path.join(extDir, "package.json");
     const bak = pkgPath + ".bak";
     if (!fs.existsSync(bak)) {
@@ -3896,23 +3723,10 @@ function restorePackageJson(extDir: string): void {
     atomicCopyFileSync(bak, pkgPath);
     log("restored package.json from package.json.bak");
 }
-
-// ---------------------------------------------------------------------------
-// Hooks in ~/.claude/settings.json — idempotent, marker-tagged
-// ---------------------------------------------------------------------------
-
-interface HookGroup {
-    matcher?: string;
-    hooks: { type: string; command: string }[];
-}
-
-type HooksMap = Record<string, HookGroup[]>;
-
-function settingsPath(): string {
+function settingsPath() {
     return path.join(os.homedir(), ".claude", "settings.json");
 }
-
-function hookCommand(hookAbs: string): string {
+function hookCommand(hookAbs) {
     // CC pipes the hook JSON via stdin; the script reads hook_event_name from
     // stdin, so no positional arg is needed. `# ${HOOK_MARKER}` is a shell
     // comment — harmless at runtime, greppable for idempotent removal.
@@ -3940,7 +3754,8 @@ function hookCommand(hookAbs: string): string {
     // it on every install so the wrapper stays in sync with hookAbs.
     try {
         installNodeWrapper(hookAbs, nodeBin);
-    } catch {
+    }
+    catch {
         // Non-fatal — wireHooks proceeds; the wrapper will be (re)written on
         // the next install runtime-files pass.
     }
@@ -3951,18 +3766,16 @@ function hookCommand(hookAbs: string): string {
     const invoke = process.platform === "win32" ? `"${wrapperAbs}"` : `sh "${wrapperAbs}"`;
     return `${invoke}  # ${HOOK_MARKER}`;
 }
-
 /**
  * Path of the node-locating wrapper script that lives next to the hook.
  * Unix: INSTALL_DIR/bin/cc-status-hook (POSIX shell script).
  * Windows: INSTALL_DIR/bin/cc-status-hook.cmd (batch).
  */
-function wrapperPathFor(hookAbs: string): string {
+function wrapperPathFor(hookAbs) {
     const binDir = path.join(path.dirname(hookAbs), "..", "bin");
     const name = process.platform === "win32" ? "cc-status-hook.cmd" : "cc-status-hook";
     return path.join(binDir, name);
 }
-
 /**
  * Write the node-locating wrapper script. Idempotent — every call rewrites.
  *
@@ -3982,7 +3795,7 @@ function wrapperPathFor(hookAbs: string): string {
  * The wrapper is intentionally tiny and POSIX-sh-only (no bashisms) so it
  * runs on /bin/dash, /bin/sh, busybox sh, etc.
  */
-function installNodeWrapper(hookAbs: string, bakedNodeBin: string): void {
+function installNodeWrapper(hookAbs, bakedNodeBin) {
     const wrapperAbs = wrapperPathFor(hookAbs);
     const binDir = path.dirname(wrapperAbs);
     fs.mkdirSync(binDir, { recursive: true });
@@ -4021,7 +3834,8 @@ function installNodeWrapper(hookAbs: string, bakedNodeBin: string): void {
         // sees "status dots stopped updating" with zero diagnostic. Worse: the
         // malformed wrapper is sticky until the next successful install run.
         writeAtomicSync(wrapperAbs, body, "utf8");
-    } else {
+    }
+    else {
         // POSIX shell wrapper. The shebang is `#!/bin/sh` (not /bin/bash) for
         // portability; we avoid bash-only constructs. Glob expansion in the
         // version-manager fallback relies on POSIX-shell wildcard expansion.
@@ -4078,12 +3892,12 @@ exit 0
         // the +x bit means `./<wrapper>` also works for direct CLI testing).
         try {
             fs.chmodSync(wrapperAbs, 0o755);
-        } catch {
+        }
+        catch {
             // Non-fatal — `sh <wrapper>` invocation in hookCommand still works.
         }
     }
 }
-
 /**
  * Warn when the baked node binary path lives under a version-managed install
  * (nvm / asdf / volta). Those directories disappear on `nvm uninstall`,
@@ -4097,42 +3911,42 @@ exit 0
  * updating know to check `--status` (which reports wrapper presence/absence)
  * and re-run install if needed (refreshes the baked path to the current node).
  */
-function warnIfVolatileNodePath(): void {
+function warnIfVolatileNodePath() {
     const p = process.execPath || "";
-    if (!p) return;
+    if (!p)
+        return;
     // Match the typical install roots: .nvm/versions/node/<ver>/bin/node,
     // .asdf/installs/nodejs/<ver>/bin/node (asdf uses "nodejs" service name),
     // .volta/tools/image/node/<ver>/bin/node. POSIX + Windows separators both
     // accepted so the check works cross-platform.
-    const volatile =
-        /[\\/]\.nvm[\\/]versions[\\/]node[\\/]/.test(p) ||
+    const volatile = /[\\/]\.nvm[\\/]versions[\\/]node[\\/]/.test(p) ||
         /[\\/]\.asdf[\\/]installs[\\/]node(?:js)?[\\/]/.test(p) ||
         /[\\/]\.volta[\\/]tools[\\/]image[\\/]node[\\/]/.test(p);
-    if (!volatile) return;
+    if (!volatile)
+        return;
     log(`hook wrapper will bake a version-managed node path: ${p}`);
     log(`  this path may disappear on \`nvm uninstall\` / \`asdf uninstall nodejs\` / \`volta uninstall node\`.`);
     log(`  the wrapper falls back to PATH + system + version-manager`);
     log(`  locations if the baked path disappears, so status dots stay responsive.`);
     log(`  re-run install after a node version switch to refresh the baked path (optional).`);
 }
-
 /** Build our owned hooks entries (one group per event in HOOK_EVENTS). */
-function buildOurHooks(hookAbs: string): HooksMap {
-    const out: HooksMap = {};
+function buildOurHooks(hookAbs) {
+    const out = {};
     for (const ev of HOOK_EVENTS) {
         out[ev] = [{ matcher: "", hooks: [{ type: "command", command: hookCommand(hookAbs) }] }];
     }
     return out;
 }
-
 /** Does a group contain a command we own? */
-function groupIsOurs(g: unknown): boolean {
-    if (!g || typeof g !== "object") return false;
-    const hooks = (g as HookGroup).hooks;
-    if (!Array.isArray(hooks)) return false;
+function groupIsOurs(g) {
+    if (!g || typeof g !== "object")
+        return false;
+    const hooks = g.hooks;
+    if (!Array.isArray(hooks))
+        return false;
     return hooks.some((h) => typeof h?.command === "string" && h.command.includes(HOOK_MARKER));
 }
-
 /** Owns the surgical-splice-or-round-trip-fallback dance shared by wireHooks
  *  (writing the hooks value) and unwireHooks (removing it when empty, else
  *  replacing). Validates raw parses as JSONC before attempting a surgical
@@ -4144,24 +3958,19 @@ function groupIsOurs(g: unknown): boolean {
  *  `removeIfEmpty`: when true and obj.hooks is empty/absent, REMOVE the key
  *  entirely (preserving comments around it). When false, always REPLACE the
  *  hooks value. wireHooks passes false; unwireHooks passes true. */
-function commitSettingsSurgically(
-    raw: string,
-    parsedOk: boolean,
-    obj: Record<string, unknown>,
-    removeIfEmpty: boolean,
-): { nextRaw: string; note: string } {
+function commitSettingsSurgically(raw, parsedOk, obj, removeIfEmpty) {
     if (!parsedOk) {
         return {
             nextRaw: JSON.stringify(obj, null, 2) + "\n",
             note: " (round-trip fallback — raw was malformed JSONC)",
         };
     }
-    const hooksNowEmpty =
-        !obj.hooks || typeof obj.hooks !== "object" || Object.keys(obj.hooks as HooksMap).length === 0;
-    let candidate: string;
+    const hooksNowEmpty = !obj.hooks || typeof obj.hooks !== "object" || Object.keys(obj.hooks).length === 0;
+    let candidate;
     if (removeIfEmpty && hooksNowEmpty) {
         candidate = surgicalRemoveTopLevelKey(raw, "hooks");
-    } else {
+    }
+    else {
         candidate = surgicalSetTopLevelKey(raw, "hooks", JSON.stringify(obj.hooks, null, 2));
     }
     if (candidate === raw) {
@@ -4173,7 +3982,8 @@ function commitSettingsSurgically(
     // Sanity check: the spliced result must still parse.
     try {
         JSON.parse(stripJsonc(candidate));
-    } catch {
+    }
+    catch {
         return {
             nextRaw: JSON.stringify(obj, null, 2) + "\n",
             note: " (round-trip fallback — surgical result failed JSON.parse)",
@@ -4181,32 +3991,31 @@ function commitSettingsSurgically(
     }
     return { nextRaw: candidate, note: " (surgical edit preserved user comments)" };
 }
-
-function wireHooks(): void {
+function wireHooks() {
     const settings = settingsPath();
     const hookAbs = path.join(INSTALL_DIR, "hooks", "cc-status.js");
-
     let raw = "{}";
-    if (fs.existsSync(settings)) raw = fs.readFileSync(settings, "utf8");
+    if (fs.existsSync(settings))
+        raw = fs.readFileSync(settings, "utf8");
     // Validate the raw text parses as JSONC BEFORE we attempt a surgical splice.
     // If it doesn't parse, fall back to the legacy round-trip (which will fail
     // loudly via parseJsonc) — we never splice into malformed JSON.
     let parsedOk = true;
     try {
         JSON.parse(stripJsonc(raw));
-    } catch {
+    }
+    catch {
         parsedOk = false;
     }
-    const obj = parseJsonc(raw, settings) as Record<string, unknown>;
-
+    const obj = parseJsonc(raw, settings);
     const ourHooks = buildOurHooks(hookAbs);
-    const existing = obj.hooks as HooksMap | undefined;
+    const existing = obj.hooks;
     let changed = false;
-
     if (!existing || typeof existing !== "object") {
         obj.hooks = ourHooks;
         changed = true;
-    } else {
+    }
+    else {
         for (const ev of Object.keys(ourHooks)) {
             const arr = Array.isArray(existing[ev]) ? existing[ev] : (existing[ev] = []);
             const oursIdx = arr.findIndex(groupIsOurs);
@@ -4226,29 +4035,26 @@ function wireHooks(): void {
                 // the current wrapper path is NOT present in the existing
                 // command — covers all three stale shapes above.
                 const wrapperAbs = wrapperPathFor(hookAbs);
-                const g = arr[oursIdx] as HookGroup;
+                const g = arr[oursIdx];
                 for (const h of g.hooks) {
-                    if (
-                        typeof h?.command === "string" &&
+                    if (typeof h?.command === "string" &&
                         h.command.includes(HOOK_MARKER) &&
-                        !h.command.includes(wrapperAbs)
-                    ) {
+                        !h.command.includes(wrapperAbs)) {
                         h.command = hookCommand(hookAbs);
                         changed = true;
                     }
                 }
-            } else {
+            }
+            else {
                 arr.push(ourHooks[ev][0]);
                 changed = true;
             }
         }
     }
-
     if (!changed) {
         log("settings.json hooks already wired — skipping");
         return;
     }
-
     backupOnce(settings, settings + ".cc-status-dot.bak");
     const { nextRaw, note: surgicalNote } = commitSettingsSurgically(raw, parsedOk, obj, false);
     writeAtomicSync(settings, nextRaw);
@@ -4258,8 +4064,7 @@ function wireHooks(): void {
         warn("create it (it receives JSON on stdin, writes ~/.claude/cc-tab-status/<sid>.json).");
     }
 }
-
-function unwireHooks(): void {
+function unwireHooks() {
     const settings = settingsPath();
     if (!fs.existsSync(settings)) {
         log("no settings.json — nothing to revert");
@@ -4269,42 +4074,47 @@ function unwireHooks(): void {
     let parsedOk = true;
     try {
         JSON.parse(stripJsonc(raw));
-    } catch {
+    }
+    catch {
         parsedOk = false;
     }
-    let obj: Record<string, unknown>;
+    let obj;
     try {
         obj = JSON.parse(stripJsonc(raw));
-    } catch {
+    }
+    catch {
         warn("settings.json unreadable — skipping hook removal (remove entries with " + HOOK_MARKER + " manually)");
         return;
     }
-    const hooks = obj.hooks as HooksMap | undefined;
+    const hooks = obj.hooks;
     if (!hooks || typeof hooks !== "object") {
         log("no hooks key in settings.json — nothing to revert");
         return;
     }
-
     let changed = false;
     for (const ev of Object.keys(hooks)) {
         const arr = hooks[ev];
-        if (!Array.isArray(arr)) continue;
+        if (!Array.isArray(arr))
+            continue;
         const kept = arr.filter((g) => !groupIsOurs(g));
-        if (kept.length !== arr.length) changed = true;
-        if (kept.length === 0) delete hooks[ev];
-        else hooks[ev] = kept;
+        if (kept.length !== arr.length)
+            changed = true;
+        if (kept.length === 0)
+            delete hooks[ev];
+        else
+            hooks[ev] = kept;
     }
-    if (Object.keys(hooks).length === 0) delete obj.hooks;
-
+    if (Object.keys(hooks).length === 0)
+        delete obj.hooks;
     if (changed) {
         const { nextRaw, note: surgicalNote } = commitSettingsSurgically(raw, parsedOk, obj, true);
         writeAtomicSync(settings, nextRaw);
         log(`removed cc-status-dot hook entries from ${settings}${surgicalNote}`);
-    } else {
+    }
+    else {
         log("no cc-status-dot hook entries found in settings.json");
     }
 }
-
 // ---------------------------------------------------------------------------
 // Companion VS Code extension (v0.2.3)
 // ---------------------------------------------------------------------------
@@ -4332,14 +4142,12 @@ function unwireHooks(): void {
 //     companion lands in whatever VS Code-family editors the user has. Each
 //     install is independent and best-effort.
 // ---------------------------------------------------------------------------
-
 /** The set of VS Code-family CLI binaries we'll probe for companion install.
  *  Order matters only for log clarity — each is tried independently and the
  *  user may have several installed simultaneously (e.g. VS Code stable + VS
  *  Code Insiders + Cursor). `code.cmd` on Windows is resolved automatically by
  *  cmd.exe PATHEXT, so we list the bare names here. */
 const VSCODE_CLIS = ["code", "code-insiders", "vscode-insiders", "cursor", "codium", "vscode"];
-
 /** Probe whether a single CLI binary exists and is invokable. Returns the
  *  trimmed first-line output of `<cli> --version` (e.g. "1.129.1") on success,
  *  or null on any spawn failure / non-zero exit. We use `--version` (not
@@ -4361,7 +4169,7 @@ const VSCODE_CLIS = ["code", "code-insiders", "vscode-insiders", "cursor", "codi
  *  returns the actual executable path (bare name if on PATH, or the resolved
  *  known install path otherwise). probeVscodeCli is for "is it present?"
  *  detection only. */
-function probeVscodeCli(cli: string): string | null {
+function probeVscodeCli(cli) {
     // hideOutput: spawn through shell on Windows so PATHEXT resolves `code.cmd`.
     try {
         const out = cp.execSync(`${cli} --version`, {
@@ -4372,12 +4180,12 @@ function probeVscodeCli(cli: string): string | null {
         const firstLine = (out.split(/\r?\n/)[0] || "").trim();
         // VS Code prints 3 lines (version, hash, arch). We only care that it ran.
         return firstLine || "(present)";
-    } catch {
+    }
+    catch {
         /* not on PATH — fall through to known-install-path probe */
     }
     return probeKnownVscodeCliPath(cli);
 }
-
 /** Resolve the executable path for a VS Code-family CLI. Returns the bare
  *  `cli` name if it's invokable on PATH (preferred — survives app updates that
  *  move the .app bundle), or the first well-known install path that actually
@@ -4385,7 +4193,7 @@ function probeVscodeCli(cli: string): string | null {
  *  value verbatim when invoking the CLI (it's already shell-quoted-safe via
  *  the surrounding `"${resolved}"` template — bare names contain no spaces,
  *  absolute paths may). */
-function resolveVscodeCli(cli: string): string | null {
+function resolveVscodeCli(cli) {
     // Fast path — bare name on PATH. execSync is the same check probeVscodeCli
     // uses; cheaper than re-implementing with `which`.
     try {
@@ -4395,21 +4203,22 @@ function resolveVscodeCli(cli: string): string | null {
             timeout: 8000,
         });
         return cli;
-    } catch {
+    }
+    catch {
         /* fall through to known paths */
     }
     return resolveKnownVscodeCliPath(cli);
 }
-
 /** Per-platform well-known install paths for each VS Code-family CLI. Used as
  *  a fallback when the bare CLI name is not on PATH (common on macOS where
  *  users must explicitly run "Shell Command: Install 'code' command in PATH"
  *  from the command palette). Returns the trimmed --version first line on
  *  success, or null if no known path resolves. */
-function probeKnownVscodeCliPath(cli: string): string | null {
+function probeKnownVscodeCliPath(cli) {
     const candidates = knownVscodeCliCandidates(cli);
     for (const c of candidates) {
-        if (!fs.existsSync(c)) continue;
+        if (!fs.existsSync(c))
+            continue;
         try {
             const out = cp.execSync(`"${c}" --version`, {
                 encoding: "utf8",
@@ -4419,19 +4228,20 @@ function probeKnownVscodeCliPath(cli: string): string | null {
             const firstLine = (out.split(/\r?\n/)[0] || "").trim();
             log(`  ${cli}: not on PATH but found at ${c} (use 'Shell Command: Install code in PATH' to fix)`);
             return firstLine || "(present)";
-        } catch {
+        }
+        catch {
             /* continue to next candidate */
         }
     }
     return null;
 }
-
 /** Same path enumeration as probeKnownVscodeCliPath but returns the resolved
  *  executable path (or null). Used by resolveVscodeCli so install/uninstall
  *  can invoke the CLI at the discovered location, not just detect it. */
-function resolveKnownVscodeCliPath(cli: string): string | null {
+function resolveKnownVscodeCliPath(cli) {
     for (const c of knownVscodeCliCandidates(cli)) {
-        if (!fs.existsSync(c)) continue;
+        if (!fs.existsSync(c))
+            continue;
         try {
             cp.execSync(`"${c}" --version`, {
                 encoding: "utf8",
@@ -4440,35 +4250,38 @@ function resolveKnownVscodeCliPath(cli: string): string | null {
             });
             log(`  ${cli}: not on PATH but found at ${c} (use 'Shell Command: Install code in PATH' to fix)`);
             return c;
-        } catch {
+        }
+        catch {
             /* continue to next candidate */
         }
     }
     return null;
 }
-
 /** Enumerate the well-known install paths for `cli` on the current platform.
  *  Pure data — no stat, no spawn — so callers can reuse the list for both
  *  probe (return version string) and resolve (return path). */
-function knownVscodeCliCandidates(cli: string): string[] {
-    const candidates: string[] = [];
+function knownVscodeCliCandidates(cli) {
+    const candidates = [];
     const home = os.homedir();
     if (process.platform === "darwin") {
         // macOS .app bundles ship the CLI under Contents/Resources/app/bin.
         // User-installed (default): /Applications; per-user: ~/Applications.
         const appRoots = ["/Applications", path.join(home, "Applications")];
-        const appDirs: Record<string, string[]> = {
+        const appDirs = {
             code: ["Visual Studio Code.app/Contents/Resources/app/bin/code"],
             "code-insiders": ["Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code-insiders"],
             cursor: ["Cursor.app/Contents/Resources/app/bin/cursor"],
             codium: ["VSCodium.app/Contents/Resources/app/bin/codium"],
         };
         const rels = appDirs[cli] ?? [];
-        for (const root of appRoots) for (const rel of rels) candidates.push(path.join(root, rel));
-    } else if (process.platform === "win32") {
+        for (const root of appRoots)
+            for (const rel of rels)
+                candidates.push(path.join(root, rel));
+    }
+    else if (process.platform === "win32") {
         const progFiles = process.env.ProgramFiles ?? "C:\\Program Files";
         const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
-        const winDirs: Record<string, string[]> = {
+        const winDirs = {
             code: [
                 `${progFiles}\\Microsoft VS Code\\bin\\code.cmd`,
                 `${localAppData}\\Programs\\Microsoft VS Code\\bin\\code.cmd`,
@@ -4480,11 +4293,11 @@ function knownVscodeCliCandidates(cli: string): string[] {
             cursor: [`${localAppData}\\Programs\\cursor\\resources\\app\\bin\\cursor.cmd`],
         };
         const rels = winDirs[cli] ?? [];
-        for (const rel of rels) candidates.push(rel);
+        for (const rel of rels)
+            candidates.push(rel);
     }
     return candidates;
 }
-
 /** Run `code --install-extension <vsix>` (idempotent — VS Code skips if the
  *  same version is already installed; --force re-installs otherwise). Returns
  *  true on exit 0, false on any failure. We pass `--force` so a same-version
@@ -4503,15 +4316,13 @@ function knownVscodeCliCandidates(cli: string): string[] {
  *  `cliName` is the bare CLI name (e.g. "code") for log readability; `cliPath`
  *  is the resolved executable path (bare name OR an absolute well-known
  *  install path returned by resolveVscodeCli) used for the actual spawn. */
-function installCompanionIntoCli(cliName: string, cliPath: string, vsixAbs: string, vsixVersion: string): boolean {
+function installCompanionIntoCli(cliName, cliPath, vsixAbs, vsixVersion) {
     // Downgrade guard — query the installed version (if any) and bail out if
     // the user already has a strictly newer one. Failures to query are non-
     // fatal (treat as "version unknown, proceed with --force").
     const installed = installedCompanionVersion(cliPath);
     if (installed !== null && cmpVerStr(installed, vsixVersion) > 0) {
-        log(
-            `  ${cliName}: SKIP — installed companion ${installed} is newer than the .vsix ${vsixVersion} (downgrade guard). Run \`code --uninstall-extension ${COMPANION_EXT_ID}\` first if you want to install the older version.`,
-        );
+        log(`  ${cliName}: SKIP — installed companion ${installed} is newer than the .vsix ${vsixVersion} (downgrade guard). Run \`code --uninstall-extension ${COMPANION_EXT_ID}\` first if you want to install the older version.`);
         return false;
     }
     try {
@@ -4525,7 +4336,8 @@ function installCompanionIntoCli(cliName: string, cliPath: string, vsixAbs: stri
         const last = (out.split(/\r?\n/).filter(Boolean).pop() || "").trim();
         log(`  ${cliName}: ${last || "installed"}`);
         return true;
-    } catch (e) {
+    }
+    catch (e) {
         // v0.5.38: fallback — bare CLI install failed (broken shim, e.g. Windows
         // code.cmd resolving Code.exe to a wrong/cwd-relative path; reported on
         // Win10 with a stray code.cmd in the project folder). resolveVscodeCli
@@ -4542,28 +4354,26 @@ function installCompanionIntoCli(cliName: string, cliPath: string, vsixAbs: stri
                         timeout: 30000,
                     });
                     const last2 = (out2.split(/\r?\n/).filter(Boolean).pop() || "").trim();
-                    log(
-                        `  ${cliName}: ${last2 || "installed"} (via fallback ${known} — bare CLI "${cliName}" --install-extension was broken)`,
-                    );
+                    log(`  ${cliName}: ${last2 || "installed"} (via fallback ${known} — bare CLI "${cliName}" --install-extension was broken)`);
                     return true;
-                } catch (e2) {
+                }
+                catch (e2) {
                     warn(`  ${cliName}: install-extension failed via bare CLI AND well-known-path fallback ${known}`);
                     return false;
                 }
             }
         }
-        warn(`  ${cliName}: install-extension failed (${(e as Error).message ?? String(e)})`);
+        warn(`  ${cliName}: install-extension failed (${e.message ?? String(e)})`);
         return false;
     }
 }
-
 /** Parse the installed companion version out of `<cliPath> --list-extensions
  *  --show-versions` (prints `publisher.name@x.y.z`, one per line). Returns the
  *  version string ("0.2.0") if the companion is installed, or null if not
  *  installed / the CLI failed / the version line didn't parse. `cliPath` is
  *  the resolved executable path (bare name OR absolute path from
  *  resolveVscodeCli). */
-function installedCompanionVersion(cliPath: string): string | null {
+function installedCompanionVersion(cliPath) {
     try {
         const out = cp.execSync(`"${cliPath}" --list-extensions --show-versions`, {
             encoding: "utf8",
@@ -4571,25 +4381,22 @@ function installedCompanionVersion(cliPath: string): string | null {
             timeout: 10000,
         });
         // Match "wangdong.cc-status-dot-companion@1.2.3" anywhere on a line.
-        const m = out.match(
-            new RegExp(`${COMPANION_EXT_ID.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}@(\\d+\\.\\d+\\.\\d+)`),
-        );
+        const m = out.match(new RegExp(`${COMPANION_EXT_ID.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}@(\\d+\\.\\d+\\.\\d+)`));
         return m ? m[1] : null;
-    } catch {
+    }
+    catch {
         return null;
     }
 }
-
 /** Locate the prebuilt companion .vsix. Dev (`tsx patch.ts`) resolves it from
  *  PROJECT_ROOT/companion/<vsix>; the published package ships the same path
  *  (companion/ is listed in package.json `files`). Returns the absolute path
  *  or null if absent (caller warns + continues — install must NOT fail just
  *  because the .vsix is missing, the IIFE patch is the critical surface). */
-function locateCompanionVsix(): string | null {
+function locateCompanionVsix() {
     const candidate = path.join(PROJECT_ROOT, COMPANION_VSIX);
     return fs.existsSync(candidate) ? candidate : null;
 }
-
 /** Write `INSTALL_DIR/companion-config.json` containing every constant the
  *  companion currently hand-mirrors in companion/extension.ts: installDir,
  *  patchJsPath, patcherVersion, injectMarker, injectVersion, ccExtIdPrefix,
@@ -4621,7 +4428,7 @@ function locateCompanionVsix(): string | null {
  *  the critical surface, not this config file — the companion falls back to
  *  its hardcoded constants). Idempotent: re-writing on every install
  *  refreshes the values. */
-function writeCompanionConfig(): void {
+function writeCompanionConfig() {
     // v0.2.4 round-2 (ARCH-3): bake the canonical cmpVerStr body into the
     // config so the companion can `new Function('a','b', src)`-cache it at
     // activate() — eliminating the prior byte-for-byte mirror copy that
@@ -4654,17 +4461,13 @@ function writeCompanionConfig(): void {
         writeAtomicSync(COMPANION_CONFIG_PATH, JSON.stringify(config, null, 2));
         log(`wrote companion config → ${COMPANION_CONFIG_PATH} (patcherVersion ${PATCHER_VERSION})`);
         if (!semverComparatorSrc) {
-            warn(
-                `semverComparatorSrc extraction failed — companion will skip the staleness check until next patcher run`,
-            );
+            warn(`semverComparatorSrc extraction failed — companion will skip the staleness check until next patcher run`);
         }
-    } catch (e) {
-        warn(
-            `failed to write ${COMPANION_CONFIG_PATH} (non-fatal — companion will fall back to its hardcoded constants): ${(e as Error).message ?? String(e)}`,
-        );
+    }
+    catch (e) {
+        warn(`failed to write ${COMPANION_CONFIG_PATH} (non-fatal — companion will fall back to its hardcoded constants): ${e.message ?? String(e)}`);
     }
 }
-
 /** Extract the canonical cmpVerStr body from src/semver.ts as a string for
  *  baking into companion-config.json. The body uses only `a`, `b`, and standard
  *  JS builtins — no closure captures — so it's safe to ship to the companion's
@@ -4682,7 +4485,7 @@ function writeCompanionConfig(): void {
  *  every level, alongside the TS source (dev tsx). The body is byte-identical
  *  to the TS source because tsc strips only the type annotations
  *  (`a: string, b: string` → `a, b`) without transforming the function body. */
-function extractCmpVerStrBody(): string | null {
+function extractCmpVerStrBody() {
     // Candidate loaders in priority order. Each entry tries .ts (dev tsx)
     // first, then .js (compiled mode). The TS-first ordering is purely
     // cosmetic — dev mode has the freshest source, so dev prefers it;
@@ -4697,12 +4500,15 @@ function extractCmpVerStrBody(): string | null {
     for (const c of candidates) {
         try {
             src = fs.readFileSync(c, "utf8");
-            if (src) break;
-        } catch {
+            if (src)
+                break;
+        }
+        catch {
             /* try next candidate */
         }
     }
-    if (!src) return null;
+    if (!src)
+        return null;
     // Match `export function cmpVerStr(a: string, b: string): number { ... }`
     // OR `export function cmpVerStr(a, b) { ... }` (compiled JS — tsc strips
     // the type annotations). The body extraction is brace-balanced and works
@@ -4710,22 +4516,26 @@ function extractCmpVerStrBody(): string | null {
     // body. Use the SAME brace-balanced extraction as test-version-sync.mjs:
     // extractFnBody.
     const startIdx = src.indexOf("function cmpVerStr(");
-    if (startIdx === -1) return null;
+    if (startIdx === -1)
+        return null;
     let i = src.indexOf("{", startIdx);
-    if (i === -1) return null;
+    if (i === -1)
+        return null;
     let depth = 1;
     i += 1;
     const start = i;
     while (i < src.length && depth > 0) {
         const c = src[i];
-        if (c === "{") depth += 1;
-        else if (c === "}") depth -= 1;
+        if (c === "{")
+            depth += 1;
+        else if (c === "}")
+            depth -= 1;
         i += 1;
     }
-    if (depth !== 0) return null;
+    if (depth !== 0)
+        return null;
     return src.slice(start, i - 1);
 }
-
 /** Write `INSTALL_DIR/last-repatch.json` after a successful --patch-only run so
  *  companion instances in OTHER still-running VS Code windows can detect that
  *  the CC extension.js was just re-patched and prompt their users to reload.
@@ -4745,7 +4555,7 @@ function extractCmpVerStrBody(): string | null {
  *  Best-effort: write failure is warned but does NOT fail the patch (the
  *  on-disk extension.js is already correct; only the cross-window signal
  *  is lost — those windows will catch up on their own reload). */
-function writeRepatchFlag(extDir: string, anchorB: boolean, source: "companion" | "npx"): void {
+function writeRepatchFlag(extDir, anchorB, source) {
     const flag = {
         ts: Date.now(),
         extDir,
@@ -4757,13 +4567,11 @@ function writeRepatchFlag(extDir: string, anchorB: boolean, source: "companion" 
     try {
         fs.mkdirSync(INSTALL_DIR, { recursive: true });
         writeAtomicSync(LAST_REPATCH_PATH, JSON.stringify(flag, null, 2));
-    } catch (e) {
-        warn(
-            `failed to write ${LAST_REPATCH_PATH} (non-fatal — other VS Code windows won't get the cross-window reload signal): ${(e as Error).message ?? String(e)}`,
-        );
+    }
+    catch (e) {
+        warn(`failed to write ${LAST_REPATCH_PATH} (non-fatal — other VS Code windows won't get the cross-window reload signal): ${e.message ?? String(e)}`);
     }
 }
-
 /** Source modules dist/patch.js imports via relative ESM specifiers. The
  *  install path copies each of these into INSTALL_DIR/src/ so the standalone
  *  patch.js can resolve them at module load. Listed here (and re-declared in
@@ -4776,7 +4584,6 @@ function writeRepatchFlag(extDir: string, anchorB: boolean, source: "companion" 
  *  installCompanionRuntimeFiles skips the new module and the companion
  *  crashes with ERR_MODULE_NOT_FOUND on the next --patch-only. */
 const SRC_MODULES = ["semver.js", "jsonc.js", "surgical-json.js"];
-
 /** Copy dist/patch.js + dist/src/*.js + companion-config.json into INSTALL_DIR
  *  so the companion can re-exec the patcher without depending on the user's
  *  npx cache. This is the file-copy half of installCompanion — extracted into
@@ -4792,7 +4599,7 @@ const SRC_MODULES = ["semver.js", "jsonc.js", "surgical-json.js"];
  *  half-written patch.js or src/*.js is ever observed even if the process is
  *  killed mid-copy). Stale src/*.js orphans from prior versions are swept
  *  before the fresh copies land — mirrors installRuntimeFiles' SVG sweep. */
-function installCompanionRuntimeFiles(): void {
+function installCompanionRuntimeFiles() {
     // 1. Copy dist/patch.js → INSTALL_DIR/patch.js so the companion can re-exec
     //    the patcher without depending on the user's npx cache (which may be
     //    purged). dist/patch.js exists in the published package; in dev
@@ -4815,17 +4622,16 @@ function installCompanionRuntimeFiles(): void {
             // patch.js is never observed half-written.
             atomicCopyFileSync(srcPatchJs, dstPatchJs);
             log(`copied patch.js → ${dstPatchJs} (companion re-execs this)`);
-        } else {
+        }
+        else {
             // Dev mode without a build: warn — the companion will fall through
             // to its "patcher not found" message at startup. Non-fatal.
-            warn(
-                `dist/patch.js not found at ${srcPatchJs} — companion will not be able to re-patch until \`npm run build\` is run`,
-            );
+            warn(`dist/patch.js not found at ${srcPatchJs} — companion will not be able to re-patch until \`npm run build\` is run`);
         }
-    } catch (e) {
-        warn(`failed to copy patch.js to INSTALL_DIR (non-fatal): ${(e as Error).message ?? String(e)}`);
     }
-
+    catch (e) {
+        warn(`failed to copy patch.js to INSTALL_DIR (non-fatal): ${e.message ?? String(e)}`);
+    }
     // 1a. Copy dist/src/*.js → INSTALL_DIR/src/ so the runtime patch.js can
     //     resolve its ESM imports (./src/semver.js | jsonc.js | surgical-json.js).
     //     v0.2.4 split patch.ts into src/ three modules and dist/patch.js
@@ -4861,12 +4667,14 @@ function installCompanionRuntimeFiles(): void {
                         try {
                             fs.unlinkSync(path.join(dstSrcDir, name));
                             log(`removed stale src/ module: ${name}`);
-                        } catch {
+                        }
+                        catch {
                             /* best-effort — non-fatal */
                         }
                     }
                 }
-            } catch {
+            }
+            catch {
                 /* readdir failure — non-fatal, proceed to copy */
             }
             let copied = 0;
@@ -4887,20 +4695,19 @@ function installCompanionRuntimeFiles(): void {
                     try {
                         atomicCopyFileSync(s, d);
                         copied += 1;
-                    } catch (e) {
-                        failed += 1;
-                        warn(
-                            `failed to copy src/${mod} → ${d} (companion may crash with ERR_MODULE_NOT_FOUND when importing this module): ${(e as Error).message ?? String(e)}`,
-                        );
                     }
-                } else {
+                    catch (e) {
+                        failed += 1;
+                        warn(`failed to copy src/${mod} → ${d} (companion may crash with ERR_MODULE_NOT_FOUND when importing this module): ${e.message ?? String(e)}`);
+                    }
+                }
+                else {
                     warn(`source module missing, not copied: src/${mod}`);
                 }
             }
-            log(
-                `copied src/*.js → ${dstSrcDir} (${copied}/${SRC_MODULES.length} modules${failed > 0 ? `, ${failed} failed` : ""} — companion re-execs patch.js which imports these)`,
-            );
-        } else {
+            log(`copied src/*.js → ${dstSrcDir} (${copied}/${SRC_MODULES.length} modules${failed > 0 ? `, ${failed} failed` : ""} — companion re-execs patch.js which imports these)`);
+        }
+        else {
             // Compiled mode WITHOUT `npm run build`: SCRIPT_DIR is dist/ but
             // dist/src/ is entirely absent — broken build (npm run build did
             // not emit dist/src/) or patch.js was run from an unexpected
@@ -4908,16 +4715,12 @@ function installCompanionRuntimeFiles(): void {
             // publishing. (Dev tsx mode has SCRIPT_DIR=project root where
             // src/*.ts exists → enters the if branch above → per-file
             // existsSync fails → 3× warn. The else here is NOT the dev case.)
-            warn(
-                `dist/src/ not found at ${srcSrcDir} — companion will crash with ERR_MODULE_NOT_FOUND on next --patch-only until \`npm run build\` is run`,
-            );
+            warn(`dist/src/ not found at ${srcSrcDir} — companion will crash with ERR_MODULE_NOT_FOUND on next --patch-only until \`npm run build\` is run`);
         }
-    } catch (e) {
-        warn(
-            `failed to copy src/*.js to INSTALL_DIR (companion may fail to re-patch): ${(e as Error).message ?? String(e)}`,
-        );
     }
-
+    catch (e) {
+        warn(`failed to copy src/*.js to INSTALL_DIR (companion may fail to re-patch): ${e.message ?? String(e)}`);
+    }
     // 1b. Write INSTALL_DIR/companion-config.json with the constants the
     //     companion currently hand-mirrors (INSTALL_DIR / INJECT_MARKER /
     //     INJECT_VERSION / SEARCH_DIRS / ccExtIdPrefix / patchJsPath /
@@ -4925,25 +4728,21 @@ function installCompanionRuntimeFiles(): void {
     //     values if this file is missing or stale. See writeCompanionConfig.
     writeCompanionConfig();
 }
-
 /** Install (or refresh) the companion .vsix into every detected VS Code-family
  *  CLI on PATH. Idempotent: re-running refreshes via `--force`. If NO CLI is
  *  detected we warn and continue — the IIFE patch alone still works. Also
  *  copies our compiled patch.js to INSTALL_DIR so the companion has a stable
  *  path to re-exec at VS Code startup (see companion/extension.ts). */
-function installCompanion(): void {
+function installCompanion() {
     // 1+1a+1b. Copy patch.js + src/*.js + companion-config.json into INSTALL_DIR.
     //    Extracted to installCompanionRuntimeFiles() in v0.2.8 round-1 so the
     //    standalone e2e (hooks/test-standalone-patch.mjs) can drive the real
     //    copy path via `--install-companion-runtime` + CCSD_INSTALL_DIR=<tmp>.
     installCompanionRuntimeFiles();
-
     // 2. Install the .vsix into every detected VS Code-family CLI.
     const vsixAbs = locateCompanionVsix();
     if (!vsixAbs) {
-        warn(
-            `companion .vsix not found at ${path.join(PROJECT_ROOT, COMPANION_VSIX)} — run \`npm run companion:package\` to build it (the patch still works without the companion; you just won't get auto-re-patch after a CC update)`,
-        );
+        warn(`companion .vsix not found at ${path.join(PROJECT_ROOT, COMPANION_VSIX)} — run \`npm run companion:package\` to build it (the patch still works without the companion; you just won't get auto-re-patch after a CC update)`);
         return;
     }
     log(`installing companion extension (${COMPANION_VERSION}) into detected VS Code-family CLIs…`);
@@ -4952,40 +4751,41 @@ function installCompanion(): void {
     let anyDetected = false;
     for (const cli of VSCODE_CLIS) {
         const resolved = resolveVscodeCli(cli);
-        if (resolved === null) continue;
+        if (resolved === null)
+            continue;
         const probe = probeVscodeCli(cli);
         anyDetected = true;
         log(`  ${cli}: detected (${probe})${resolved !== cli ? ` at ${resolved}` : ""}`);
-        if (installCompanionIntoCli(cli, resolved, vsixAbs, COMPANION_VERSION)) anyOk = true;
+        if (installCompanionIntoCli(cli, resolved, vsixAbs, COMPANION_VERSION))
+            anyOk = true;
     }
     if (!anyDetected) {
-        warn(
-            "no VS Code-family CLI detected on PATH or at well-known install paths " +
-                "(looked for: " +
-                VSCODE_CLIS.join(", ") +
-                "; on macOS also try /Applications/<App>.app/Contents/Resources/app/bin/). " +
-                "The patch is installed, but the companion extension was NOT installed. " +
-                "Open VS Code → Cmd/Ctrl+Shift+P → 'Shell Command: Install code in PATH' and re-run if you want auto-re-patch.",
-        );
+        warn("no VS Code-family CLI detected on PATH or at well-known install paths " +
+            "(looked for: " +
+            VSCODE_CLIS.join(", ") +
+            "; on macOS also try /Applications/<App>.app/Contents/Resources/app/bin/). " +
+            "The patch is installed, but the companion extension was NOT installed. " +
+            "Open VS Code → Cmd/Ctrl+Shift+P → 'Shell Command: Install code in PATH' and re-run if you want auto-re-patch.");
         return;
     }
     if (anyOk) {
         log(`companion extension installed — CC auto-updates will be self-healed (reload VS Code once)`);
-    } else {
+    }
+    else {
         warn("companion .vsix install failed for every detected CLI — see warnings above. Patch is still active.");
     }
 }
-
 /** Uninstall the companion extension from every detected VS Code-family CLI.
  *  Best-effort: failures are warned, never fatal (the .vsix may already be gone
  *  or the CLI may be locked). v0.2.3: uses resolveVscodeCli so the uninstall
  *  works even when `code` is not on PATH (macOS well-known install paths). */
-function uninstallCompanion(): void {
+function uninstallCompanion() {
     log("uninstalling companion extension from detected VS Code-family CLIs…");
     let anyDetected = false;
     for (const cli of VSCODE_CLIS) {
         const resolved = resolveVscodeCli(cli);
-        if (resolved === null) continue;
+        if (resolved === null)
+            continue;
         anyDetected = true;
         try {
             cp.execSync(`"${resolved}" --uninstall-extension ${COMPANION_EXT_ID}`, {
@@ -4994,10 +4794,11 @@ function uninstallCompanion(): void {
                 timeout: 15000,
             });
             log(`  ${cli}: uninstalled ${COMPANION_EXT_ID}`);
-        } catch (e) {
+        }
+        catch (e) {
             // Non-fatal — most likely "extension not installed" which is the
             // desired post-condition anyway. Surface the trimmed stderr.
-            const msg = (e as { stderr?: string; message?: string }).stderr || (e as Error).message || String(e);
+            const msg = e.stderr || e.message || String(e);
             const trimmed = String(msg).split(/\r?\n/)[0]?.trim() || "(unknown)";
             log(`  ${cli}: ${trimmed}`);
         }
@@ -5008,9 +4809,7 @@ function uninstallCompanion(): void {
         // easy to miss in scrollback. The next companion startup (post-fix)
         // would then warn "patcher not found" because removeInstallDir()
         // below already deleted INSTALL_DIR/patch.js.
-        warn(
-            `no VS Code-family CLI on PATH or at well-known install paths — companion .vsix left installed. Manually run \`code --uninstall-extension ${COMPANION_EXT_ID}\` if you want it gone.`,
-        );
+        warn(`no VS Code-family CLI on PATH or at well-known install paths — companion .vsix left installed. Manually run \`code --uninstall-extension ${COMPANION_EXT_ID}\` if you want it gone.`);
     }
     // Also remove the INSTALL_DIR/patch.js copy we placed for the companion.
     const dstPatchJs = path.join(INSTALL_DIR, "patch.js");
@@ -5019,8 +4818,9 @@ function uninstallCompanion(): void {
             fs.unlinkSync(dstPatchJs);
             log(`removed companion patch.js copy: ${dstPatchJs}`);
         }
-    } catch (e) {
-        warn(`could not remove ${dstPatchJs}: ${(e as Error).message ?? String(e)} (remove manually)`);
+    }
+    catch (e) {
+        warn(`could not remove ${dstPatchJs}: ${e.message ?? String(e)} (remove manually)`);
     }
     // v0.2.8: also remove INSTALL_DIR/src/ (the semver/jsonc/surgical-json
     // modules copied by installCompanion step 1a). Symmetric cleanup so
@@ -5034,34 +4834,30 @@ function uninstallCompanion(): void {
             fs.rmSync(dstSrcDir, { recursive: true, force: true });
             log(`removed companion src/ copy: ${dstSrcDir}`);
         }
-    } catch (e) {
-        warn(`could not remove ${dstSrcDir}: ${(e as Error).message ?? String(e)} (remove manually)`);
+    }
+    catch (e) {
+        warn(`could not remove ${dstSrcDir}: ${e.message ?? String(e)} (remove manually)`);
     }
 }
-
 /** Surface companion install health in --status. Reports: vsix presence in the
  *  package, each detected CLI's install state + version (queried via
  *  `code --list-extensions --show-versions`), and the INSTALL_DIR/patch.js copy.
  *  v0.2.3: surfaces installed-vs-packaged version drift per CLI so a user
  *  running an older companion can see "installed 0.1.0 (packaged 0.2.0) —
  *  re-run npx to upgrade" instead of a bare "INSTALLED" with no signal. */
-function reportCompanionStatus(): void {
+function reportCompanionStatus() {
     log(`companion version: ${COMPANION_VERSION}`);
     const vsixAbs = locateCompanionVsix();
     log(`  packaged .vsix: ${vsixAbs ? vsixAbs : "(missing — run `npm run companion:package`)"}`);
     const dstPatchJs = path.join(INSTALL_DIR, "patch.js");
-    log(
-        `  INSTALL_DIR/patch.js: ${fs.existsSync(dstPatchJs) ? "present" : "(missing — companion will warn at startup)"}`,
-    );
+    log(`  INSTALL_DIR/patch.js: ${fs.existsSync(dstPatchJs) ? "present" : "(missing — companion will warn at startup)"}`);
     // v0.2.8: surface INSTALL_DIR/src/ module presence so a user diagnosing
     // "auto-patch failed" can self-check whether the ESM-import dependencies
     // are in place. Missing any of the three modules guarantees
     // ERR_MODULE_NOT_FOUND on the next companion --patch-only.
     const dstSrcDir = path.join(INSTALL_DIR, "src");
     const srcPresent = SRC_MODULES.every((m) => fs.existsSync(path.join(dstSrcDir, m)));
-    log(
-        `  INSTALL_DIR/src/: ${srcPresent ? `present (${SRC_MODULES.length} modules)` : "(missing — companion will crash with ERR_MODULE_NOT_FOUND on next --patch-only, re-run `npx vscode-claude-code-status-dot`)"}`,
-    );
+    log(`  INSTALL_DIR/src/: ${srcPresent ? `present (${SRC_MODULES.length} modules)` : "(missing — companion will crash with ERR_MODULE_NOT_FOUND on next --patch-only, re-run `npx vscode-claude-code-status-dot`)"}`);
     // v0.2.3: also surface the companion-config.json + last-repatch.json files
     // the patcher writes for the companion to read. A missing config means
     // the companion will fall back to its hardcoded constants (v0.2.3
@@ -5073,44 +4869,46 @@ function reportCompanionStatus(): void {
     let configVer = "(missing)";
     if (configExists) {
         try {
-            const parsed = JSON.parse(fs.readFileSync(COMPANION_CONFIG_PATH, "utf8")) as { patcherVersion?: string };
-            if (parsed.patcherVersion) configVer = parsed.patcherVersion;
-        } catch {
+            const parsed = JSON.parse(fs.readFileSync(COMPANION_CONFIG_PATH, "utf8"));
+            if (parsed.patcherVersion)
+                configVer = parsed.patcherVersion;
+        }
+        catch {
             configVer = "(corrupt)";
         }
     }
-    log(
-        `  INSTALL_DIR/companion-config.json: ${configExists ? `present (patcherVersion ${configVer})` : "(missing — companion falls back to hardcoded constants)"}`,
-    );
+    log(`  INSTALL_DIR/companion-config.json: ${configExists ? `present (patcherVersion ${configVer})` : "(missing — companion falls back to hardcoded constants)"}`);
     const flagExists = fs.existsSync(LAST_REPATCH_PATH);
     let flagTs = "(missing)";
     if (flagExists) {
         try {
-            const parsed = JSON.parse(fs.readFileSync(LAST_REPATCH_PATH, "utf8")) as { ts?: number };
-            if (typeof parsed.ts === "number") flagTs = new Date(parsed.ts).toISOString();
-        } catch {
+            const parsed = JSON.parse(fs.readFileSync(LAST_REPATCH_PATH, "utf8"));
+            if (typeof parsed.ts === "number")
+                flagTs = new Date(parsed.ts).toISOString();
+        }
+        catch {
             flagTs = "(corrupt)";
         }
     }
-    log(
-        `  INSTALL_DIR/last-repatch.json: ${flagExists ? `present (ts ${flagTs})` : "(missing — cross-window reload signal inactive until next patch)"}`,
-    );
+    log(`  INSTALL_DIR/last-repatch.json: ${flagExists ? `present (ts ${flagTs})` : "(missing — cross-window reload signal inactive until next patch)"}`);
     let anyDetected = false;
     for (const cli of VSCODE_CLIS) {
-        if (probeVscodeCli(cli) === null) continue;
+        if (probeVscodeCli(cli) === null)
+            continue;
         anyDetected = true;
         const installed = installedCompanionVersion(cli);
         if (installed === null) {
             log(`  ${cli}: companion not installed`);
-        } else if (cmpVerStr(installed, COMPANION_VERSION) < 0) {
+        }
+        else if (cmpVerStr(installed, COMPANION_VERSION) < 0) {
             // Installed older than packaged → user is behind.
-            log(
-                `  ${cli}: companion INSTALLED ${installed} (packaged ${COMPANION_VERSION} — re-run \`npx vscode-claude-code-status-dot\` to upgrade)`,
-            );
-        } else if (cmpVerStr(installed, COMPANION_VERSION) > 0) {
+            log(`  ${cli}: companion INSTALLED ${installed} (packaged ${COMPANION_VERSION} — re-run \`npx vscode-claude-code-status-dot\` to upgrade)`);
+        }
+        else if (cmpVerStr(installed, COMPANION_VERSION) > 0) {
             // Installed newer than packaged → user is ahead (self-build etc.).
             log(`  ${cli}: companion INSTALLED ${installed} (newer than packaged ${COMPANION_VERSION} — keeping)`);
-        } else {
+        }
+        else {
             log(`  ${cli}: companion INSTALLED ${installed} (matches packaged)`);
         }
     }
@@ -5118,19 +4916,17 @@ function reportCompanionStatus(): void {
         log(`  no VS Code-family CLI on PATH (looked for: ${VSCODE_CLIS.join(", ")})`);
     }
 }
-
 // ---------------------------------------------------------------------------
 // Misc helpers
 // ---------------------------------------------------------------------------
-
-function ensureStateDir(): void {
+function ensureStateDir() {
     try {
         fs.mkdirSync(STATE_DIR, { recursive: true });
-    } catch {
+    }
+    catch {
         // Non-fatal — the hook is responsible for this dir at runtime too.
     }
 }
-
 /**
  * Copy our runtime files (resources/*.svg + hooks/cc-status.js) from PROJECT_ROOT
  * into INSTALL_DIR so the patched extension (IIFE bakes INSTALL_DIR/resources) and
@@ -5140,7 +4936,7 @@ function ensureStateDir(): void {
  * Idempotent: every install overwrites — updating is just "re-run". Copy failures
  * are warned, never fatal (so a single unreadable SVG never blocks the whole patch).
  */
-function installRuntimeFiles(): void {
+function installRuntimeFiles() {
     try {
         fs.mkdirSync(INSTALL_DIR, { recursive: true });
         const destRes = path.join(INSTALL_DIR, "resources");
@@ -5168,10 +4964,12 @@ function installRuntimeFiles(): void {
                     // files in this same function.
                     atomicCopyFileSync(srcFile, path.join(destRes, svg));
                     copied += 1;
-                } else {
+                }
+                else {
                     warn(`source SVG missing, not copied: ${svg}`);
                 }
-            } catch {
+            }
+            catch {
                 warn(`failed to copy ${svg} (non-fatal)`);
             }
         }
@@ -5180,16 +4978,20 @@ function installRuntimeFiles(): void {
         // our own claude-logo-*.svg namespace — never other files in destRes.
         try {
             for (const name of fs.readdirSync(destRes)) {
-                if (!name.startsWith("claude-logo-") || !name.endsWith(".svg")) continue;
-                if (OUR_SVGS.includes(name)) continue;
+                if (!name.startsWith("claude-logo-") || !name.endsWith(".svg"))
+                    continue;
+                if (OUR_SVGS.includes(name))
+                    continue;
                 try {
                     fs.unlinkSync(path.join(destRes, name));
                     log(`removed stale SVG: ${name}`);
-                } catch {
+                }
+                catch {
                     // Non-fatal — best-effort cleanup.
                 }
             }
-        } catch {
+        }
+        catch {
             // Non-fatal.
         }
         const srcHook = path.join(PROJECT_ROOT, "hooks", "cc-status.js");
@@ -5209,21 +5011,16 @@ function installRuntimeFiles(): void {
                 const srcBannerHash = parseHookBannerHash(srcBanner);
                 const srcBodyHash = hookBodyHashOf(srcContent);
                 if (srcVer === null) {
-                    warn(
-                        `source hooks/cc-status.js is missing the cc-status-dot-hook banner — version drift undetectable; copy proceeds but --status cannot report hook version`,
-                    );
-                } else if (srcVer !== HOOK_VERSION) {
-                    warn(
-                        `source hooks/cc-status.js banner ${srcVer} != HOOK_VERSION ${HOOK_VERSION} — bump the banner in cc-status.js to match`,
-                    );
-                } else if (srcBannerHash === null) {
-                    warn(
-                        `source hooks/cc-status.js banner ${srcVer} has no :HASH suffix — re-stamp with ${srcBodyHash} (hash scheme)`,
-                    );
-                } else if (srcBannerHash !== srcBodyHash) {
-                    warn(
-                        `source hooks/cc-status.js banner hash ${srcBannerHash} != body hash ${srcBodyHash} — hook body changed but banner not re-stamped; re-stamp the banner to match`,
-                    );
+                    warn(`source hooks/cc-status.js is missing the cc-status-dot-hook banner — version drift undetectable; copy proceeds but --status cannot report hook version`);
+                }
+                else if (srcVer !== HOOK_VERSION) {
+                    warn(`source hooks/cc-status.js banner ${srcVer} != HOOK_VERSION ${HOOK_VERSION} — bump the banner in cc-status.js to match`);
+                }
+                else if (srcBannerHash === null) {
+                    warn(`source hooks/cc-status.js banner ${srcVer} has no :HASH suffix — re-stamp with ${srcBodyHash} (hash scheme)`);
+                }
+                else if (srcBannerHash !== srcBodyHash) {
+                    warn(`source hooks/cc-status.js banner hash ${srcBannerHash} != body hash ${srcBodyHash} — hook body changed but banner not re-stamped; re-stamp the banner to match`);
                 }
                 // v0.2.6 round-3 MEDIUM (integrity): atomic copy. A partial
                 // cc-status.js truncates the Node script on disk; the next
@@ -5237,10 +5034,12 @@ function installRuntimeFiles(): void {
                 // successful install. atomicCopyFileSync uses tmp+rename so
                 // the destination is never observed half-written.
                 atomicCopyFileSync(srcHook, path.join(destHooks, "cc-status.js"));
-            } else {
+            }
+            else {
                 warn("source hook missing, not copied: hooks/cc-status.js");
             }
-        } catch {
+        }
+        catch {
             warn("failed to copy hooks/cc-status.js (non-fatal)");
         }
         // also install the node-locating wrapper at
@@ -5255,8 +5054,9 @@ function installRuntimeFiles(): void {
             const installedHookAbs = path.join(destHooks, "cc-status.js");
             const nodeBin = process.execPath && fs.existsSync(process.execPath) ? process.execPath : "node";
             installNodeWrapper(installedHookAbs, nodeBin);
-        } catch (e) {
-            warn(`failed to write node-locating wrapper (non-fatal): ${(e as Error).message}`);
+        }
+        catch (e) {
+            warn(`failed to write node-locating wrapper (non-fatal): ${e.message}`);
             warn(`  hooks will use the legacy baked-node-binary fallback until next successful install.`);
         }
         // v0.2.4: copy token-rates.json (model→USD-per-1M-tokens pricing table)
@@ -5283,7 +5083,8 @@ function installRuntimeFiles(): void {
                         const srcBuf = fs.readFileSync(srcRates);
                         const dstBuf = fs.readFileSync(dstRates);
                         userEdited = !srcBuf.equals(dstBuf);
-                    } catch {
+                    }
+                    catch {
                         /* compare failed — assume not edited, plain overwrite */
                     }
                     if (userEdited) {
@@ -5299,19 +5100,15 @@ function installRuntimeFiles(): void {
                                 // token-rates.json — losing their custom rates.
                                 atomicCopyFileSync(dstRates, bakRates);
                                 warn(`token-rates.json has user edits — backed up to ${bakRates}`);
-                                warn(
-                                    `  re-apply your custom rates after this upgrade (or restore the .bak) — cost estimates revert to bundled defaults until then.`,
-                                );
-                            } else {
-                                warn(
-                                    `token-rates.json has user edits but a .bak already exists (preserving the older backup).`,
-                                );
+                                warn(`  re-apply your custom rates after this upgrade (or restore the .bak) — cost estimates revert to bundled defaults until then.`);
+                            }
+                            else {
+                                warn(`token-rates.json has user edits but a .bak already exists (preserving the older backup).`);
                                 warn(`  your current edits will be overwritten — back them up manually if needed.`);
                             }
-                        } catch (e) {
-                            warn(
-                                `could not back up user token-rates.json (proceeding with overwrite): ${(e as Error).message}`,
-                            );
+                        }
+                        catch (e) {
+                            warn(`could not back up user token-rates.json (proceeding with overwrite): ${e.message}`);
                         }
                     }
                 }
@@ -5322,28 +5119,26 @@ function installRuntimeFiles(): void {
                 // cc-status.js (no state freeze) but still a silent regression
                 // the user would only notice by inspecting the SBI tooltip.
                 atomicCopyFileSync(srcRates, dstRates);
-            } else {
-                warn(
-                    "source token-rates.json missing — cost estimation will be disabled (token SBI still works, $ hidden)",
-                );
             }
-        } catch (e) {
-            warn(`failed to copy token-rates.json (non-fatal): ${(e as Error).message}`);
+            else {
+                warn("source token-rates.json missing — cost estimation will be disabled (token SBI still works, $ hidden)");
+            }
         }
-        log(
-            `installed runtime files → ${INSTALL_DIR} (${copied}/${OUR_SVGS.length} SVGs + hook + wrapper + token-rates.json)`,
-        );
-    } catch (e) {
-        warn(`runtime install dir setup failed: ${(e as Error).message}`);
+        catch (e) {
+            warn(`failed to copy token-rates.json (non-fatal): ${e.message}`);
+        }
+        log(`installed runtime files → ${INSTALL_DIR} (${copied}/${OUR_SVGS.length} SVGs + hook + wrapper + token-rates.json)`);
+    }
+    catch (e) {
+        warn(`runtime install dir setup failed: ${e.message}`);
         warn(`the IIFE/hook will reference ${INSTALL_DIR} — ensure files exist there or re-run.`);
     }
 }
-
 /**
  * Remove our persistent runtime install dir (--revert). Per-session STATE_DIR is
  * USER DATA and is intentionally left untouched.
  */
-function removeInstallDir(): void {
+function removeInstallDir() {
     if (!fs.existsSync(INSTALL_DIR)) {
         log(`runtime install dir absent — nothing to clean: ${INSTALL_DIR}`);
         return;
@@ -5351,18 +5146,18 @@ function removeInstallDir(): void {
     try {
         fs.rmSync(INSTALL_DIR, { recursive: true, force: true });
         log(`removed runtime install dir: ${INSTALL_DIR}`);
-    } catch (e) {
-        warn(`could not remove ${INSTALL_DIR}: ${(e as Error).message} (remove manually)`);
+    }
+    catch (e) {
+        warn(`could not remove ${INSTALL_DIR}: ${e.message} (remove manually)`);
     }
 }
-
 /**
  * Report `.bak` files left behind by --revert. These are kept intentionally as a
  * safety net (backupOnce never overwrites an existing .bak, so they hold the
  * PRE-patch originals), but the user should know they exist and how to remove
  * them once they're confident the revert is good.
  */
-function reportResidualBaks(extDir: string): void {
+function reportResidualBaks(extDir) {
     const candidates = [
         path.join(extDir, "extension.js.bak"),
         path.join(extDir, "webview", "index.js.bak"),
@@ -5371,34 +5166,36 @@ function reportResidualBaks(extDir: string): void {
         settingsPath() + ".cc-status-dot.bak",
     ];
     const left = candidates.filter((p) => fs.existsSync(p));
-    if (left.length === 0) return;
+    if (left.length === 0)
+        return;
     log(`Intentionally kept ${left.length} .bak safety cop${left.length === 1 ? "y" : "ies"} (pre-patch originals):`);
-    for (const p of left) log(`  - ${p}`);
+    for (const p of left)
+        log(`  - ${p}`);
     log(`Remove manually if you're confident the revert is good.`);
 }
-
-function checkSvgs(resDir: string): void {
+function checkSvgs(resDir) {
     const missing = OUR_SVGS.filter((f) => !fs.existsSync(path.join(resDir, f)));
     if (missing.length === 0) {
         log(`all ${OUR_SVGS.length} status SVGs present in ${resDir}`);
         return;
     }
     warn(`missing SVGs in ${resDir}:`);
-    for (const f of missing) warn(`  - ${f}`);
+    for (const f of missing)
+        warn(`  - ${f}`);
     warn("The injected timer references these files; the tab icon may go blank for the");
     warn("corresponding state until they are added. See docs/DESIGN-injection.md §5.");
 }
-
-function isHooksWired(): boolean {
+function isHooksWired() {
     const settings = settingsPath();
-    if (!fs.existsSync(settings)) return false;
+    if (!fs.existsSync(settings))
+        return false;
     try {
         return fs.readFileSync(settings, "utf8").includes(HOOK_MARKER);
-    } catch {
+    }
+    catch {
         return false;
     }
 }
-
 /**
  * Detect hook commands whose wrapper script is missing, or whose wrapper's
  * baked node binary (stored inside the wrapper) no longer exists on disk.
@@ -5418,37 +5215,43 @@ function isHooksWired(): boolean {
  * in settings.json; we still detect that shape and warn on missing binaries,
  * so users upgrading from an older install are also covered.
  */
-function reportBakedNodeHealth(): void {
+function reportBakedNodeHealth() {
     const settings = settingsPath();
-    if (!fs.existsSync(settings)) return;
-    let obj: Record<string, unknown>;
+    if (!fs.existsSync(settings))
+        return;
+    let obj;
     try {
         obj = parseJsonc(fs.readFileSync(settings, "utf8"), settings);
-    } catch {
+    }
+    catch {
         return; // malformed settings — discoverExtension etc. will surface this
     }
-    const hooks = obj.hooks as HooksMap | undefined;
-    if (!hooks || typeof hooks !== "object") return;
+    const hooks = obj.hooks;
+    if (!hooks || typeof hooks !== "object")
+        return;
     // Track wrapper script paths seen in hook commands (new architecture).
-    const wrapperSeen = new Set<string>();
+    const wrapperSeen = new Set();
     let wrapperMissing = false;
     // Track pre-wrapper baked node binaries still present in settings.json
     // (older installs not yet re-run after the wrapper migration).
-    const seen = new Set<string>();
+    const seen = new Set();
     let warnedAny = false;
     for (const ev of Object.keys(hooks)) {
         const arr = hooks[ev];
-        if (!Array.isArray(arr)) continue;
+        if (!Array.isArray(arr))
+            continue;
         for (const g of arr) {
-            if (!groupIsOurs(g)) continue;
-            for (const h of (g as HookGroup).hooks) {
+            if (!groupIsOurs(g))
+                continue;
+            for (const h of g.hooks) {
                 const cmd = typeof h?.command === "string" ? h.command : "";
                 // New wrapper shape: `sh "<wrapperAbs>"  # cc-status-dot-managed`
                 // (POSIX) or `"<wrapperAbs>.cmd"  # cc-status-dot-managed` (Win).
                 const w = cmd.match(/(?:^|\s)("?)([^\s"]*cc-status-hook(?:\.cmd)?)\1\s+#\s*cc-status-dot-managed/);
                 if (w) {
                     const wrapperAbs = w[2];
-                    if (wrapperSeen.has(wrapperAbs)) continue;
+                    if (wrapperSeen.has(wrapperAbs))
+                        continue;
                     wrapperSeen.add(wrapperAbs);
                     if (!fs.existsSync(wrapperAbs)) {
                         warn(`hook command references a wrapper script that no longer exists: ${wrapperAbs}`);
@@ -5459,15 +5262,16 @@ function reportBakedNodeHealth(): void {
                 }
                 // Legacy pre-wrapper shape: `<nodeBin> "<hookAbs>"  # cc-status-dot-managed`
                 const m = cmd.match(/^(\S+)\s+"[^"]*cc-status\.js"\s+#\s*cc-status-dot-managed/);
-                if (!m) continue;
+                if (!m)
+                    continue;
                 const nodeBin = m[1];
-                if (seen.has(nodeBin)) continue;
+                if (seen.has(nodeBin))
+                    continue;
                 seen.add(nodeBin);
-                if (nodeBin === "node") continue; // already a bare PATH fallback
+                if (nodeBin === "node")
+                    continue; // already a bare PATH fallback
                 if (!fs.existsSync(nodeBin)) {
-                    warn(
-                        `hook command bakes a node binary that no longer exists (legacy pre-wrapper install): ${nodeBin}`,
-                    );
+                    warn(`hook command bakes a node binary that no longer exists (legacy pre-wrapper install): ${nodeBin}`);
                     warn(`  hooks will fail to spawn (ENOENT) — re-run install to migrate to the multi-path wrapper.`);
                     warnedAny = true;
                 }
@@ -5481,15 +5285,15 @@ function reportBakedNodeHealth(): void {
         log(`hook baked node binary (legacy): present (${[...seen].join(", ")})`);
     }
 }
-
 /** Report extension.js patch health: patched flag, anchor count (A-only vs
  *  A+B), injected IIFE version + content-hash drift, and baked RES path
  *  staleness. Each line surfaces a separate detection result so a user
  *  inspecting --status knows exactly which axis is fresh vs. stale. */
-function reportExtensionPatchHealth(extSrc: string): void {
+function reportExtensionPatchHealth(extSrc) {
     const patched = isExtensionPatched(extSrc);
     log(`extension.js patched: ${patched ? "YES" : "no"}`);
-    if (!patched) return;
+    if (!patched)
+        return;
     // Anchor injection health: INJECT_MARKER appears once per injection site
     // (Anchor A always, Anchor B when present). 1 = A only (the blue-dot fix
     // is INACTIVE); 2 = A+B (fix active). A CC update that drifted Anchor B's
@@ -5498,11 +5302,11 @@ function reportExtensionPatchHealth(extSrc: string): void {
     const markerN = countOccurrences(extSrc, INJECT_MARKER);
     if (markerN >= 2) {
         log(`  anchors injected: A+B (blue-dot fix ACTIVE)`);
-    } else if (markerN === 1) {
-        log(
-            `  anchors injected: A only (blue-dot fix INACTIVE — Anchor B not found at inject time; CC update likely drifted Anchor B's exact bytes. Re-run install.)`,
-        );
-    } else {
+    }
+    else if (markerN === 1) {
+        log(`  anchors injected: A only (blue-dot fix INACTIVE — Anchor B not found at inject time; CC update likely drifted Anchor B's exact bytes. Re-run install.)`);
+    }
+    else {
         log(`  anchors injected: unexpected marker count ${markerN}`);
     }
     // Injected IIFE version + content-hash drift. The hash catches intra-
@@ -5513,30 +5317,32 @@ function reportExtensionPatchHealth(extSrc: string): void {
     const hashStale = diskHash !== wantHash;
     if (ver === null) {
         log(`  injected IIFE: pre-v0.1.3 (STALE — re-run to re-inject)`);
-    } else if (ver !== INJECT_VERSION) {
+    }
+    else if (ver !== INJECT_VERSION) {
         log(`  injected IIFE: ${ver} (STALE — expected ${INJECT_VERSION}; re-run to re-inject)`);
-    } else if (hashStale) {
-        log(
-            `  injected IIFE: ${ver} hash ${diskHash ?? "(pre-hash-scheme)"} (STALE — expected ${wantHash}; re-run to re-inject)`,
-        );
-    } else {
+    }
+    else if (hashStale) {
+        log(`  injected IIFE: ${ver} hash ${diskHash ?? "(pre-hash-scheme)"} (STALE — expected ${wantHash}; re-run to re-inject)`);
+    }
+    else {
         log(`  injected IIFE: ${ver} hash ${diskHash} (up to date)`);
     }
     // Stale baked RES path (e.g. a v0.1 install pointing at PROJECT_ROOT).
     const baked = bakedResPath(extSrc);
     if (baked === null) {
         log(`  baked RES: (not detectable)`);
-    } else if (baked === RUNTIME_RES_DIR) {
+    }
+    else if (baked === RUNTIME_RES_DIR) {
         log(`  baked RES: ${baked} (matches INSTALL_DIR)`);
-    } else {
+    }
+    else {
         log(`  baked RES: ${baked} (STALE — expected ${RUNTIME_RES_DIR}; re-run to update)`);
     }
 }
-
 /** Report legacy-residue layers: the v0.1.2 webview aggregate bar and the
  *  v0.1.13 commandCenter package.json patch. Both are detected and surfaced
  *  so the user re-runs install to clean them. */
-function reportLegacyResidue(extDir: string): void {
+function reportLegacyResidue(extDir) {
     const legacyBar = hasLegacyWebviewPatch(extDir);
     log(`legacy webview bar (v0.1.2): ${legacyBar ? "detected — re-run install to clean" : "clean"}`);
     const pkgPath = path.join(extDir, "package.json");
@@ -5544,14 +5350,13 @@ function reportLegacyResidue(extDir: string): void {
     const pkgStale = isPackageJsonPatched(pkgSrc);
     log(`package.json (v0.1.13 commandCenter residue): ${pkgStale ? "STALE — re-run install to clean" : "clean"}`);
 }
-
 /** Report on-disk hook script health: parses the
  *  `cc-status-dot-hook:vX.Y.Z:HASH` banner at the top of
  *  INSTALL_DIR/hooks/cc-status.js and surfaces EITHER a version mismatch
  *  (older writer contract) OR a hash mismatch (same version but drifted
  *  body). Mirrors the IIFE's stale-version + stale-hash surfacing so a
  *  stale hook against a fresh IIFE is no longer silent feature loss. */
-function reportHookScriptHealth(): void {
+function reportHookScriptHealth() {
     const installedHook = path.join(INSTALL_DIR, "hooks", "cc-status.js");
     if (!fs.existsSync(installedHook)) {
         log(`  hook script: (not installed — re-run install)`);
@@ -5566,38 +5371,37 @@ function reportHookScriptHealth(): void {
         const wantHash = currentHookBodyHash();
         if (insVer === null) {
             log(`  hook script: (no version banner — pre-v0.1.14 or hand-edited; re-run install)`);
-        } else if (insVer !== HOOK_VERSION) {
+        }
+        else if (insVer !== HOOK_VERSION) {
             log(`  hook script: ${insVer} (STALE — expected ${HOOK_BANNER_PREFIX}${HOOK_VERSION}; re-run to refresh)`);
-        } else if (insHash === null) {
+        }
+        else if (insHash === null) {
             log(`  hook script: ${insVer} hash (pre-hash-scheme — STALE; re-run install to stamp ${insBodyHash})`);
-        } else if (wantHash !== null && insBodyHash !== wantHash) {
-            log(
-                `  hook script: ${insVer} hash ${insHash} (STALE — body ${insBodyHash} != source ${wantHash}; re-run to refresh)`,
-            );
-        } else {
+        }
+        else if (wantHash !== null && insBodyHash !== wantHash) {
+            log(`  hook script: ${insVer} hash ${insHash} (STALE — body ${insBodyHash} != source ${wantHash}; re-run to refresh)`);
+        }
+        else {
             log(`  hook script: ${insVer} hash ${insHash} (up to date)`);
         }
-    } catch {
+    }
+    catch {
         log(`  hook script: (unreadable — ${INSTALL_DIR}/hooks/cc-status.js)`);
     }
 }
-
 /** Report runtime files: hooks-wired flag, on-disk hook script health,
  *  SVG presence in RUNTIME_RES_DIR (NOT PROJECT_ROOT — the IIFE references
  *  the INSTALL_DIR path, so a fallback to the source copy would hide a real
  *  "icons will go blank" risk), install dir + state dir presence. */
-function reportRuntimeFiles(): void {
+function reportRuntimeFiles() {
     log(`hooks wired: ${isHooksWired() ? "YES" : "no"}`);
     reportHookScriptHealth();
     checkSvgs(RUNTIME_RES_DIR);
-    log(
-        `runtime install dir: ${INSTALL_DIR} ${fs.existsSync(INSTALL_DIR) ? "(exists)" : "(will be created on install)"}`,
-    );
+    log(`runtime install dir: ${INSTALL_DIR} ${fs.existsSync(INSTALL_DIR) ? "(exists)" : "(will be created on install)"}`);
     log(`state dir: ${STATE_DIR} ${fs.existsSync(STATE_DIR) ? "(exists)" : "(will be created on first hook fire)"}`);
     reportBakedNodeHealth();
 }
-
-function reportStatus(): void {
+function reportStatus() {
     const { dir, version } = discoverExtension();
     log(`CC extension: v${version}`);
     log(`  ${dir}`);
@@ -5608,10 +5412,9 @@ function reportStatus(): void {
     // running CC matches the verified baseline or is in untested-but-anchor-
     // stable territory.
     if (version !== LAST_VERIFIED_CC) {
-        log(
-            `  last verified: ${LAST_VERIFIED_CC} (CC ${version} is untested — anchors may still match, install proceeds if countOccurrences==1)`,
-        );
-    } else {
+        log(`  last verified: ${LAST_VERIFIED_CC} (CC ${version} is untested — anchors may still match, install proceeds if countOccurrences==1)`);
+    }
+    else {
         log(`  last verified: ${LAST_VERIFIED_CC} (matches)`);
     }
     const extJs = path.join(dir, "extension.js");
@@ -5621,30 +5424,26 @@ function reportStatus(): void {
     reportRuntimeFiles();
     reportCompanionStatus();
 }
-
-function printHelp(): void {
-    console.log(
-        [
-            "cc-status-dot patcher",
-            "",
-            "Usage:",
-            "  vscode-claude-code-status-dot                  install patch + wire hooks (idempotent)",
-            "  vscode-claude-code-status-dot --patch-only     re-apply ONLY the extension.js patch (used by the companion; skips hooks/runtime/companion install)",
-            "  vscode-claude-code-status-dot --revert         restore extension.js + package.json (cleans v0.1.13 commandCenter residue + legacy v0.1.2 webview), remove hooks + runtime copy",
-            "  vscode-claude-code-status-dot --status         show detection results, change nothing",
-            "  vscode-claude-code-status-dot --help           this message",
-            "",
-            "  (from source, replace the command with: npx tsx patch.ts)",
-            "",
-            "Runtime files (resources/*.svg, hooks/cc-status.js) are copied to:",
-            "  " + INSTALL_DIR,
-            "",
-            "After install/revert, reload VS Code: Cmd+Shift+P (macOS) / Ctrl+Shift+P (Win/Linux) → 'Developer: Reload Window'.",
-        ].join("\n"),
-    );
+function printHelp() {
+    console.log([
+        "cc-status-dot patcher",
+        "",
+        "Usage:",
+        "  vscode-claude-code-status-dot                  install patch + wire hooks (idempotent)",
+        "  vscode-claude-code-status-dot --patch-only     re-apply ONLY the extension.js patch (used by the companion; skips hooks/runtime/companion install)",
+        "  vscode-claude-code-status-dot --revert         restore extension.js + package.json (cleans v0.1.13 commandCenter residue + legacy v0.1.2 webview), remove hooks + runtime copy",
+        "  vscode-claude-code-status-dot --status         show detection results, change nothing",
+        "  vscode-claude-code-status-dot --help           this message",
+        "",
+        "  (from source, replace the command with: npx tsx patch.ts)",
+        "",
+        "Runtime files (resources/*.svg, hooks/cc-status.js) are copied to:",
+        "  " + INSTALL_DIR,
+        "",
+        "After install/revert, reload VS Code: Cmd+Shift+P (macOS) / Ctrl+Shift+P (Win/Linux) → 'Developer: Reload Window'.",
+    ].join("\n"));
 }
-
-function reloadHint(): void {
+function reloadHint() {
     // v0.2.3: cross-platform shortcut hint. Cmd+Shift+P on macOS, Ctrl+Shift+P
     // everywhere else (Win/Linux). Older builds printed a Mac-only hint that
     // Win/Linux users saw verbatim — accurate shortcut matters because this is
@@ -5652,7 +5451,6 @@ function reloadHint(): void {
     const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
     log(`Done. Reload VS Code to apply: ${palette} → 'Developer: Reload Window'.`);
 }
-
 // ---------------------------------------------------------------------------
 // Self-test I/O — fixture corpus for the pure patcher functions.
 //
@@ -5667,13 +5465,12 @@ function reloadHint(): void {
 // equal the pristine scaffold BYTE-FOR-BYTE. Any future replA/replB form
 // change that forgets the strip patterns fails here (and in
 // hooks/test-strip-roundtrip.mjs which spawns this subcommand).
-function runSelfTestStrip(): void {
+function runSelfTestStrip() {
     // Scaffold: valid JS embedding ANCHOR_A (as an else-if after a dummy if)
     // and ANCHOR_B (inside a block; the trailing `if(...)` is completed with a
     // body so the scaffold compiles — in real CC code the same `if` continues
     // with CC's icon ladder, which we do not need for the round-trip).
-    const scaffold =
-        "async function processRequest(e,t){" +
+    const scaffold = "async function processRequest(e,t){" +
         'if(e.request.type==="noop")return null;' +
         ANCHOR_A +
         "}" +
@@ -5696,32 +5493,27 @@ function runSelfTestStrip(): void {
     // ternary) which the pre-round-2 legacy segA could never match. This
     // synthetic region pins the widened legacy pattern so the comma-era
     // recovery path cannot silently die again.
-    const legacyRegion =
-        'async function legacy(e){if(e.request.type==="x")return null;else if(e.request.type==="update_session_state")return this.__ccsdSid=e.request.sessionId,this.__ccsdTitle=e.request.title,(a,(b,c)),(d),/*cc-status-dot-injected:v0.5.46:test*/(function(t){})(this),this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"};return null}';
-    const legacyPristine =
-        'async function legacy(e){if(e.request.type==="x")return null;else if(e.request.type==="update_session_state")return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"};return null}';
+    const legacyRegion = 'async function legacy(e){if(e.request.type==="x")return null;else if(e.request.type==="update_session_state")return this.__ccsdSid=e.request.sessionId,this.__ccsdTitle=e.request.title,(a,(b,c)),(d),/*cc-status-dot-injected:v0.5.46:test*/(function(t){})(this),this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"};return null}';
+    const legacyPristine = 'async function legacy(e){if(e.request.type==="x")return null;else if(e.request.type==="update_session_state")return this.onSessionStateChanged?.(e.request.sessionId,e.request.state,e.request.title),{type:"update_session_state_response"};return null}';
     const legacyStripped = stripIifeInPlace(legacyRegion);
-    let failures: string[] = [];
+    let failures = [];
     if (legacyStripped !== legacyPristine) {
-        failures.push(
-            "legacy comma-form region did not strip to pristine (segA legacy pattern dead for v0.5.44-46 forms — keep the widened middle in lockstep)",
-        );
+        failures.push("legacy comma-form region did not strip to pristine (segA legacy pattern dead for v0.5.44-46 forms — keep the widened middle in lockstep)");
     }
-    if (!isExtensionPatched(patched)) failures.push("spliced output carries no INJECT_MARKER");
+    if (!isExtensionPatched(patched))
+        failures.push("spliced output carries no INJECT_MARKER");
     try {
         assertCompiles(patched, "self-test-strip patched scaffold");
-    } catch (e) {
+    }
+    catch (e) {
         failures.push("patched scaffold does not compile: " + String(e).slice(0, 200));
     }
     const stripped = stripIifeInPlace(patched);
     if (stripped === null) {
-        failures.push(
-            "stripIifeInPlace returned null (patterns no longer match the emitted form — update the segA_block/segA/segB/segC patterns in lockstep with buildReplA/buildReplB/buildReplC)",
-        );
-    } else if (stripped !== scaffold) {
-        failures.push(
-            "strip round-trip is not byte-exact (length " + stripped.length + " vs pristine " + scaffold.length + ")",
-        );
+        failures.push("stripIifeInPlace returned null (patterns no longer match the emitted form — update the segA_block/segA/segB/segC patterns in lockstep with buildReplA/buildReplB/buildReplC)");
+    }
+    else if (stripped !== scaffold) {
+        failures.push("strip round-trip is not byte-exact (length " + stripped.length + " vs pristine " + scaffold.length + ")");
     }
     // v0.5.49 alt-ids roundtrip: a tolerant-matched install carries RENAMED
     // identifiers everywhere (stash prefixes, replC's sendRequest copy, the
@@ -5733,11 +5525,10 @@ function runSelfTestStrip(): void {
     // anchor (a shared 'n' could not catch cross-anchor capture mixups) plus a
     // '$'-containing name (the capture class is [A-Za-z0-9_$]+; string-pattern
     // replace leaves $N literal, pinned here).
-    const altA: IdsA = { param: "nA", rvar: "rA", zod: "zA$9" };
-    const altB: IdsB = { param: "nB", rvar: "rB" };
-    const altC: IdsC = { param: "nC", dlg: "dC", cbsink: "cC$" };
-    const scaffoldAlt =
-        "async function processRequest(nA,u){" +
+    const altA = { param: "nA", rvar: "rA", zod: "zA$9" };
+    const altB = { param: "nB", rvar: "rB" };
+    const altC = { param: "nC", dlg: "dC", cbsink: "cC$" };
+    const scaffoldAlt = "async function processRequest(nA,u){" +
         'if(nA.request.type==="noop")return null;' +
         anchorAFrom(altA) +
         "}" +
@@ -5750,41 +5541,31 @@ function runSelfTestStrip(): void {
     let patchedAlt = scaffoldAlt.replace(anchorAFrom(altA), buildReplA(iife, altA));
     patchedAlt = patchedAlt.replace(anchorBFrom(altB), buildReplB(iife, altB));
     patchedAlt = patchedAlt.replace(anchorCFrom(altC), buildReplC(altC));
-    if (
-        !patchedAlt.includes("this.__ccsdSid=nA.request.sessionId") ||
+    if (!patchedAlt.includes("this.__ccsdSid=nA.request.sessionId") ||
         !patchedAlt.includes("let rA=zA$9(nA.request);") ||
-        !patchedAlt.includes("this.__ccsdTitle=nB.request.title")
-    ) {
+        !patchedAlt.includes("this.__ccsdTitle=nB.request.title")) {
         failures.push("alt-ids splice did not emit the captured identifiers");
     }
     const strippedAlt = stripIifeInPlace(patchedAlt);
     if (strippedAlt !== scaffoldAlt) {
-        failures.push(
-            "alt-ids strip round-trip is not byte-exact (renamed-id installs would restore WRONG identifiers)",
-        );
+        failures.push("alt-ids strip round-trip is not byte-exact (renamed-id installs would restore WRONG identifiers)");
     }
     if (stripped === null) {
         // v0.5.47 debug aid: dump the spliced region heads so pattern drift is
         // diagnosable from the failure output alone.
         const idx = patched.indexOf("this.__ccsdSid=e.request.sessionId");
-        console.error(
-            "[cc-status-dot][self-test-strip] A-region head: " +
-                JSON.stringify(patched.slice(Math.max(0, idx - 40), idx + 260)),
-        );
+        console.error("[cc-status-dot][self-test-strip] A-region head: " +
+            JSON.stringify(patched.slice(Math.max(0, idx - 40), idx + 260)));
         const idxB = patched.indexOf("this.__ccsdPending=!!");
-        console.error(
-            "[cc-status-dot][self-test-strip] B-region head: " + JSON.stringify(patched.slice(idxB, idxB + 260)),
-        );
+        console.error("[cc-status-dot][self-test-strip] B-region head: " + JSON.stringify(patched.slice(idxB, idxB + 260)));
     }
     if (failures.length > 0) {
-        for (const f of failures) console.error("[cc-status-dot][self-test-strip] FAIL: " + f);
+        for (const f of failures)
+            console.error("[cc-status-dot][self-test-strip] FAIL: " + f);
         process.exit(1);
     }
-    console.log(
-        "[cc-status-dot][self-test-strip] OK: inject→strip round-trip byte-exact over " + patched.length + " chars",
-    );
+    console.log("[cc-status-dot][self-test-strip] OK: inject→strip round-trip byte-exact over " + patched.length + " chars");
 }
-
 /** v0.5.49 --self-test-anchors: behavioral test of the two-tier anchor
  *  resolution on synthetic bundles (mirrors --self-test-strip's philosophy —
  *  assert on REAL function output, not source greps). Rows:
@@ -5797,17 +5578,16 @@ function runSelfTestStrip(): void {
  *  T7 B ambiguous          -> matchAnchorB null with >1 tolerant match
  *  T8 B renamed-ids        -> tier-2 + captured-name injection via buildReplB
  *  T9 C renamed-ids        -> tier-2 + captured-name injection via buildReplC  */
-function stripIiePlaceSafe(x: string): string | null {
+function stripIiePlaceSafe(x) {
     return stripIifeInPlace(x);
 }
-function runSelfTestAnchors(): void {
-    const rows: Array<{ t: string; ok: boolean; info: string }> = [];
+function runSelfTestAnchors() {
+    const rows = [];
     const iife = buildIIFE(RUNTIME_RES_DIR);
-    const A238: IdsA = { param: "e", rvar: "r", zod: "uNe" };
+    const A238 = { param: "e", rvar: "r", zod: "uNe" };
     const A240 = IDS_A_DEFAULT;
-    const AALT: IdsA = { param: "n", rvar: "s", zod: "qX9" };
-    const mk = (ids: IdsA) =>
-        "async function p(" +
+    const AALT = { param: "n", rvar: "s", zod: "qX9" };
+    const mk = (ids) => "async function p(" +
         ids.param +
         ",t){if(" +
         ids.param +
@@ -5823,8 +5603,10 @@ function runSelfTestAnchors(): void {
         if (ids !== null && ids.zod === "uNe") {
             const patched = src.replace(anchorAFrom(ids), buildReplA(iife, ids));
             ok = patched.includes("let r=uNe(e.request);") && stripIiePlaceSafe(patched) === src;
-            if (!ok) info = "strip round-trip failed";
-        } else if (ids !== null) {
+            if (!ok)
+                info = "strip round-trip failed";
+        }
+        else if (ids !== null) {
             info = "wrong zod captured: " + ids.zod;
         }
         rows.push({ t: "T1 238-shape(uNe) tier-2 + strip", ok, info: ok ? "" : info });
@@ -5844,9 +5626,10 @@ function runSelfTestAnchors(): void {
             const patched = src.replace(anchorAFrom(ids), buildReplA(iife, ids));
             ok =
                 patched.includes("this.__ccsdSid=n.request.sessionId") &&
-                patched.includes("let s=qX9(n.request);") &&
-                stripIiePlaceSafe(patched) === src;
-            if (!ok) info = "strip round-trip failed";
+                    patched.includes("let s=qX9(n.request);") &&
+                    stripIiePlaceSafe(patched) === src;
+            if (!ok)
+                info = "strip round-trip failed";
         }
         rows.push({ t: "T3 renamed-ids tier-2 + captured-name injection", ok, info: ok ? "" : info });
     }
@@ -5857,20 +5640,17 @@ function runSelfTestAnchors(): void {
     }
     // T5: structural drift (zod gate dropped, direct callback) -> 0 matches.
     {
-        const src =
-            'async function p(e,t){if(e.request.type==="noop")return null;else if(e.request.type==="update_session_state"){this.onSessionStateChanged?.(e.request);return{type:"update_session_state_response"}}}';
+        const src = 'async function p(e,t){if(e.request.type==="noop")return null;else if(e.request.type==="update_session_state"){this.onSessionStateChanged?.(e.request);return{type:"update_session_state_response"}}}';
         rows.push({ t: "T5 structural drift fails closed", ok: matchAnchorA(src) === null, info: "" });
     }
     // T6: SDK-side switch alias arm alone must NOT match TOL_A.
     {
-        const src =
-            'async function sdk(e){switch(e.request.type){case"update_session_state":return{type:"update_session_state_response"};default:return null}}';
+        const src = 'async function sdk(e){switch(e.request.type){case"update_session_state":return{type:"update_session_state_response"};default:return null}}';
         rows.push({ t: "T6 SDK switch alias never matches", ok: matchAnchorA(src) === null, info: "" });
     }
     // T8: B renamed ids resolve via tier 2 and the injection carries them.
     {
-        const src =
-            "function f(qB){if(this.panelTab){this.panelTab.title=qB.request.title;let wB;if(qB.request.hasPendingPermissions)wB=1}}";
+        const src = "function f(qB){if(this.panelTab){this.panelTab.title=qB.request.title;let wB;if(qB.request.hasPendingPermissions)wB=1}}";
         const ids = matchAnchorB(src);
         let ok = false;
         if (ids !== null && ids.param === "qB" && ids.rvar === "wB") {
@@ -5880,62 +5660,35 @@ function runSelfTestAnchors(): void {
     }
     // T9: C renamed ids resolve via tier 2 and replC carries them.
     {
-        const src =
-            'function g(zC,dC2,cC2){return(await this.sendRequest(zC,{type:"user_dialog_request",dialogKind:dC2.dialogKind,payload:dC2.payload,toolUseID:dC2.toolUseID},cC2)).result}';
+        const src = 'function g(zC,dC2,cC2){return(await this.sendRequest(zC,{type:"user_dialog_request",dialogKind:dC2.dialogKind,payload:dC2.payload,toolUseID:dC2.toolUseID},cC2)).result}';
         const ids = matchAnchorC(src);
         let ok = false;
         if (ids !== null && ids.param === "zC" && ids.dlg === "dC2" && ids.cbsink === "cC2") {
-            ok = buildReplC(ids).includes(
-                'await this.sendRequest(zC,{type:"user_dialog_request",dialogKind:dC2.dialogKind',
-            );
+            ok = buildReplC(ids).includes('await this.sendRequest(zC,{type:"user_dialog_request",dialogKind:dC2.dialogKind');
         }
         rows.push({ t: "T9 C renamed-ids tier-2 + captured-name injection", ok, info: ok ? "" : "C capture failed" });
     }
     // T7: B ambiguity (two tolerant matches) -> null.
     {
-        const b = (p: string, r: string) =>
-            "this.panelTab.title=" + p + ".request.title;let " + r + ";if(" + p + ".request.hasPendingPermissions)";
+        const b = (p, r) => "this.panelTab.title=" + p + ".request.title;let " + r + ";if(" + p + ".request.hasPendingPermissions)";
         const src = "function f(e){if(x){" + b("e", "r") + "r=1}}function g(n){if(y){" + b("n", "w") + "w=1}}";
         rows.push({ t: "T7 B ambiguous fails closed", ok: matchAnchorB(src) === null, info: "" });
     }
     const failed = rows.filter((r) => !r.ok);
     for (const r of rows) {
-        console.log(
-            `[cc-status-dot][self-test-anchors] ${r.ok ? "PASS" : "FAIL"} ${r.t}${r.info ? " — " + r.info : ""}`,
-        );
+        console.log(`[cc-status-dot][self-test-anchors] ${r.ok ? "PASS" : "FAIL"} ${r.t}${r.info ? " — " + r.info : ""}`);
     }
-    if (failed.length > 0) process.exit(1);
+    if (failed.length > 0)
+        process.exit(1);
     console.log(`[cc-status-dot][self-test-anchors] OK: ${rows.length} rows passed`);
 }
-
-// Invoked via `--self-test-io`. Emits a JSON array of { name, pass, expected,
-// actual } rows; hooks/test-patcher-io.mjs parses the array and asserts every
-// row pass===true. Closes the e2e-review HIGH gap: wireHooks /
-// commitSettingsSurgically / surgicalSetTopLevelKey / surgicalRemoveTopLevelKey
-// / stripJsonc / parseJsonc had ZERO automated coverage, so a 4-line unit test
-// over `,}` inside a string would have caught the trailing-comma regex
-// string-boundary bug that corrupted user settings.json before this round.
-//
-// Fixtures live IN patch.ts (not in the test file) because the functions under
-// test are module-private; exposing them via `export` would widen the public
-// API for a dev-only need. The test driver stays trivial (spawn + parse JSON).
-// ---------------------------------------------------------------------------
-
-interface SelfTestRow {
-    name: string;
-    pass: boolean;
-    expected: string;
-    actual: string;
-}
-
-function runSelfTestIo(): void {
-    const rows: SelfTestRow[] = [];
-    const eq = (name: string, expected: unknown, actual: unknown): void => {
+function runSelfTestIo() {
+    const rows = [];
+    const eq = (name, expected, actual) => {
         const e = JSON.stringify(expected);
         const a = JSON.stringify(actual);
         rows.push({ name, pass: e === a, expected: e, actual: a });
     };
-
     // --- stripJsonc: comments stripped, strings preserved ---
     // Note: the scanner removes only the comment bytes themselves; surrounding
     // whitespace + the newline that terminates a // comment are preserved
@@ -5948,11 +5701,7 @@ function runSelfTestIo(): void {
     // Use a content-agnostic fixture (X,}Y) so the assertion is unambiguous
     // about what is being protected: the literal substring `,}` inside a
     // JSON string value.
-    eq(
-        "stripJsonc preserves ',}' inside a string (regex char class / JSON arg)",
-        `{"x":"X,}Y"}`,
-        stripJsonc(`{"x":"X,}Y"}`),
-    );
+    eq("stripJsonc preserves ',}' inside a string (regex char class / JSON arg)", `{"x":"X,}Y"}`, stripJsonc(`{"x":"X,}Y"}`));
     eq("stripJsonc preserves ',]' inside a string", `{"x":"X,]Y"}`, stripJsonc(`{"x":"X,]Y"}`));
     eq("stripJsonc preserves ',}' at string boundaries", `{"x":",}a"}`, stripJsonc(`{"x":",}a"}`));
     // Trailing-comma tolerance still works at the syntax level.
@@ -5964,22 +5713,12 @@ function runSelfTestIo(): void {
     // CRITICAL regression guard: a comma OUTSIDE a string but immediately
     // followed by a string-value whose first char is `}` (extremely contrived
     // but pins the string/syntax boundary).
-    eq(
-        "stripJsonc leaves comma before a string-value that starts with }",
-        `{"a":1,"x":"}leaf"}`,
-        stripJsonc(`{"a":1,"x":"}leaf"}`),
-    );
-
+    eq("stripJsonc leaves comma before a string-value that starts with }", `{"a":1,"x":"}leaf"}`, stripJsonc(`{"a":1,"x":"}leaf"}`));
     // --- parseJsonc: JSONC → object ---
     eq("parseJsonc parses trailing comma", { a: 1 }, parseJsonc(`{"a":1,}`, "test"));
     eq("parseJsonc parses comments", { a: 1, b: "2" }, parseJsonc(`{ "a": 1, // x\n "b": "2" /* y */ }`, "test"));
-    eq(
-        "parseJsonc preserves string with ,} substring (regex char class)",
-        { x: "X,}Y" },
-        parseJsonc(`{"x":"X,}Y"}`, "test"),
-    );
+    eq("parseJsonc preserves string with ,} substring (regex char class)", { x: "X,}Y" }, parseJsonc(`{"x":"X,}Y"}`, "test"));
     eq("parseJsonc preserves string with ,] substring (JSON arg)", { x: "X,]Y" }, parseJsonc(`{"x":"X,]Y"}`, "test"));
-
     // --- surgicalSetTopLevelKey: byte-preserving splice ---
     // Replace existing key — surrounding comments + sibling keys preserved.
     {
@@ -5995,11 +5734,7 @@ function runSelfTestIo(): void {
   "hooks": {"new":true},
   "b": 2
 }`;
-        eq(
-            "surgicalSetTopLevelKey replaces value, preserves surroundings",
-            want,
-            surgicalSetTopLevelKey(src, "hooks", `{"new":true}`),
-        );
+        eq("surgicalSetTopLevelKey replaces value, preserves surroundings", want, surgicalSetTopLevelKey(src, "hooks", `{"new":true}`));
     }
     // Insert absent key — adds after opening brace.
     {
@@ -6008,12 +5743,7 @@ function runSelfTestIo(): void {
         eq("surgicalSetTopLevelKey inserts new key after brace", want, surgicalSetTopLevelKey(src, "hooks", `{"x":1}`));
     }
     // Insert into empty object.
-    eq(
-        "surgicalSetTopLevelKey inserts into empty object",
-        `{\n  "hooks": {"x":1},}`,
-        surgicalSetTopLevelKey(`{}`, "hooks", `{"x":1}`),
-    );
-
+    eq("surgicalSetTopLevelKey inserts into empty object", `{\n  "hooks": {"x":1},}`, surgicalSetTopLevelKey(`{}`, "hooks", `{"x":1}`));
     // --- surgicalRemoveTopLevelKey: byte-preserving deletion ---
     {
         const src = `{
@@ -6038,13 +5768,8 @@ function runSelfTestIo(): void {
     {
         const src = `{"a":1, "hooks":{"x":1},}`;
         const want = `{"a":1,}`;
-        eq(
-            "surgicalRemoveTopLevelKey removes last-member trailing comma",
-            want,
-            surgicalRemoveTopLevelKey(src, "hooks"),
-        );
+        eq("surgicalRemoveTopLevelKey removes last-member trailing comma", want, surgicalRemoveTopLevelKey(src, "hooks"));
     }
-
     // --- cmpVerStr (consolidated canonical comparator; cmpSemver/cmpVer
     // aliases were removed in the v0.2.4 follow-up) ---
     eq("cmpVerStr equal", 0, cmpVerStr("1.2.3", "1.2.3"));
@@ -6052,22 +5777,15 @@ function runSelfTestIo(): void {
     eq("cmpVerStr a<b (patch)", -1, Math.sign(cmpVerStr("1.0.0", "1.0.1")));
     eq("cmpVerStr missing segment treated as 0", 0, cmpVerStr("1.2", "1.2.0"));
     eq("cmpVerStr X.Y vs X.Y.Z", -1, Math.sign(cmpVerStr("1.2", "1.2.1")));
-    eq(
-        "cmpVerStr number[] join parity ([2,0] vs [1,9,9])",
-        1,
-        Math.sign(cmpVerStr([2, 0].join("."), [1, 9, 9].join("."))),
-    );
+    eq("cmpVerStr number[] join parity ([2,0] vs [1,9,9])", 1, Math.sign(cmpVerStr([2, 0].join("."), [1, 9, 9].join("."))));
     eq("cmpVerStr 0.2.0 vs 0.1.99", 1, Math.sign(cmpVerStr("0.2.0", "0.1.99")));
     eq("cmpVerStr 0.1.18 vs 0.2.0", -1, Math.sign(cmpVerStr("0.1.18", "0.2.0")));
-
     process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
 }
-
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
-
-function run(argv: string[]): void {
+function run(argv) {
     const args = argv.slice(2);
     if (args.includes("-h") || args.includes("--help")) {
         printHelp();
@@ -6090,8 +5808,7 @@ function run(argv: string[]): void {
         // G2 also needs a v0.5.x ANCHOR-INJECTED fixture (byte-exact
         // construction mirrors runSelfTestStrip's splice) to drive the
         // legacy→seam migration path against the real patcher.
-        const scaffold =
-            "async function processRequest(e,t){" +
+        const scaffold = "async function processRequest(e,t){" +
             'if(e.request.type==="noop")return null;' +
             ANCHOR_A +
             "}" +
@@ -6109,24 +5826,14 @@ function run(argv: string[]): void {
         // look like a genuinely OLD install, so re-stamp to v0.5.52 (banner
         // surgery on our own bytes — the marker/hash format is version-
         // agnostic, so the patcher's injectedVersion() reads v0.5.52 → stale).
-        legacyInjected = legacyInjected.replace(
-            new RegExp(`/\\*${INJECT_MARKER}:${INJECT_VERSION}:[0-9a-f]+\\*/`, "g"),
-            `/*${INJECT_MARKER}:v0.5.52:deadbeef*/`,
-        );
-        fs.writeFileSync(
-            out,
-            JSON.stringify(
-                {
-                    body: buildSeamPrelude(),
-                    stamped: seamStamp(),
-                    version: INJECT_VERSION,
-                    legacyInjected,
-                    legacyPristine: scaffold,
-                },
-                null,
-                0,
-            ),
-        );
+        legacyInjected = legacyInjected.replace(new RegExp(`/\\*${INJECT_MARKER}:${INJECT_VERSION}:[0-9a-f]+\\*/`, "g"), `/*${INJECT_MARKER}:v0.5.52:deadbeef*/`);
+        fs.writeFileSync(out, JSON.stringify({
+            body: buildSeamPrelude(),
+            stamped: seamStamp(),
+            version: INJECT_VERSION,
+            legacyInjected,
+            legacyPristine: scaffold,
+        }, null, 0));
         log(`seam prelude emitted → ${out}`);
         return;
     }
@@ -6222,12 +5929,13 @@ function run(argv: string[]): void {
             const extSrc = fs.existsSync(extJsPath) ? fs.readFileSync(extJsPath, "utf8") : "";
             const markerN = countOccurrences(extSrc, INJECT_MARKER);
             const anchorB = markerN >= 2;
-            const source: "companion" | "npx" = process.env.CCSD_INVOKED_BY_COMPANION === "1" ? "companion" : "npx";
+            const source = process.env.CCSD_INVOKED_BY_COMPANION === "1" ? "companion" : "npx";
             writeRepatchFlag(dir, anchorB, source);
-        } catch (e) {
+        }
+        catch (e) {
             // Non-fatal — extension.js is already patched; only the cross-window
             // signal is lost. Other windows will catch up on their own reload.
-            warn(`failed to write repatch flag (non-fatal): ${(e as Error).message ?? String(e)}`);
+            warn(`failed to write repatch flag (non-fatal): ${e.message ?? String(e)}`);
         }
         return;
     }
@@ -6241,8 +5949,8 @@ function run(argv: string[]): void {
         // the process with extension.js restored but hooks still wired and
         // INSTALL_DIR still present — a mixed state where the writer keeps
         // spawning with no reader. Best-effort + per-step summary at the end.
-        const failures: string[] = [];
-        const steps: Array<[string, () => void]> = [
+        const failures = [];
+        const steps = [
             ["restoreExtension", () => restoreExtension(dir)],
             ["restoreWebview", () => restoreWebview(dir)],
             ["restorePackageJson", () => restorePackageJson(dir)],
@@ -6258,24 +5966,20 @@ function run(argv: string[]): void {
         for (const [name, fn] of steps) {
             try {
                 fn();
-            } catch (e) {
+            }
+            catch (e) {
                 failures.push(name);
-                log(
-                    `[WARN] revert step "${name}" failed: ${(e as Error).message || String(e)} — continuing with remaining steps`,
-                );
+                log(`[WARN] revert step "${name}" failed: ${e.message || String(e)} — continuing with remaining steps`);
             }
         }
         log(`Per-session state dir left in place (user data): ${STATE_DIR}`);
         reportResidualBaks(dir);
         if (failures.length > 0) {
-            log(
-                `[WARN] revert INCOMPLETE — these steps failed: ${failures.join(", ")}. Re-run \`npx vscode-claude-code-status-dot --revert\` to retry.`,
-            );
+            log(`[WARN] revert INCOMPLETE — these steps failed: ${failures.join(", ")}. Re-run \`npx vscode-claude-code-status-dot --revert\` to retry.`);
         }
         reloadHint();
         return;
     }
-
     // Default: install.
     log("Installing…");
     const { dir, version } = discoverExtension();
@@ -6325,19 +6029,17 @@ function run(argv: string[]): void {
     // tells them to run `--revert` to clean up manually.
     try {
         wireHooks();
-    } catch (e) {
-        const msg = (e as Error).message || String(e);
+    }
+    catch (e) {
+        const msg = e.message || String(e);
         log(`[WARN] wireHooks failed (${msg}) — rolling back extension.js patch for atomic install`);
         try {
             restoreExtension(dir);
-        } catch (rollbackErr) {
-            log(
-                `[WARN] extension.js rollback failed (${(rollbackErr as Error).message || String(rollbackErr)}) — extension.js still patched; run \`npx vscode-claude-code-status-dot --revert\` to clean up manually`,
-            );
         }
-        fail(
-            `Failed to wire hooks: ${msg}. settings.json may be read-only, EACCES, disk full, or corrupt JSONC — resolve and re-run \`npx vscode-claude-code-status-dot\`.`,
-        );
+        catch (rollbackErr) {
+            log(`[WARN] extension.js rollback failed (${rollbackErr.message || String(rollbackErr)}) — extension.js still patched; run \`npx vscode-claude-code-status-dot --revert\` to clean up manually`);
+        }
+        fail(`Failed to wire hooks: ${msg}. settings.json may be read-only, EACCES, disk full, or corrupt JSONC — resolve and re-run \`npx vscode-claude-code-status-dot\`.`);
     }
     checkSvgs(RUNTIME_RES_DIR);
     // v0.2.3: also install the companion .vsix into every detected VS Code-
@@ -6347,23 +6049,22 @@ function run(argv: string[]): void {
     // is non-throwing.
     try {
         installCompanion();
-    } catch (e) {
-        warn(`companion install failed (non-fatal): ${(e as Error).message ?? String(e)}`);
+    }
+    catch (e) {
+        warn(`companion install failed (non-fatal): ${e.message ?? String(e)}`);
     }
     reloadHint();
 }
-
 try {
     run(process.argv);
-} catch (e) {
-    const msg = (e as Error).message || String(e);
+}
+catch (e) {
+    const msg = e.message || String(e);
     console.error(`\n[cc-status-dot][ERROR] ${msg}`);
     if (/anchor/i.test(msg)) {
-        console.error(
-            "\nThis usually means the Claude Code extension updated and its minified code shifted.\n" +
-                "No files were changed. Please open an issue with your CC version so anchors can be updated:\n" +
-                "  https://github.com/anthropics/claude-code/issues  (or this project's issue tracker).",
-        );
+        console.error("\nThis usually means the Claude Code extension updated and its minified code shifted.\n" +
+            "No files were changed. Please open an issue with your CC version so anchors can be updated:\n" +
+            "  https://github.com/anthropics/claude-code/issues  (or this project's issue tracker).");
     }
     process.exit(1);
 }

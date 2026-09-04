@@ -462,8 +462,8 @@ check(
 // title: record + passthrough + bridge refresh
 panel1.title = 'Renamed by CC';
 check(
-  "L5.1 title shadow: CC's write lands (passthrough) + bridge refreshed",
-  panel1.title === 'Renamed by CC' && G.__ccsdSidToTitle['sid-B'] === 'Renamed by CC',
+  "L5.1 title shadow: CC's write lands (passthrough) + bridge UNTOUCHED (v0.6.1: recording poisoned the paint loop)",
+  panel1.title === 'Renamed by CC' && G.__ccsdSidToTitle['sid-B'] === 'B*',
 );
 // iconPath: ours (RESDIR-prefixed) recorded; CC's write re-asserted back to ours
 const RES = path.join(IDIR, 'resources');

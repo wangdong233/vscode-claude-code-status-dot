@@ -692,6 +692,34 @@ if (patchTokens !== null && hookTokens !== null) {
   );
 }
 
+// ---- v0.6.3 pin: FATAL_ERROR_RE is the SOLE keeper of the GC immortal-red
+// exemption (state-machine v3 design D3). Everything else — including UNKNOWN
+// error enums (fail-open) — is transient. Extending the fatal set MUST update
+// this pin in the same change (see STATES.md §7.5 / cc-status.js D3 comment).
+{
+  const hookSrc = fs.readFileSync(path.join(ROOT, 'hooks', 'cc-status.js'), 'utf8');
+  const m = hookSrc.match(/const FATAL_ERROR_RE =\s*\/([\s\S]+?)\/i;/);
+  if (!m) {
+    fail++;
+    console.log('  FAIL  CS.v3 FATAL_ERROR_RE literal not found — shape drifted');
+  } else {
+    const re = new RegExp(m[1], 'i');
+    const creditFatal = re.test('credit balance exhausted');
+    const rateTransient = !re.test('rate_limit');
+    const unknownTransient = !re.test('some_new_enum_never_seen');
+    const authFatal = re.test('authentication required');
+    if (creditFatal && rateTransient && unknownTransient && authFatal) {
+      pass++;
+      console.log(
+        '  PASS  CS.v3 FATAL_ERROR_RE frozen set (credit/authentication→fatal; rate_limit/unknown→transient)',
+      );
+    } else {
+      fail++;
+      console.log('  FAIL  CS.v3 FATAL_ERROR_RE classification drifted');
+    }
+  }
+}
+
 console.log('');
 if (fail === 0) {
   console.log(`All ${pass} contract-sync checks passed.`);

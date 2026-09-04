@@ -318,10 +318,13 @@ checkBoth(
 // 12. [REGRESSION] UserPromptSubmit with no payload resets a drifted counter to
 //     0, so drift cannot cross into the new turn.
 checkBoth(
-  '12. [REGRESSION] SubagentStart -> UserPromptSubmit (no payload) = running, counter=0',
+  // v0.6.3 (V6/D5): inflight===null means NO SIGNAL, not zero — the count set
+  // by SubagentStart must survive a payload-less UserPromptSubmit (background
+  // workflow agents outlive turn boundaries). Expected 1, not 0.
+  '12. [v3] SubagentStart -> UserPromptSubmit (no payload) preserves counter=1',
   runSeq(['SubagentStart', 'UserPromptSubmit']),
   'running',
-  0,
+  1,
 );
 
 // 13. PreToolUse/PostToolUse heartbeat path. Both events must:
@@ -3702,21 +3705,129 @@ checkPending(
   }
 }
 
-// §AE.2 Stop with inflight>0 after StopFailure → running (genuine workflow
-// continuation un-blocks the turn; rare path but correct). This pins that the
-// preserve-interrupted rule fires ONLY when !stayRunning.
+// §V3 state-machine v3 gates (2026-09-04 full audit; design D1-D5, verified GO).
+// G1 subject scoping, G2 terminal-red, G3 transient class, G4 null≠0.
+{
+  const home = newTempHome();
+  const parentTp = path.join(home, SID + '.jsonl');
+  const childTp = path.join(home, 'subagents', 'workflows', 'wf_x', 'agent-abc.jsonl');
+  const V3OK = (name, cond, detail) => {
+    if (cond) {
+      pass++;
+      console.log('  PASS  ' + name);
+    } else {
+      fail++;
+      console.log('  FAIL  ' + name + (detail ? '  ' + detail : ''));
+    }
+  };
+  // G1: child-scoped events never touch the parent file (any seed state).
+  for (const seed of ['done', 'running', 'interrupted']) {
+    const h = newTempHome();
+    if (seed === 'running') fire(h, 'UserPromptSubmit');
+    else if (seed === 'done') {
+      fire(h, 'UserPromptSubmit');
+      fire(h, 'Stop');
+    } else {
+      fire(h, 'UserPromptSubmit');
+      fire(h, 'StopFailure', { error: 'rate_limit' });
+    }
+    const before = fs.readFileSync(path.join(h, '.claude', 'cc-tab-status', SID + '.json'), 'utf8');
+    for (const ev of ['StopFailure', 'Stop', 'SessionEnd', 'PostToolUse', 'UserPromptSubmit', 'Notification']) {
+      fire(h, ev, { transcript_path: childTp, error: 'rate_limit' });
+    }
+    const after = fs.readFileSync(path.join(h, '.claude', 'cc-tab-status', SID + '.json'), 'utf8');
+    V3OK('V3.G1 child-tp 6 events leave ' + seed + ' parent byte-identical (incl. transcript_path)', before === after);
+  }
+  // G1b: transcript_path never poisoned by a child event (fresh parent).
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit', { transcript_path: parentTp });
+    fire(h, 'StopFailure', { transcript_path: childTp, error: 'rate_limit' }); // guarded no-op
+    const got = JSON.parse(fs.readFileSync(path.join(h, '.claude', 'cc-tab-status', SID + '.json'), 'utf8'));
+    V3OK('V3.G1b transcript_path stays parent root', got.transcript_path === parentTp);
+  }
+  // G2: terminal red across background events (count still updates).
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    fire(h, 'StopFailure', { error: 'rate_limit' });
+    const a = fire(h, 'SubagentStart');
+    const b = fire(h, 'SubagentStop', { background_tasks: [{ id: 'w1' }, { id: 'w2' }] });
+    const c = fire(h, 'Stop', { background_tasks: [{ id: 'w1' }] });
+    V3OK(
+      'V3.G2 red sticky through SubagentStart/Stop(next>0)/Stop(inflight>0), count live',
+      a.state === 'interrupted' &&
+        a.error === 'rate_limit' &&
+        a.error_class === 'transient' &&
+        b.state === 'interrupted' &&
+        b.activeSubagents === 2 &&
+        c.state === 'interrupted' &&
+        c.error === 'rate_limit',
+      JSON.stringify({ a: a && a.state, b: b && b.state, c: c && c.state }),
+    );
+    const d = fire(h, 'UserPromptSubmit');
+    V3OK('V3.G2b UserPromptSubmit still clears red (the sole legitimate clearer)', d.state === 'running' && !d.error);
+  }
+  // G3: transient/fatal + first-error retention.
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    const t1 = fire(h, 'StopFailure', { error: 'rate_limit' });
+    const t2 = fire(h, 'StopFailure', { error: 'econnreset' });
+    V3OK(
+      'V3.G3 rate_limit→transient; second different error keeps FIRST',
+      t1.error_class === 'transient' && t2.error === 'rate_limit' && t2.error_class === 'transient',
+    );
+    const h2 = newTempHome();
+    fire(h2, 'UserPromptSubmit');
+    const f1 = fire(h2, 'StopFailure', { error: 'credit balance exhausted' });
+    V3OK('V3.G3b known-fatal → fatal', f1.error_class === 'fatal');
+    const h3 = newTempHome();
+    fire(h3, 'UserPromptSubmit');
+    const u1 = fire(h3, 'StopFailure', { error: 'some_new_enum_never_seen' });
+    V3OK(
+      'V3.G3c UNKNOWN error defaults transient (fail-open: worst case = normal 7d reap)',
+      u1.error_class === 'transient',
+    );
+  }
+  // G4: null≠0 — heartbeat without background_tasks preserves the count.
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    fire(h, 'SubagentStart');
+    const p1 = fire(h, 'PreToolUse');
+    const q1 = fire(h, 'PostToolUse');
+    V3OK(
+      'V3.G4 Pre/PostToolUse (no payload) preserve activeSubagents=1',
+      p1.activeSubagents === 1 && q1.activeSubagents === 1,
+    );
+    const st = fire(h, 'Stop'); // Stop without payload still zeroes (audited ruling)
+    V3OK('V3.G4b Stop without payload zeroes (Stop is the authority)', st.activeSubagents === 0 && st.state === 'done');
+  }
+}
+
+// §AE.2 [v0.6.3 D4 reversal] Stop with inflight>0 after StopFailure KEEPS
+// interrupted. The pre-v3 "inflight un-blocks red" ruling (STATES.md:81, rare
+// path) was reversed by the 2026-09-04 state-machine audit: that exact cell
+// was the MAIN channel of the death-cascade (agent A dies red → live agent B's
+// event silently flips yellow and DROPS the error enum → agent C dies red
+// again — red/yellow flicker with diagnostics erased). Red now clears only
+// via UserPromptSubmit / PostCompact.
 {
   const home = newTempHome();
   fire(home, 'UserPromptSubmit');
   fire(home, 'StopFailure', { error: 'rate_limit' });
   const got = fire(home, 'Stop', { background_tasks: [{ id: 'w1', type: 'workflow' }] });
-  const ok = got && got.state === 'running';
+  const ok = got && got.state === 'interrupted' && got.error === 'rate_limit' && got.error_class === 'transient';
   if (ok) {
     pass++;
-    console.log('  PASS  §AE.2 Stop inflight>0 after StopFailure → running (workflow un-blocks turn)');
+    console.log('  PASS  §AE.2 [v3] Stop inflight>0 keeps interrupted+error+error_class (terminal red)');
   } else {
     fail++;
-    console.log('  FAIL  §AE.2 expected running (inflight un-blocks interrupted), got state=' + (got && got.state));
+    console.log(
+      '  FAIL  §AE.2 [v3] expected interrupted/rate_limit/transient, got ' +
+        JSON.stringify(got && { state: got.state, error: got.error, error_class: got.error_class }),
+    );
   }
 }
 

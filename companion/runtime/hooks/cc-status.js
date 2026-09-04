@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.3:007a4351*/
+/*cc-status-dot-hook:v0.2.4:df0acbb0*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -214,6 +214,14 @@ const GC_DRIFT_SINCE_MS = 7 * 24 * 60 * 60 * 1000;
  * Returns null when the field is absent (old CC version / event without it),
  * meaning "no authoritative signal — fall back to activeSubagents bookkeeping".
  */
+// v0.6.3 (D3): KNOWN non-self-healing StopFailure causes — the ONLY class
+// that keeps the GC preserve exemption. Everything else (including unknown
+// strings) is transient: a retryable gateway/API error must not leave a
+// 7-day immortal red file. Pinned by test-contract-sync.mjs — extend the
+// list there in the same change when CC grows a new fatal enum.
+const FATAL_ERROR_RE =
+  /credit|billing|quota|usage[_ -]?limit|invalid[_ -]?api[_ -]?key|authentication|permission[_ -]?denied|plan[_ -]?required/i;
+
 function inflightFromPayload(payload) {
   return Array.isArray(payload && payload.background_tasks) ? payload.background_tasks.length : null;
 }
@@ -263,7 +271,18 @@ function deriveStatus(payload, cur, now) {
     // user prompt means the user has answered whatever Notification was blocking
     // (permission/question/elicit), so the 🔵 commandCenter light should go off.
     case 'UserPromptSubmit':
-      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : 0, pending: false };
+      // v0.6.3 (V6): inflight===null means "this payload carries no
+      // background_tasks signal", NOT "zero agents". Preserving the prior
+      // count keeps workflow agents visible across parent turns (the old
+      // unconditional 0 is the writer-side root of activeSubagents:0 while
+      // 7 agents ran — which also armed the 30min idle-decay false-positive).
+      return {
+        state: 'running',
+        since: now,
+        activeSubagents:
+          inflight != null ? inflight : cur && typeof cur.activeSubagents === 'number' ? cur.activeSubagents : 0,
+        pending: false,
+      };
 
     // Heartbeat: keep CC marked running and refresh the timestamp.
     // activeSubagents writeback follows the same rule as UserPromptSubmit:
@@ -272,7 +291,14 @@ function deriveStatus(payload, cur, now) {
     // Notification prompt and the turn is making progress again.
     case 'PreToolUse':
     case 'PostToolUse':
-      return { state: 'running', since: now, activeSubagents: inflight != null ? inflight : 0, pending: false };
+      // v0.6.3 (V6): same null≠0 rule as UserPromptSubmit.
+      return {
+        state: 'running',
+        since: now,
+        activeSubagents:
+          inflight != null ? inflight : cur && typeof cur.activeSubagents === 'number' ? cur.activeSubagents : 0,
+        pending: false,
+      };
 
     // Early signal: a subagent was just spawned — turn yellow immediately,
     // before the first Stop. Prefer the authoritative count, else increment.
@@ -286,6 +312,24 @@ function deriveStatus(payload, cur, now) {
     // answered. cur.pending defaults to false when there is no prior file, so
     // the no-prior-file path is unchanged.
     case 'SubagentStart':
+      // v0.6.3 (D4/V3): interrupted is terminal for background events — the
+      // count still updates, but a live agent's spawn must never silently
+      // flip a red (and drop its error enum) mid death-cascade. Only
+      // UserPromptSubmit / PostCompact clear red (STATES.md contract, now
+      // actually enforced by the writer instead of self-violated 3×).
+      const startState =
+        cur && (cur.state === 'running' || cur.state === 'done' || cur.state === 'interrupted') ? cur.state : 'running';
+      if (startState === 'interrupted') {
+        return {
+          state: 'interrupted',
+          since: typeof cur.since === 'number' && cur.since > 0 ? cur.since : now,
+          ...(typeof cur.error === 'string' && cur.error
+            ? { error: cur.error, ...(cur.error_class ? { error_class: cur.error_class } : {}) }
+            : {}),
+          activeSubagents: inflight != null ? inflight : a + 1,
+          pending: cur.pending === true,
+        };
+      }
       return {
         state: 'running',
         since: now,
@@ -352,10 +396,18 @@ function deriveStatus(payload, cur, now) {
       const preserveError = preserveSince && curState === 'interrupted' && typeof cur.error === 'string' && cur.error;
       // Always persist the decremented count. Returning null would leave a stale
       // activeSubagents on disk and mislead the following Stop into running.
+      // v0.6.3 (D4/V3): interrupted is sticky across background events at ANY
+      // next count — next>0 used to flip red→running and drop the error enum
+      // (the silent "self-recovery" that erased diagnostics mid-cascade).
+      const stickyRed = curState === 'interrupted';
       return {
-        state: next > 0 ? 'running' : curState,
-        since: preserveSince ? cur.since : now,
-        ...(preserveError ? { error: cur.error } : {}),
+        state: stickyRed ? 'interrupted' : next > 0 ? 'running' : curState,
+        since: stickyRed || preserveSince ? cur.since : now,
+        ...(stickyRed && typeof cur.error === 'string' && cur.error
+          ? { error: cur.error, ...(cur.error_class ? { error_class: cur.error_class } : {}) }
+          : preserveError
+            ? { error: cur.error, ...(cur.error_class ? { error_class: cur.error_class } : {}) }
+            : {}),
         activeSubagents: next,
         pending: cur.pending === true,
       };
@@ -460,7 +512,10 @@ function deriveStatus(payload, cur, now) {
       // because the user can now see "the workflow is making progress"). Also
       // preserve cur.error to surface the specific failure reason in §4b
       // (mirrors SubagentStop preserveError cc-status.js:541).
-      const preserveInterrupted = curState === 'interrupted' && !stayRunning;
+      // v0.6.3 (D4/V3): dropped the !stayRunning qualifier — inflight>0 used
+      // to flip red→yellow (the audited "rare path" turned out to be the MAIN
+      // death-cascade channel; STATES.md:81 ruling reversed by the v3 audit).
+      const preserveInterrupted = curState === 'interrupted';
       // v0.5.29: Stop ALWAYS clears pending. The v0.2.6 awaitsUser text-heuristic
       // (lastMessageRequestsUserInput / AWAIT_USER_RE) that conditionally wrote
       // pending:true here was REMOVED — it could not tell a polite conversational
@@ -482,7 +537,9 @@ function deriveStatus(payload, cur, now) {
             : preserveSince
               ? cur.since
               : now,
-        ...(preserveInterrupted && cur && typeof cur.error === 'string' && cur.error ? { error: cur.error } : {}),
+        ...(preserveInterrupted && cur && typeof cur.error === 'string' && cur.error
+          ? { error: cur.error, ...(cur.error_class ? { error_class: cur.error_class } : {}) }
+          : {}),
         activeSubagents: inflight != null ? inflight : 0,
         pending: false,
       };
@@ -511,14 +568,27 @@ function deriveStatus(payload, cur, now) {
     // and surface as an unreadable notification. Default 'interrupted' (not
     // 'unknown') matches the reader IIFE's own fallback wording so writer and
     // reader agree on the message shown for missing error enums.
-    case 'StopFailure':
+    case 'StopFailure': {
+      // v0.6.3 (D3): classify the error enum and keep the FIRST error of an
+      // episode. error_class='fatal' (a KNOWN non-self-healing cause) keeps
+      // the GC preserve exemption; anything else — including UNKNOWN strings
+      // (fail-open direction: the worst case is the file becomes normally
+      // reaping after 7d instead of living forever) — is 'transient'.
+      // rate_limit / overloaded 429s self-heal on retry (field-verified: two
+      // 2026-09-04 incidents recovered in 13s~13min); they were both written
+      // as 7d-sticky red before this.
+      const errStr = typeof payload.error === 'string' && payload.error ? payload.error : 'interrupted';
+      const already = cur && cur.state === 'interrupted' && typeof cur.error === 'string' && cur.error;
+      const errorClass = FATAL_ERROR_RE.test(errStr) ? 'fatal' : 'transient';
       return {
         state: 'interrupted',
-        since: now,
-        error: typeof payload.error === 'string' && payload.error ? payload.error : 'interrupted',
+        since: already ? cur.since : now,
+        error: already ? cur.error : errStr,
+        error_class: already && cur.error_class ? cur.error_class : errorClass,
         activeSubagents: inflight != null ? inflight : a,
         pending: false,
       };
+    }
 
     // Session is over: clean up its status file.
     // v0.2.7 (Q2 interrupted sticky): when the session is in the interrupted
@@ -1791,6 +1861,26 @@ async function main() {
       for (const name of entries) {
         if (name.endsWith('.jsonl')) candidates.push(path.join(nestedDir, name));
       }
+      // v0.6.3 (V8): Workflow-tool agents live one level deeper
+      // (subagents/workflows/<wf-id>/agent-*.jsonl — field-verified layout,
+      // .meta.json carries agentType:'workflow-subagent'). Without this level
+      // every workflow token was invisible to the parent's SBI/cost. journal
+      // files are skipped (they are not token sources).
+      try {
+        const wfRoot = path.join(nestedDir, 'workflows');
+        for (const wf of fs.readdirSync(wfRoot)) {
+          const wfDir = path.join(wfRoot, wf);
+          try {
+            for (const name of fs.readdirSync(wfDir)) {
+              if (name.startsWith('agent-') && name.endsWith('.jsonl')) candidates.push(path.join(wfDir, name));
+            }
+          } catch {
+            /* one workflow dir unreadable — skip it, keep the rest */
+          }
+        }
+      } catch {
+        /* no workflows dir — common case */
+      }
     } catch {
       /* nested dir absent — common case (no subagents in flight), silent skip */
     }
@@ -2100,7 +2190,13 @@ async function main() {
                   // re-pay per sweep, unboundedly, on this latency-sensitive
                   // UserPromptSubmit path). A fresh headless-interrupted file
                   // waits one 7d cycle before reaping — bounded, acceptable.
+                  // v0.6.3 (D3): transient-class interrupted (retryable gateway
+                  // error — the 2026-09-04 double red-flash incidents) returns
+                  // to the NORMAL 7d mtime rule; only KNOWN-fatal (or legacy
+                  // files without error_class, read as fatal for compat) keep
+                  // the unconditional preserve.
                   if (st.mtimeMs < cutoff && isHeadlessTranscript(parsed.transcript_path)) reaped = true;
+                  else if (st.mtimeMs < cutoff && parsed.error_class === 'transient') reaped = true;
                   else preserved = true;
                 }
                 const sinceMs = parsed && Number.isFinite(parsed.since) ? parsed.since : 0;
@@ -2226,6 +2322,9 @@ async function main() {
       // `now - since` NaN, which fails the >DONE_TO_IDLE_MS check silently).
       since: typeof prev.since === 'number' && Number.isFinite(prev.since) && prev.since >= 0 ? prev.since : 0,
       error: prev.error,
+      // v0.6.3 (D3): transient/fatal classification of the preserved error —
+      // carried with the same looseness as error (absent on legacy files).
+      error_class: prev.error_class,
       // Reject negative and non-finite counters (see deriveStatus note).
       activeSubagents: Number.isFinite(prev.activeSubagents) && prev.activeSubagents >= 0 ? prev.activeSubagents : 0,
       // Strict boolean coercion: only literal `true` on disk counts as pending.
@@ -2286,6 +2385,35 @@ async function main() {
   } catch {
     /* no marker yet */
   }
+  // v0.6.3 subject scoping (state-machine v3 design D1/D2): an event whose
+  // transcript_path belongs to a CHILD subject (Task subagents at
+  // subagents/agent-*.jsonl; Workflow agents at subagents/workflows/<wf>/
+  // agent-*.jsonl — both layouts verified on 4,846 real agent transcripts)
+  // must NOT touch the parent's state file. Field incidents this closes:
+  //   F1/V9 — a workflow agent's fatal 429 fired StopFailure on the PARENT sid
+  //           and flipped a healthy or even FINISHED (done) parent red,
+  //           re-arming the 7d window every time another agent died;
+  //   T2    — a child-tp PostToolUse ran the token backfill against the AGENT
+  //           transcript as source='main', regressing main.offset and
+  //           resetting cumulative totals (permanent undercount);
+  //   D2    — a child-scoped SessionEnd would DELETE the parent's file.
+  // The guard sits BEFORE the headless classifier so a child transcript can
+  // never pollute the parent's headless marker either. SubagentStart /
+  // SubagentStop are exempted: they are parent-lifecycle events that CC fires
+  // WITH child context (SubagentStop's transcript_path is the parent's; the
+  // agent transcript rides in agent_transcript_path) and their activeSubagents
+  // bookkeeping is parent-scoped by design. Unknown/absent transcript_path
+  // stays conservative-parent (today's behavior — never regresses a true
+  // parent failure).
+  {
+    const tp0 = payload && payload.transcript_path;
+    const ev0 = payload && payload.hook_event_name;
+    const isChildTp = typeof tp0 === 'string' && (tp0.indexOf('/subagents/') >= 0 || tp0.indexOf('\\subagents\\') >= 0);
+    if (isChildTp && ev0 !== 'SubagentStart' && ev0 !== 'SubagentStop') {
+      process.exit(0);
+    }
+  }
+
   if (!headless) {
     const ev = payload && payload.hook_event_name;
     if ((ev === 'UserPromptSubmit' || ev === 'StopFailure') && isHeadlessTranscript(payload.transcript_path)) {
@@ -2398,7 +2526,15 @@ async function main() {
     PreToolUse: 'main',
     SubagentStop: 'sub',
   };
-  if (TOK_EVENTS[event]) {
+  // v0.6.3 (T2): the token backfill treats payload.transcript_path as the
+  // parent's transcript. Run it ONLY when the path is exactly the parent root
+  // (<sid>.jsonl) — a child/unknown-layout path running as source='main'
+  // regressed main.offset and reset cumulative totals (sandbox-proven).
+  const tokExactParent =
+    typeof payload.transcript_path === 'string' &&
+    typeof sid === 'string' &&
+    payload.transcript_path.endsWith('/' + sid + '.jsonl');
+  if (TOK_EVENTS[event] && tokExactParent) {
     try {
       const source = TOK_EVENTS[event];
       // Carry-forward baseline (data-logic LOW fix): unconditional pre-write

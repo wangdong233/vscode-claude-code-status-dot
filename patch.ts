@@ -146,7 +146,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in companion/CHANGELOG.md (entries up to 0.5.9; later versions document rationale in commit messages); SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.6.2";
+const INJECT_VERSION = "v0.6.3";
 
 /** v0.6 seam: the second prelude line identifies the seam architecture + its
  *  own version. Byte form `/*ccsd2:begin:seam:vX.Y.Z*​/` … `/*ccsd2:end*​/`
@@ -191,7 +191,7 @@ const HOOK_MARKER = "cc-status-dot-managed";
  *  INSTALL_DIR/hooks/cc-status.js) saw silent feature loss with no warning.
  *  MUST be kept in lockstep with the banner at the top of
  *  hooks/cc-status.js. */
-const HOOK_VERSION = "v0.2.3";
+const HOOK_VERSION = "v0.2.4";
 const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
 
 /** CC extension version against which the anchor strings (ANCHOR_A / ANCHOR_B)
@@ -2220,7 +2220,18 @@ function buildIIFE(resDir: string): string {
          * decayInterrupted=true) and §H (per-tab, decayInterrupted=false — interrupted stays
          * red on tab for diagnostics, see STATES.md §7.4). Eliminates byte-identical decay
          * chain duplication. Each consumer reads sid.json INDEPENDENTLY (§F readdirSync /
-         * §H readFileSync — see rejected-by-design). Only the predicate is shared, not read.*/ `function __ccsdDecayState(st,since,j,now,decayInterrupted,mt,adj){if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS)return "idle";if(decayInterrupted&&st==="interrupted"&&since&&(now-since)>INTERRUPTED_RETENTION_MS)return "idle";/*v0.5.49 as-protection expiry: the v0.5.16 !(activeSubagents>0) gate blocked running-decay FOREVER for sessions that crashed mid-workflow (as frozen >0 → permanent phantom 🟡, the 5.3-day baeddc1d zombie). mt = the sid.json mtime — the per-EVENT liveness witness (every hook fire rewrites the file; SubagentStart/Stop included), unlike since (preserved across inflight Stop heartbeats) and tokens.last_ts (frozen during parent-silent workflows). Protection for as>0 now EXPIRES once no event fired for SBI_AS_PROTECT_MAX_MS (24h ≫ documented 30min worst-case silence, ≪ 7d GC). !mt (stat miss) fails TOWARD decay. Byte-identical for as==0.*//*v0.5.52: adj = per-witness age adjustment closure (ts → awake-time age); defaults to wall-clock when absent. The running branch measures AWAKE time only (user ruling: unfinished stays yellow across system sleep); done>5m and interrupted>7d keep WALL clock (P3 carve-out — no semantic change without user sign-off). Witness order: tokens.last_ts if truthy (byte-identical for the with-last_ts class), ELSE mtime at the 2h MISSING_LT threshold (dead spawns with zero follow-up events), ELSE decay (!mt fails toward decay, v0.5.49 precedent).*/var E=function(ts){return adj?adj(ts)-ts:now-ts};if(st==="running"&&since&&(!(j.activeSubagents>0)||!mt||(E(mt))>SBI_AS_PROTECT_MAX_MS)&&(E(since))>SBI_RUNNING_STALE_MS&&(j.tokens&&j.tokens.last_ts?(E(j.tokens.last_ts))>SBI_RUNNING_STALE_MS:(!mt||(E(mt))>SBI_MISSING_LT_STALE_MS)))return "idle";return st;}`,
+         * §H readFileSync — see rejected-by-design). Only the predicate is shared, not read.*/ `function __ccsdWfAlive(tp,now){try{if(!tp||typeof tp!=="string")return false;var GC=globalThis;var c=GC.__ccsdWfCache;if(!c)c=GC.__ccsdWfCache=Object.create(null);var k=tp.lastIndexOf("/");if(k<=0)return false;var dir=tp.slice(0,k);var e=c[dir];if(e&&now-e.at<30000)return e.alive;var alive=false;try{var wdir=dir+"/subagents/workflows";var wfs=fs.readdirSync(wdir);var FRESH=1800000;for(var i=0;i<wfs.length&&!alive;i++){try{var d2=wdir+"/"+wfs[i];var ns=fs.readdirSync(d2);for(var q=0;q<ns.length;q++){if(ns[q].indexOf("agent-")===0&&ns[q].length>6&&ns[q].slice(-6)===".jsonl"){var st2=fs.statSync(d2+"/"+ns[q]);if(now-st2.mtimeMs<FRESH){alive=true;break}}}}catch(_){} }}catch(_){} c[dir]={at:now,alive:alive};return alive}catch(_){return false}}`,
+        /*v0.6.3 W2 workflow-alive decay guard (state-machine v3 design D6/D7): a
+         * running session whose parent went quiet (>30min) used to decay to idle
+         * while Workflow-tool agents were still burning tokens underneath (the
+         * 2026-09-04 field report: green/idle tab + 7 live agents). Fourth
+         * liveness witness, consulted ONLY on the decay-candidate path (duty
+         * cycle ~0.3%), 30s TTL cache. Evidence discipline (D7): agent liveness
+         * = agent-*.jsonl MTIME only (the workflow journal mtime records
+         * lifecycle events, not liveness — verified in the field); layouts are
+         * CC-internal, so EVERY failure mode fails OPEN to today's behavior
+         * (missing dirs / read errors => not alive => decay as before).*/
+        `function __ccsdDecayState(st,since,j,now,decayInterrupted,mt,adj){if(st==="done"&&since&&(now-since)>DONE_TO_IDLE_MS)return "idle";if(decayInterrupted&&st==="interrupted"&&since&&(now-since)>INTERRUPTED_RETENTION_MS)return "idle";/*v0.5.49 as-protection expiry: the v0.5.16 !(activeSubagents>0) gate blocked running-decay FOREVER for sessions that crashed mid-workflow (as frozen >0 → permanent phantom 🟡, the 5.3-day baeddc1d zombie). mt = the sid.json mtime — the per-EVENT liveness witness (every hook fire rewrites the file; SubagentStart/Stop included), unlike since (preserved across inflight Stop heartbeats) and tokens.last_ts (frozen during parent-silent workflows). Protection for as>0 now EXPIRES once no event fired for SBI_AS_PROTECT_MAX_MS (24h ≫ documented 30min worst-case silence, ≪ 7d GC). !mt (stat miss) fails TOWARD decay. Byte-identical for as==0.*//*v0.5.52: adj = per-witness age adjustment closure (ts → awake-time age); defaults to wall-clock when absent. The running branch measures AWAKE time only (user ruling: unfinished stays yellow across system sleep); done>5m and interrupted>7d keep WALL clock (P3 carve-out — no semantic change without user sign-off). Witness order: tokens.last_ts if truthy (byte-identical for the with-last_ts class), ELSE mtime at the 2h MISSING_LT threshold (dead spawns with zero follow-up events), ELSE decay (!mt fails toward decay, v0.5.49 precedent).*/var E=function(ts){return adj?adj(ts)-ts:now-ts};if(st==="running"&&since&&(!(j.activeSubagents>0)||!mt||(E(mt))>SBI_AS_PROTECT_MAX_MS)&&(E(since))>SBI_RUNNING_STALE_MS&&(j.tokens&&j.tokens.last_ts?(E(j.tokens.last_ts))>SBI_RUNNING_STALE_MS:(!mt||(E(mt))>SBI_MISSING_LT_STALE_MS)))return __ccsdWfAlive(j.transcript_path,now)?st:"idle";return st;}`,
         // v0.2.5 round-3 (MEDIUM): rolling-window spans in ms. Used by
         // computeLiveDelta to filter transcript rows by timestamp so the
         // IIFE's live-delta dSum only counts rows INSIDE the rolling window

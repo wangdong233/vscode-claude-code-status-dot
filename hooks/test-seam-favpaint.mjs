@@ -218,6 +218,33 @@ check(
   'bridge=' + JSON.stringify(G.__ccsdSidToTitle['sid-fav']),
 );
 
+// FP.8/9 steady-state resource assertions (the meta-lesson of 0.6.0): stable
+// input state MUST produce bounded work — no title writes, no string growth.
+// The 0.6.0 stacking violated both (one renderer IPC write per tick per
+// favorited tab + ~4 chars/s unbounded growth). Count setter invocations via
+// a per-panel counter installed on the fake BEFORE this window.
+let fp8_writes = 0;
+const origT = Object.getOwnPropertyDescriptor(FakePanel.prototype, 'title').set;
+Object.defineProperty(p1, 'title', {
+  configurable: true,
+  get() {
+    return this._t;
+  },
+  set(v) {
+    fp8_writes++;
+    this._t = v;
+  },
+});
+const tBefore = p1.title;
+await new Promise((r) => setTimeout(r, 2100));
+const tAfter = p1.title;
+check(
+  'FP.8 steady state (fav unchanged 2.1s): title byte-stable, ZERO setter writes (bounded-work invariant)',
+  tBefore === tAfter && tAfter === '★ Fav Session' && fp8_writes === 0,
+  `writes=${fp8_writes} title=${JSON.stringify(tAfter)}`,
+);
+check('FP.9 title length bounded (no amplification): ' + tAfter.length + ' chars', tAfter.length < 40);
+
 // FP.7 direct passthrough: an out-of-band title write must NOT poison the cache.
 p1.title = 'Manual Rename';
 check(

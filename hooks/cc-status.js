@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.4:df0acbb0*/
+/*cc-status-dot-hook:v0.2.5:951b1fe3*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -223,7 +223,24 @@ const FATAL_ERROR_RE =
   /credit|billing|quota|usage[_ -]?limit|invalid[_ -]?api[_ -]?key|authentication|permission[_ -]?denied|plan[_ -]?required/i;
 
 function inflightFromPayload(payload) {
-  return Array.isArray(payload && payload.background_tasks) ? payload.background_tasks.length : null;
+  // v0.6.4 type-split (user ruling 2026-09-05: a delivered turn whose only
+  // background work is a non-waking SHELL (nohup dev app / test server) is
+  // DONE — green; the 2026-07-13 original design 'yellow while background
+  // runs' is preserved for WAKING types — subagent / workflow / teammate /
+  // monitor / cloud session etc., documented by CC as 'session is paused
+  // waiting for background work to wake it back up'). Type labels come from
+  // the CC native registry map (local_bash→'shell', local_agent→'subagent',
+  // local_workflow→'workflow', monitor_*→'monitor', mcp_task→'MCP task',
+  // in_process_teammate→'teammate', dream / auto-mode scan / remote_agent→
+  // 'cloud session'). UNKNOWN types count as waking — fail toward the
+  // historical yellow, never toward a new false-green.
+  const tasks = payload && payload.background_tasks;
+  if (!Array.isArray(tasks)) return null;
+  let waking = 0;
+  for (const t of tasks) {
+    if (!(t && typeof t === 'object') || t.type !== 'shell') waking++;
+  }
+  return waking;
 }
 
 /**
@@ -319,6 +336,18 @@ function deriveStatus(payload, cur, now) {
       // actually enforced by the writer instead of self-violated 3×).
       const startState =
         cur && (cur.state === 'running' || cur.state === 'done' || cur.state === 'interrupted') ? cur.state : 'running';
+      // v0.6.4: done is ALSO terminal for background events (mirror of the D4
+      // interrupted rule) — an orphan late SubagentStart must not re-yellow a
+      // delivered turn. A genuine turn resume flips it back via the very next
+      // user-driven event (UserPromptSubmit / Pre-PostToolUse on the main loop).
+      if (startState === 'done') {
+        return {
+          state: 'done',
+          since: typeof cur.since === 'number' && cur.since > 0 ? cur.since : now,
+          activeSubagents: inflight != null ? inflight : a + 1,
+          pending: cur.pending === true,
+        };
+      }
       if (startState === 'interrupted') {
         return {
           state: 'interrupted',
@@ -399,10 +428,13 @@ function deriveStatus(payload, cur, now) {
       // v0.6.3 (D4/V3): interrupted is sticky across background events at ANY
       // next count — next>0 used to flip red→running and drop the error enum
       // (the silent "self-recovery" that erased diagnostics mid-cascade).
-      const stickyRed = curState === 'interrupted';
+      // v0.6.4: done is sticky too (orphan late SubagentStop with a drifted
+      // next>0 used to flip a delivered green turn back to yellow — the
+      // same class D4 closed for interrupted).
+      const stickyRed = curState === 'interrupted' || curState === 'done';
       return {
-        state: stickyRed ? 'interrupted' : next > 0 ? 'running' : curState,
-        since: stickyRed || preserveSince ? cur.since : now,
+        state: stickyRed ? curState : next > 0 ? 'running' : curState,
+        since: stickyRed || preserveSince ? (typeof cur.since === 'number' && cur.since > 0 ? cur.since : now) : now,
         ...(stickyRed && typeof cur.error === 'string' && cur.error
           ? { error: cur.error, ...(cur.error_class ? { error_class: cur.error_class } : {}) }
           : preserveError
@@ -2408,7 +2440,17 @@ async function main() {
   {
     const tp0 = payload && payload.transcript_path;
     const ev0 = payload && payload.hook_event_name;
-    const isChildTp = typeof tp0 === 'string' && (tp0.indexOf('/subagents/') >= 0 || tp0.indexOf('\\subagents\\') >= 0);
+    const isChildTp =
+      (typeof tp0 === 'string' && (tp0.indexOf('/subagents/') >= 0 || tp0.indexOf('\\subagents\\') >= 0)) ||
+      // v0.6.4 (4th resurrection channel): EVERY hook payload base carries
+      // agent_id/agent_type — undefined + 'main-session' for the main loop,
+      // a non-empty id for child-context events (async subagent / workflow
+      // agent tool calls). Those arrive with the PARENT session_id AND the
+      // parent transcript_path, so the path heuristic cannot see them; the
+      // PreToolUse/PostToolUse branches would unconditionally write running
+      // and re-yellow a delivered turn for as long as a background agent
+      // keeps calling tools. agent_id is the authoritative discriminator.
+      (typeof (payload && payload.agent_id) === 'string' && payload.agent_id !== '');
     if (isChildTp && ev0 !== 'SubagentStart' && ev0 !== 'SubagentStop') {
       process.exit(0);
     }

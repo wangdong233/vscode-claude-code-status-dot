@@ -3806,6 +3806,88 @@ checkPending(
   }
 }
 
+// §V3.9 type-split gates (v0.6.4; user ruling 2026-09-05 'delivered turn with a
+// non-waking background shell → green' reconciled with the 2026-07-13 original
+// design 'yellow while waking background work runs' via background_tasks[].type).
+{
+  const home = newTempHome();
+  const V39 = (name, cond, detail) => {
+    if (cond) {
+      pass++;
+      console.log('  PASS  ' + name);
+    } else {
+      fail++;
+      console.log('  FAIL  ' + name + (detail ? '  ' + detail : ''));
+    }
+  };
+  // (1) shell-only → done (the luceo nohup incident, exactly).
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    const g = fire(h, 'Stop', { background_tasks: [{ id: 'b1', type: 'shell', status: 'running' }] });
+    V39(
+      'V3.9.1 Stop shell-only → done (delivered turn, non-waking shell) — 2026-09-05 ruling',
+      g && g.state === 'done',
+    );
+  }
+  // (2) waking type → running preserved (2026-07-13 original design intact).
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    const g = fire(h, 'Stop', { background_tasks: [{ id: 'w1', type: 'workflow', status: 'running' }] });
+    V39(
+      'V3.9.2 Stop workflow → running (waking work keeps yellow) — 2026-07-13 ruling intact',
+      g && g.state === 'running',
+    );
+  }
+  // (3) mixed shell+waking → running (waking wins).
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    const g = fire(h, 'Stop', {
+      background_tasks: [
+        { id: 'b1', type: 'shell' },
+        { id: 'a1', type: 'subagent' },
+      ],
+    });
+    V39('V3.9.3 Stop mixed shell+subagent → running (waking dominates)', g && g.state === 'running');
+  }
+  // (4) unknown type → waking (fail toward historical yellow, never false-green).
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    const g = fire(h, 'Stop', { background_tasks: [{ id: 'x1', type: 'some_future_type' }] });
+    V39('V3.9.4 Stop unknown type → running (conservative)', g && g.state === 'running');
+  }
+  // (5) 4th resurrection channel: child-context PreToolUse (agent_id set, parent tp) is dropped.
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    fire(h, 'Stop');
+    const before = fs.readFileSync(path.join(h, '.claude', 'cc-tab-status', SID + '.json'), 'utf8');
+    fire(h, 'PreToolUse', { agent_id: 'agent-abc123', agent_type: 'Explore' });
+    fire(h, 'PostToolUse', { agent_id: 'agent-abc123', agent_type: 'Explore' });
+    const after = fs.readFileSync(path.join(h, '.claude', 'cc-tab-status', SID + '.json'), 'utf8');
+    V39('V3.9.5 child-context Pre/PostToolUse (agent_id set) leave delivered parent byte-identical', before === after);
+  }
+  // (6) done sticky across orphan SubagentStart (mirror D4).
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    fire(h, 'Stop');
+    const g = fire(h, 'SubagentStart');
+    V39('V3.9.6 orphan SubagentStart keeps done (terminal for background events)', g && g.state === 'done');
+  }
+  // (7) genuine resume still flips: main-loop PreToolUse (no agent_id) → running.
+  {
+    const h = newTempHome();
+    fire(h, 'UserPromptSubmit');
+    fire(h, 'Stop');
+    const g = fire(h, 'PreToolUse', {});
+    V39('V3.9.7 main-loop PreToolUse resumes running (done not over-sticky)', g && g.state === 'running');
+  }
+}
+
 // §AE.2 [v0.6.3 D4 reversal] Stop with inflight>0 after StopFailure KEEPS
 // interrupted. The pre-v3 "inflight un-blocks red" ruling (STATES.md:81, rare
 // path) was reversed by the 2026-09-04 state-machine audit: that exact cell

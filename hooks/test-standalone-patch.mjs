@@ -197,16 +197,35 @@ try {
   //    which is the actual contract the companion relies on at runtime. The
   //    --status path is read-only and does not mutate the production
   //    INSTALL_DIR.
+  //
+  //    CI-portability (caught by the first GitHub Actions run, 2026-09-10):
+  //    --status exit-0 previously depended on the machine HAPPENING to have a
+  //    real CC extension — dev machines passed vacuously, a clean runner
+  //    exit-1'd at "No anthropic.claude-code-* found". Point discovery at a
+  //    sandboxed fake CC extension via CCSD_EXT_SEARCH_DIR so the contract
+  //    (module loading + normal output) is tested deterministically anywhere.
+  const fakeExtRoot = path.join(tmp, 'fakeext');
+  const fakeExtDir = path.join(fakeExtRoot, 'anthropic.claude-code-9.9.9');
+  fs.mkdirSync(fakeExtDir, { recursive: true });
+  fs.writeFileSync(path.join(fakeExtDir, 'extension.js'), '// fake CC extension (status fixture)\n');
+  const statusEnv = { ...process.env, CCSD_EXT_SEARCH_DIR: fakeExtRoot };
   const r = spawnSync(process.execPath, [path.join(tmp, 'patch.js'), '--status'], {
     encoding: 'utf8',
     timeout: 15000,
+    env: statusEnv,
   });
   const combined = (r.stdout || '') + (r.stderr || '');
   check('standalone patch.js --status exits 0', r.status === 0, 'got status=' + r.status);
   check(
-    'no ERR_MODULE_NOT_FOUND when src/ is present',
-    !/ERR_MODULE_NOT_FOUND/.test(combined),
-    combined.split('\n').find((l) => /ERR_MODULE_NOT_FOUND/.test(l)) || '',
+    'no ERR_MODULE_NOT_FOUND crash when src/ is present',
+    // Match the CRASH signature, not the bare string: the --status report
+    // legitimately prints "ERR_MODULE_NOT_FOUND" inside its INSTALL_DIR
+    // advisory line when the production install dir lacks src/ (always true
+    // on a clean CI runner) — the first Actions run exposed that the bare
+    // substring match only passed vacuously on dev machines with a real
+    // install dir.
+    !/Error \[ERR_MODULE_NOT_FOUND\]/.test(combined),
+    combined.split('\n').find((l) => /Error \[ERR_MODULE_NOT_FOUND\]/.test(l)) || '',
   );
   check(
     'emits normal cc-status-dot status output',
@@ -222,11 +241,12 @@ try {
   const r2 = spawnSync(process.execPath, [path.join(tmp, 'patch.js'), '--status'], {
     encoding: 'utf8',
     timeout: 15000,
+    env: statusEnv,
   });
   const combined2 = (r2.stdout || '') + (r2.stderr || '');
   check(
     'without src/ standalone patch.js DOES crash (test is meaningful)',
-    r2.status !== 0 && /ERR_MODULE_NOT_FOUND/.test(combined2),
+    r2.status !== 0 && /Error \[ERR_MODULE_NOT_FOUND\]/.test(combined2),
     'status=' + r2.status + ' stderr0=' + (combined2.split('\n')[0] || ''),
   );
 } finally {

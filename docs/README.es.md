@@ -71,7 +71,7 @@ La pestaña se vuelve 🟡 amarilla al instante, pasa a 🟢 verde al terminar y
 | ⚪ Gris `#808080` (estático)                        | Inactivo                                | Inicial / completado hace más de 5 min / sin archivo de estado                                                                                                                                                                                                                                                                                                                                                  |
 | 🔵 Azul `#58A6FF` (estático)                        | Esperando tu entrada (dos disparadores) | (a) **CC abre un cuadro de autorización**: el reader cede el icono al punto azul nativo de CC (**no lo sobrescribe**); (b) **La última respuesta de CC contiene semántica de "esperando tu decisión"** (`espero tu`/`tú decides`/`let me know`/`your call` etc.) → el reader renderiza el SVG azul `claude-logo-pending.svg` (sobrescribe amarillo-running / verde-done). La luz 🔵 inferior cuenta ambos casos |
 
-> `running` es un punto amarillo estático (sin animación); `interrupted` parpadea en rojo rápido como alerta. El contrato completo de estados (eventos / SVG / IPC / notificaciones) está en [`docs/STATES.md`](docs/STATES.md).
+> `running` es un punto amarillo estático (sin animación); `interrupted` parpadea en rojo rápido como alerta. El contrato completo de estados (eventos / SVG / IPC / notificaciones) está en [`docs/STATES.md`](STATES.md).
 
 ---
 
@@ -163,9 +163,9 @@ vscode-claude-code-status-dot        # tras instalar, ejecuta el comando directa
 
 **Parchea el `extension.js` de CC (inyecta un temporizador que fija el icono de la pestaña) + los hooks de CC escriben el estado + notificaciones de completado/interrupción.** Documentación completa:
 
-- [`docs/STATES.md`](docs/STATES.md) — **Contrato de estados (única fuente de verdad)**: cinco estados (gris/amarillo/verde/rojo/azul) + 4 luces agregadas / mapeo de eventos / IPC / notificaciones
-- [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — Principio de inyección del icono (anchor / IIFE / enlace SVG)
-- [`docs/USAGE.md`](docs/USAGE.md) — Guía de uso (instalación / resolución de problemas / reversión)
+- [`docs/STATES.md`](STATES.md) — **Contrato de estados (única fuente de verdad)**: cinco estados (gris/amarillo/verde/rojo/azul) + 4 luces agregadas / mapeo de eventos / IPC / notificaciones
+- [`docs/DESIGN-injection.md`](DESIGN-injection.md) — Principio de inyección del icono (anchor / IIFE / enlace SVG)
+- [`docs/USAGE.md`](USAGE.md) — Guía de uso (instalación / resolución de problemas / reversión)
 
 > Este proyecto modifica el `extension.js` de la extensión de CC (respaldado, `--revert` lo restaura por completo) y escribe en `~/.claude/settings.json` (respaldado la primera vez). Los scripts de hook están diseñados para **nunca bloquear CC** — cualquier error hace `exit(0)` silencioso. **9 hooks** (incluido el `Notification` que deja `pending` en disco).
 

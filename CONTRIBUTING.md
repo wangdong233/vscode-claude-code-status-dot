@@ -1,6 +1,6 @@
 # 贡献指南（CONTRIBUTING）
 
-感谢参与！本项目是一个小工具：`patch.ts`（patcher）+ `hooks/cc-status.js`（状态写入 hook）+ 5 个 SVG + 注入 IIFE。动手前请先读 [`docs/STATES.md`](docs/STATES.md)（唯一状态契约）和 [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)（注入原理）。
+感谢参与！本项目是一个小工具：`patch.ts`（patcher，v0.6.0 起 seam 零锚架构——prelude 头部注入 + `require` 形参重绑 + 协议消息观察，架构决策见 [`docs/ADR-001-seam-architecture.md`](docs/ADR-001-seam-architecture.md)）+ `hooks/cc-status.js`（状态写入 hook）+ 30 个 SVG（15 基础 × 含齿轮徽标变体）+ seam 注入 IIFE。动手前请先读 [`docs/STATES.md`](docs/STATES.md)（唯一状态契约）和 [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)（注入原理）。
 
 ## 项目心法
 
@@ -24,19 +24,16 @@
 
 **选择契约而非全局 reformat 的理由**：每侧文件内部已经自洽且符合各语言社区惯例，reformat 一侧去迎合另一侧会产生大 diff、污染 `git blame`、徒增审查负担；契约方式 0 行代码改动，未来漂移由工具自动报警。
 
-## patch anchor 的 CC 版本脆性
+## CC 版本更新的韧性（v0.6.0 seam 架构）
 
-整个 patch 的版本敏感面收敛在 `patch.ts` 里的三层锚（A/B/C，各为两层：精确字面快路径 + 容错正则兜底）：
+> v0.5.x 的三层锚注入（A/B/C）已退役（CC 2.1.259 第三次锚区形状漂移所致），本节描述现行机制；历史锚方案见 [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md)（已标注退役）与 git 历史。
 
-- **Anchor A**（`update_session_state` handler，必须唯一命中）：注入点，捕获 `sessionId` + 启动 500ms 重绘定时器。
-- **Anchor B**（`rename_tab` 图标分支，可选，命中 0 或 1 次）：加固，消除 CC 重设图标后 ~500ms 的闪烁。
-- **Anchor C**（`requestUserDialog` consent/refusal 蓝点；命中 0 或 1 次）：可选加固锚，失配软降级（A+B 安装继续，consent 蓝点不生效）。
+v0.6.0 起 patch 对 CC `extension.js` 的版本敏感面收敛为 **seam 零锚注入**（决策记录 [`docs/ADR-001-seam-architecture.md`](docs/ADR-001-seam-architecture.md)）：
 
-CC 每次 minified 代码漂移都可能导致 anchor 对不上。规则：
-
-- 锚点两层：tier-1 **精确字面**（快路径，唯一命中）；tier-2 **容错正则**（以 IPC 协议字符串为字面锚、minified 标识符为 `[A-Za-z0-9_$]+` 捕获）——混淆器改名类漂移自动兼容，任一层命中数非唯一即 fail-closed（Anchor A 必须 == 1，Anchor B/C ∈ {0, 1}）。
-- 失配时**立即抛错、不写任何文件**，并在错误信息里提示用户提 issue 附 CC 版本。
-- 更新 anchor 时，先用 `npx tsx patch.ts --status` 确认在新版 CC 上的命中情况，再改常量。
+- bundle 头部 prepend 零锚 prelude + 模块局部 `require` 形参重绑 + vscode API 表面包装（`createWebviewPanel` / view-provider / serializer 双名）+ 协议消息双向观察（入站 `onDidReceiveMessage` / 出站 `postMessage` 白名单 shadow）。
+- 战斗逻辑（§A..§Z IIFE body）从锚时代字节级复用，观察者合成 `t` 上下文供值——**CC minified 内部标识符零引用**，CC 常规更新不需要改本仓库任何常量（已实证穿越 2.1.259→2.1.266）。
+- 架构寿命边界：patcher 四判 ESM 检测，CC 若整体转 ESM 模块化则报 `cc-esm-detected` 并停止自动重试（fail-closed），继任方案见 ADR-001。
+- 失配/失败时 fail-closed 报错类别（stdout 机器行），绝不留半改文件；companion 据此自愈分流。
 
 ## 本地测试方法
 
@@ -59,7 +56,7 @@ CC 每次 minified 代码漂移都可能导致 anchor 对不上。规则：
   - `README.md` / `README.en.md` / `docs/USAGE.md` / `companion/CHANGELOG.md (archived at 0.5.9)` / `package.json`。
 - 中英文 README 保持同步。
 - 改 `extension.js` 相关逻辑时，确保 `--revert` 路径仍能干净还原。
-- **不要引入**已被架构审查否决的概念（见 [`docs/AUDIT.md`](docs/AUDIT.md) F-6）：watchdog、VSCode 通知 / `showInformationMessage`、`src/` 目录、独立 VSCode 扩展、`status-dot/` 目录、`write-state.js`。
+- **不要引入**已被架构审查否决的概念（审查记录 AUDIT.md F-6 已随文档清理删除，见 git 历史）：watchdog、VSCode 通知 / `showInformationMessage`、`src/` 目录、独立 VSCode 扩展、`status-dot/` 目录、`write-state.js`。
 
 ## 架构 review 三问（每个 PR 必答）
 

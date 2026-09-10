@@ -65,7 +65,7 @@ Want it back to stock? `npx vscode-claude-code-status-dot --revert`.
 | ⚪ Gray `#808080` (static)                     | Idle                               | Initial / done > 5 min ago / no state file                                                                                                                                                                                                                                                                                                                                                            |
 | 🔵 Blue `#58A6FF` (static)                     | Awaiting your input (two triggers) | (a) **CC pops an authorization dialog**: reader yields the icon to CC's native blue dot (**never overrides**); (b) **CC's final reply carries an "awaiting your decision" semantic** (`let me know` / `your call` / `please confirm` / `等你` / `你决定` etc.) → reader renders the blue `claude-logo-pending.svg` (overrides running-yellow / done-green). The bottom 🔵 light counts both triggers. |
 
-> Running is a static yellow dot (no animation); interrupted flashes red as an alert. Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](docs/STATES.md).
+> Running is a static yellow dot (no animation); interrupted flashes red as an alert. Full state contract (events / SVG / IPC / notifications): [`docs/STATES.md`](STATES.md).
 
 ---
 
@@ -157,9 +157,9 @@ vscode-claude-code-status-dot        # run the command directly after install
 
 **Patches CC's extension.js (injects a timer to set tab icons) + CC hooks write state + completion/interruption notifications.** Full docs:
 
-- [`docs/STATES.md`](docs/STATES.md) — **state contract (single source of truth)**: five states / event mapping / IPC / notifications
-- [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) — icon injection rationale (anchors / IIFE / SVG wiring)
-- [`docs/USAGE.md`](docs/USAGE.md) — usage guide (install / troubleshooting / revert)
+- [`docs/STATES.md`](STATES.md) — **state contract (single source of truth)**: five states / event mapping / IPC / notifications
+- [`docs/DESIGN-injection.md`](DESIGN-injection.md) — icon injection rationale (anchors / IIFE / SVG wiring)
+- [`docs/USAGE.md`](USAGE.md) — usage guide (install / troubleshooting / revert)
 
 > This project modifies CC's `extension.js` (backed up; `--revert` fully restores) and writes to `~/.claude/settings.json` (backed up on first run). The hook script **never blocks CC** — any error exits silently.
 

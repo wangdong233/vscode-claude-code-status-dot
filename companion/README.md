@@ -16,7 +16,7 @@ Claude Code 的 VS Code 扩展自动更新时，`extension.js` 被替换为全�
 
 ## v0.5.0 tab 收藏标记 + v0.5.9 ★ 标题前缀
 
-v0.5.0 补全 Favorites 体验（设计 [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md) §5 Slice 2 + §Q3）；v0.5.9 修订收藏入口（见下）：
+v0.5.0 补全 Favorites 体验（设计要点 §5 Slice 2 + §Q3，全文见 git 历史 FAVORITES-DESIGN.md）；v0.5.9 修订收藏入口（见下）：
 
 - **★ 标题前缀（v0.5.9+，推荐）**：收藏的 CC 会话，tab **标题**前自动加 `★ `。IIFE 每 500ms tick 经 mtime-cache 读 `favorites.json`，sid 命中 → 给 `panelTab.title` 加 `★ ` 前缀（基于缓存逻辑标题，无 ★★ 叠加）。这是 reload-free 的收藏可视信号。v0.5.8 曾尝试在 webview 内注入可点击星标，经取证证明架构不可行（CC 只设一次 webview.html，重设触发整页重载摧毁会话）已废弃。
 - **金线下划线标记（v0.5.0+）**：收藏的 CC 会话，tab icon 底部加一条细金线 `<rect fill="#F5A623">`（5 态点色/形完全不变）。IIFE 每 500ms tick 经 mtime-cache 读 `favorites.json`，sid 命中 → 把 leaf `claude-logo-<state>.svg` 替换为 `claude-logo-<state>-fav.svg`。
@@ -25,7 +25,7 @@ v0.5.0 补全 Favorites 体验（设计 [`docs/FAVORITES-DESIGN.md`](../docs/FAV
 
 ## v0.4.0：CC Favorites 视图
 
-自 v0.4.0 起，本配套扩展额外承载 **收藏/导航** 功能（设计全文见 [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md)）：
+自 v0.4.0 起，本配套扩展额外承载 **收藏/导航** 功能（设计全文见 git 历史 FAVORITES-DESIGN.md）：
 
 - **资源管理器（Explorer）侧边栏新增 "CC Favorites" 视图**——在 Explorer 头部右键勾选即可显示。
 - **收藏文件**：在 Explorer 中右键任意文件 → **CC Favorites: Add/Remove File**。配置项 `ccStatusDot.fav.includeInExplorerContextMenu`（默认开）可 opt-out。
@@ -86,7 +86,7 @@ When Claude Code's VS Code extension auto-updates, its `extension.js` is replace
 
 ## v0.5.0 favorite indicators + v0.5.9 ★ title prefix
 
-v0.5.0 completes the Favorites UX (design [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md) §5 Slice 2 + §Q3); v0.5.9 revises the toggle entrypoints (see below):
+v0.5.0 completes the Favorites UX (design §5 Slice 2 + §Q3, full doc in git history: FAVORITES-DESIGN.md); v0.5.9 revises the toggle entrypoints (see below):
 
 - **★ Title prefix (v0.5.9+, recommended)**: favorited CC sessions get a `★ ` prefix on the tab **title**. The IIFE's 500ms tick reads `favorites.json` via an mtime-cache and prefixes `panelTab.title` (based on the cached logical title, so no ★★ stacking). This is the reload-free favorited signal. v0.5.8 tried to inject a clickable star inside the CC webview; forensics proved that architecturally infeasible (CC sets webview.html once at panel creation; any reassignment triggers a destructive full reload of the session), so it was removed.
 - **Gold-underline indicator (v0.5.0+)**: favorited CC sessions get a thin gold `<rect fill="#F5A623">` underline at the tab icon's viewBox bottom (5 state colors/shapes unchanged). The IIFE's 500ms tick reads `favorites.json` via an mtime-cache and swaps the base leaf `claude-logo-<state>.svg` for `claude-logo-<state>-fav.svg` when the panel's sid is favorited.
@@ -95,7 +95,7 @@ v0.5.0 completes the Favorites UX (design [`docs/FAVORITES-DESIGN.md`](../docs/F
 
 ## v0.4.0: CC Favorites view
 
-Starting at v0.4.0 this companion also hosts the **Favorites/navigation** feature (full design: [`docs/FAVORITES-DESIGN.md`](../docs/FAVORITES-DESIGN.md)):
+Starting at v0.4.0 this companion also hosts the **Favorites/navigation** feature (full design in git history: FAVORITES-DESIGN.md):
 
 - **A "CC Favorites" view in the Explorer sidebar** — toggle it on via the Explorer header right-click menu.
 - **Favorite files**: right-click any file in Explorer → **CC Favorites: Add/Remove File**. The setting `ccStatusDot.fav.includeInExplorerContextMenu` (default on) lets you opt out of a crowded menu.

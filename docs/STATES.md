@@ -246,7 +246,7 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 
 ## 5. 已知限制（诚实声明，写入文档）
 
-**v2 新特性 — workflow / 后台 subagent 跑期间保持 running**：主 agent 回复"已启动"后 `Stop` 不再误写 `done`（假绿）。实现 = hybrid：`Stop`/`SubagentStop` 时优先读 payload 的 `background_tasks[]`（CC v2.1.145+ 权威，覆盖 workflow/subagent/teammate 全类型），缺失时退化为 `activeSubagents` 计数 + `SubagentStart` 早信号。reader 不读 `activeSubagents`，state 仍四态。详见 [`SUBAGENT-design.md`](SUBAGENT-design.md)。
+**v2 新特性 — workflow / 后台 subagent 跑期间保持 running**：主 agent 回复"已启动"后 `Stop` 不再误写 `done`（假绿）。实现 = hybrid：`Stop`/`SubagentStop` 时优先读 payload 的 `background_tasks[]`（CC v2.1.145+ 权威，覆盖 workflow/subagent/teammate 全类型），缺失时退化为 `activeSubagents` 计数 + `SubagentStart` 早信号。reader 不读 `activeSubagents`，state 仍四态。
 
 - **手动 Esc 中断无 hook**：CC 不触发 Stop/StopFailure（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)），状态会停在 `running`。reader 无 watchdog（当前版本不做主动推断），靠下一次 `UserPromptSubmit`/`Stop` 自然更正。
 - **多 session**：每个 CC panel 实例各自一个 500ms 定时器，按各自 `__ccsdSid` 读各自状态文件，互不干扰。
@@ -268,7 +268,7 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 >
 > **为何不用 `window.__ccVsApi=`**：v0.1.2 的注入确实用了该字面量，但它遵循 CC 自己的 `__cc*` 命名约定，未来 CC 原生可能复用该名导致误判，从而拿陈旧 `.bak` 砸掉新 CC webview。墓碑注释 `cc-status-bar-injected` 是我们独有的、CC minified bundle 永远产不出的字符串，前向安全。
 >
-> 历史设计记录见 [`WEBVIEW-injection.md`](WEBVIEW-injection.md)（同样已标注废弃）。
+> 历史设计记录（WEBVIEW-injection.md）已随文档清理删除，见 git 历史。
 
 ---
 
@@ -608,7 +608,7 @@ EH ≠ renderer：typing/copy/tab-switch 是 renderer-local，不等 EH。即便
 
 ## 10. Favorites 持久化契约（v0.4.0+，`favorites.json`）
 
-> 本节是 **v0.4.0+ Favorites 功能**的持久化契约。`favorites.json` 是 §3a STATE_DIR (`~/.claude/cc-tab-status/`) 下新增的 **非会话状态文件**——它不是 `<sid>.json` 系列，不参与 §7.5 异常保留 / GC prune，但因为落在同一目录，必须显式登记为 GC-skip 项。设计细节见 `docs/FAVORITES-DESIGN.md`；本节只列**契约**。
+> 本节是 **v0.4.0+ Favorites 功能**的持久化契约。`favorites.json` 是 §3a STATE_DIR (`~/.claude/cc-tab-status/`) 下新增的 **非会话状态文件**——它不是 `<sid>.json` 系列，不参与 §7.5 异常保留 / GC prune，但因为落在同一目录，必须显式登记为 GC-skip 项。设计细节（FAVORITES-DESIGN.md）已随文档清理删除、见 git 历史；本节只列**契约**。
 
 ### 10.1 路径与命名
 

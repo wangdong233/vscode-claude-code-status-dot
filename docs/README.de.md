@@ -71,7 +71,7 @@ Sofort wird der Tab 🟡 gelb; bei Fertigstellung 🟢 grün plus Benachrichtigu
 | ⚪ Grau `#808080` (statisch)                      | Leerlauf                                   | Initial / fertig vor über 5 Minuten / keine Zustandsdatei                                                                                                                                                                                                                                                                                                                             |
 | 🔵 Blau `#58A6FF` (statisch)                      | Wartet auf Eingabe (zwei Auslöser)         | (a) **CC fordert Berechtigung an**: Reader überlässt das Icon dem nativen CC-Blau-Punkt (**keine Überschreibung**); (b) **CCs letzte Antwort enthält »wartet auf deine Entscheidung«** (`等你`/`你决定`/`请确认`/`let me know`/`your call` usw.) → Reader rendert das blaue `claude-logo-pending.svg` (überschreibt running-Gelb / done-Grün). Der untere 🔵-Zähler zählt beide Arten |
 
-> Running ist ein statischer gelber Punkt (keine Animation); Unterbrochen ist rotes Schnellblinken als Warnung. Vollständiger Zustandsvertrag (Ereignisse / SVG / IPC / Benachrichtigung) siehe [`docs/STATES.md`](docs/STATES.md).
+> Running ist ein statischer gelber Punkt (keine Animation); Unterbrochen ist rotes Schnellblinken als Warnung. Vollständiger Zustandsvertrag (Ereignisse / SVG / IPC / Benachrichtigung) siehe [`docs/STATES.md`](STATES.md).
 
 ---
 
@@ -163,9 +163,9 @@ vscode-claude-code-status-dot        # nach der Installation direkt den Befehl a
 
 **Patcht CCs `extension.js` (injiziert einen Timer, der das Tab-Icon setzt) + CC-Hooks schreiben den Zustand + Fertig-/Unterbrochen-Benachrichtigung.** Vollständige Dokumentation:
 
-- [`docs/STATES.md`](docs/STATES.md) —— **Zustandsvertrag (einzige Quelle der Wahrheit)**: fünf Zustände (Grau/Gelb/Grün/Rot/Blau) + unterer Vier-Lichter-Aggregat / Ereignis-Mapping / IPC / Benachrichtigung
-- [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) —— Prinzip der Icon-Injektion (Anchor / IIFE / SVG-Bindung)
-- [`docs/USAGE.md`](docs/USAGE.md) —— Gebrauchsanleitung (Installation / Fehlersuche / Wiederherstellung)
+- [`docs/STATES.md`](STATES.md) —— **Zustandsvertrag (einzige Quelle der Wahrheit)**: fünf Zustände (Grau/Gelb/Grün/Rot/Blau) + unterer Vier-Lichter-Aggregat / Ereignis-Mapping / IPC / Benachrichtigung
+- [`docs/DESIGN-injection.md`](DESIGN-injection.md) —— Prinzip der Icon-Injektion (Anchor / IIFE / SVG-Bindung)
+- [`docs/USAGE.md`](USAGE.md) —— Gebrauchsanleitung (Installation / Fehlersuche / Wiederherstellung)
 
 > Dieses Projekt verändert CCs `extension.js` (gebackuped, `--revert` stellt vollständig wieder her) und schreibt in `~/.claude/settings.json` (beim ersten Mal Backup). Die Hook-Skripte **blockieren CC niemals** – jeder Fehler führt zu einem stillen `exit(0)`. **9 Hooks** (inklusive Notification legt pending ab).
 

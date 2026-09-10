@@ -1,3 +1,5 @@
+> **⚠️ 历史文档（v0.5.x 已退役架构）**：本文描述的 anchor 注入方案（Anchor A/B/C）自 v0.6.0 起已被 **seam 零锚架构**取代（CC 2.1.259 锚区漂移所致；现行架构见 [ADR-001-seam-architecture.md](ADR-001-seam-architecture.md) 与 [design-v0.6-seam.md](design-v0.6-seam.md)）。本文保留作历史逆向记录——其中的锚常量与工作流**不再适用**；文中"注入原理"的 webview 协议观察部分仍被 seam 沿用。
+
 # CC 扩展图标注入设计（DESIGN-injection）
 
 > 逆向目标：`anthropic.claude-code-2.1.204-darwin-x64/extension.js`（minified, 2.27 MB）

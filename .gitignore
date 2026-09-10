@@ -37,3 +37,4 @@ companion/*.vsix
 
 # npm pack artifacts
 *.tgz
+seam-prelude.js

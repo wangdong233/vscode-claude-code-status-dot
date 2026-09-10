@@ -73,7 +73,7 @@ npx vscode-claude-code-status-dot
 | ⚪ 灰 `#808080`（静的）                 | アイドル                           | 初期 / 完了から 5 分超過 / ステータスファイルなし                                                                                                                                                                                                                                                                                                                           |
 | 🔵 青 `#58A6FF`（静的）                 | ユーザー入力待ち（2 種のトリガー） | (a) **CC が権限承認ダイアログをポップアップ**: reader がアイコンを譲り、CC ネイティブの青ドットを表示（**上書きしない**）；(b) **CC の最終返信が「意思決定待ち」の意味を含む**（`等你` / `你决定` / `请确认` / `let me know` / `your call` など）→ reader が青色 `claude-logo-pending.svg` をレンダリング（running 黄 / done 緑を上書き）。下部 🔵 ライトは両トリガーを計数 |
 
-> running は静的黄ドット（アニメなし）；interrupted は赤の速ブリンクで警告。完全な状態契約（イベント / SVG / IPC / 通知）は [`docs/STATES.md`](docs/STATES.md) を参照。
+> running は静的黄ドット（アニメなし）；interrupted は赤の速ブリンクで警告。完全な状態契約（イベント / SVG / IPC / 通知）は [`docs/STATES.md`](STATES.md) を参照。
 
 ---
 
@@ -165,9 +165,9 @@ vscode-claude-code-status-dot        # インストール後そのままコマ�
 
 **CC の extension.js にパッチ（タイマーを注入してタブアイコンを設定）+ CC hooks が状態を書き込み + 完了 / 中断通知。** 完全なドキュメント:
 
-- [`docs/STATES.md`](docs/STATES.md) —— **状態契約（唯一の真実源）**: 5 状態（灰 / 黄 / 緑 / 赤 / 青） / 下部 4 ライト集計 / イベントマッピング / IPC / 通知
-- [`docs/DESIGN-injection.md`](docs/DESIGN-injection.md) —— アイコン注入の原理（anchor / IIFE / SVG バインディング）
-- [`docs/USAGE.md`](docs/USAGE.md) —— 使用ガイド（インストール / トラブルシューティング / 復元）
+- [`docs/STATES.md`](STATES.md) —— **状態契約（唯一の真実源）**: 5 状態（灰 / 黄 / 緑 / 赤 / 青） / 下部 4 ライト集計 / イベントマッピング / IPC / 通知
+- [`docs/DESIGN-injection.md`](DESIGN-injection.md) —— アイコン注入の原理（anchor / IIFE / SVG バインディング）
+- [`docs/USAGE.md`](USAGE.md) —— 使用ガイド（インストール / トラブルシューティング / 復元）
 
 > 本プロジェクトは CC 拡張の `extension.js` を変更し（バックアップ済み、`--revert` で完全復元）、`~/.claude/settings.json` に書き込む（初回バックアップ）。hook スクリプトは**決して CC をブロック / 中断しない**設計 —— いかなるエラーもサイレントに終了。**9 つの hooks**（`Notification` 落ち pending を含む）。
 

@@ -253,12 +253,14 @@ check(
   'bridge=' + JSON.stringify(G.__ccsdSidToTitle['sid-fav']),
 );
 
-// FP.10-13 (v0.6.6): the v0.6.5 tab-tooltip surface joins the soak matrix.
-// The tooltip is the N-of-gear count channel (D1-F07): a dedup-gated (!==)
-// periodic write. Steady state MUST be byte-stable with ZERO setter writes —
-// the same bounded-work invariant FP.8 pins for titles. A bg transition must
-// flip it once; bg=0 or a stale mtime must collapse it back to the bare
-// painted title (fake env language is 'en' → tr() resolves the en template).
+// FP.10-13 (v0.6.6): the v0.6.5 tab-tooltip write joins the soak matrix.
+// HONEST SCOPE (mirror of the patch.ts NOTE): stable VSCode exposes no
+// WebviewPanel tooltip setter — this write is an inert expando today and the
+// gear ICON is the only user-visible N channel. These checks pin that IF a
+// future VSCode ships the setter, the write is already bounded: dedup-gated
+// (!==) periodic writes, byte-stable with ZERO setter writes in steady state
+// (the FP.8 bounded-work invariant), suffix on bg>0+fresh, collapse on bg=0
+// or stale mtime (fake env language is 'en' → tr() resolves the en template).
 let tt_writes = 0;
 {
   const cur = p1.tooltip;

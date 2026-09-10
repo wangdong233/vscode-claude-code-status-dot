@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Mirrors the repo's own build chain via the shared `build:all` script (the
+# same one prepublishOnly runs) — keeping CI and the release pipeline on ONE
+# literal step sequence (final-review F-4). 10 of the 21 test suites pin the
+# BUILT artifacts (dist/patch.js, companion/dist/extension.js), which are
+# gitignored: a fresh checkout has none, so build BEFORE test.
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -18,14 +23,11 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      # --ignore-scripts skips the husky `prepare` hook (dev-only).
-      # Build BEFORE testing: 10 of the 21 suites pin the BUILT artifacts
-      # (dist/patch.js, companion/dist/extension.js), which are gitignored —
-      # a fresh checkout has none. This mirrors the repo's own prepublish
-      # chain (minus vsix packaging).
+          cache-dependency-path: '**/package-lock.json'
+      # --ignore-scripts skips the husky `prepare` hook (dev-only). Every
+      # dependency the suites need lives in devDependencies (tsx/prettier/
+      # typescript); companion deps install via companion:install (npm ci).
       - run: npm ci --ignore-scripts
-      - run: npm run build
-      - run: npm run companion:install
-      - run: npm run companion:build
+      - run: npm run build:all
       - run: npm run format:check
       - run: npm test

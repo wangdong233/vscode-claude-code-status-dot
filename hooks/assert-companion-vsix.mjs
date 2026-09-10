@@ -29,7 +29,7 @@
 // published to the Marketplace). Avoids pulling in yauzl/adm-zip just for a
 // one-shot release gate.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -59,6 +59,35 @@ if (illegalEvents.length > 0) {
 }
 
 const vsixPath = join(COMPANION_DIR, `cc-status-dot-companion-${expectedVersion}.vsix`);
+
+// F-1 gate (v0.6.7, final-review 2026-09-10): absence assertions. The 0.6.6
+// tarball shipped TWO stale 0.6.5 vsix (~702KB dead weight) because the
+// prepublishOnly copy used a version-agnostic glob and this gate only checked
+// that the EXPECTED vsix was present and fresh — never that OTHER versions
+// were absent. This is the third recurrence of the stale-artifact-ships class
+// (v0.2.8 embedded constants, v0.6.5 seam-prelude.js); the structural fix is
+// asserting "what must NOT be there is not there", not just "what must be
+// there is there".
+for (const dir of [COMPANION_DIR, join(SCRIPT_DIR, '..', 'dist')]) {
+  const dirLabel = dir === COMPANION_DIR ? 'companion/' : 'dist/';
+  let vsixFiles;
+  try {
+    vsixFiles = readdirSync(dir).filter((f) => f.endsWith('.vsix'));
+  } catch {
+    continue; // dist/ may not exist pre-copy; the presence checks below cover it
+  }
+  const stale = vsixFiles.filter((f) => f !== `cc-status-dot-companion-${expectedVersion}.vsix`);
+  if (stale.length > 0) {
+    fail(
+      `${dirLabel} contains vsix files from OTHER versions: ${stale.join(', ')} — stale artifacts would ship in the tarball (the 0.6.6 incident). Delete them (only cc-status-dot-companion-${expectedVersion}.vsix may exist) before publishing.`,
+    );
+  }
+  if (vsixFiles.length > 1) {
+    fail(
+      `${dirLabel} contains more than one vsix (${vsixFiles.join(', ')}) — exactly one, the expected version, may exist.`,
+    );
+  }
+}
 if (!existsSync(vsixPath)) {
   fail(
     `companion .vsix missing at ${vsixPath} — run \`npm run companion:package\` before publishing. The npm tarball would otherwise ship without the companion and every user would see the "companion .vsix not found" warning at install time.`,

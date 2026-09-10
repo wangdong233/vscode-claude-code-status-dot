@@ -1,6 +1,6 @@
 {
   "name": "vscode-claude-code-status-dot",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "description": "5-state status dots on every Claude Code tab (idle/running/done/pending/interrupted) + bottom 4-light aggregate + per-session token usage & $ cost + favorites sidebar (★) + completion/interruption notifications — minimal, reversible VSCode patch with auto-repatch after CC updates. QuickPick config panel follows VSCode UI language (zh/en/ja/de/es/fr/pt/ru).",
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build && npm run companion:install && npm run companion:build && npm run companion:package && cp companion/cc-status-dot-companion-*.vsix dist/ && node hooks/assert-companion-vsix.mjs",
+    "prepublishOnly": "npm run build:all && npm run companion:package && npm run copy:vsix && node hooks/assert-companion-vsix.mjs",
     "patch": "npx tsx patch.ts",
     "revert": "npx tsx patch.ts --revert",
     "status": "npx tsx patch.ts --status",
@@ -25,13 +25,15 @@
     "test:bg-gear": "node hooks/test-bg-gear.mjs",
     "test:smoke-favorites": "node hooks/test-smoke-favorites.mjs",
     "test:standalone": "node hooks/test-standalone-patch.mjs",
-    "companion:install": "cd companion && npm install --no-audit --no-fund",
+    "companion:install": "cd companion && npm ci --no-audit --no-fund",
     "companion:build": "cd companion && npm run build",
     "companion:package": "npm run embed-runtime && cd companion && npm run package:vsix",
     "format:check": "prettier --check patch.ts hooks/**/*.js hooks/**/*.mjs companion/extension.ts companion/keepalive.ts companion/keepalive.ts",
     "format": "prettier --write patch.ts hooks/**/*.js hooks/**/*.mjs companion/extension.ts companion/keepalive.ts companion/keepalive.ts",
     "prepare": "husky",
-    "embed-runtime": "rm -rf companion/runtime && mkdir -p companion/runtime/hooks && cp dist/patch.js companion/runtime/ && cp -R dist/src companion/runtime/src && cp -R resources companion/runtime/resources && cp hooks/cc-status.js companion/runtime/hooks/cc-status.js && rm -rf companion/runtime/resources/.devteam && node -e 'require(\"fs\").writeFileSync(\"companion/runtime/version.json\", JSON.stringify({injectVersion:\"v\"+require(\"./package.json\").version}))'"
+    "embed-runtime": "rm -rf companion/runtime && mkdir -p companion/runtime/hooks && cp dist/patch.js companion/runtime/ && cp -R dist/src companion/runtime/src && cp -R resources companion/runtime/resources && cp hooks/cc-status.js companion/runtime/hooks/cc-status.js && rm -rf companion/runtime/resources/.devteam && node -e 'require(\"fs\").writeFileSync(\"companion/runtime/version.json\", JSON.stringify({injectVersion:\"v\"+require(\"./package.json\").version}))'",
+    "build:all": "npm run build && npm run companion:install && npm run companion:build",
+    "copy:vsix": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});const v=require('./companion/package.json').version;fs.copyFileSync('companion/cc-status-dot-companion-'+v+'.vsix','dist/cc-status-dot-companion-'+v+'.vsix')\""
   },
   "keywords": [
     "claude-code",

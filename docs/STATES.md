@@ -109,6 +109,7 @@
   - `activeSubagents`（int，默认 0）：**仅供 writer 记账**（SubagentStart/Stop 计数 + `background_tasks` 纠正）。**reader 不读此字段**——state 仍四态，渲染逻辑零改动（§4）。
     - **字段名义 vs v2 语义**：名字是 v0.x 历史遗留（"活跃 subagent 数"），v2 起（§5）任何带 `background_tasks` 的事件会用 `background_tasks.length` **权威覆盖**它，语义已扩展到 workflow/subagent/teammate 全类型后台任务。reader 不读、改名是 IPC 破坏性变更无收益，故保留名字、扩语义；读字段时请以注释而非名字为准。
   - `pending`（bool，可选，v0.1.13 新增）：`true` = 该会话正在等待用户输入（permission / question / elicit prompt）。**仅 writer 写**（`Notification` 事件写 `true`；**用户/turn 驱动事件**——UserPromptSubmit / PreToolUse / PostToolUse / Stop / StopFailure——写 `false`；SubagentStart / SubagentStop **保持 `cur.pending`**，因为它们是 background 事件，对父会话 prompt 是否仍开无信号，v0.1.13 review round-2 修正），**仅 reader 的 SBI 聚合读**（§7 蓝灯 🔵）；per-tab 渲染（§4）**不读**此字段——仍由 CC 原生蓝点处理（v0.1.8 `__ccsdPending` yield）。一个会话可同时是 `running` AND `pending`（一轮 running 卡在权限弹窗——典型场景）。writer 为 read-modify-write——**`cur.pending` 从盘上读回**（严格 `=== true`），故 background 事件能安全 preserve。
+  - `bg`（int，可选，v0.6.5 新增，默认 0）：**shell 型 tracked 后台任务数**（nohup dev server / test watcher 这类**颜色不体现**的后台工作——唤醒型 subagent/workflow/teammate 已由黄灯 + `activeSubagents` 呈现）。reader 读它渲染 tab 图标的**灰色小齿轮徽标**（§3b）与 tooltip 计数。写入规则（writer 矩阵，test-cc-status.js §V3.10 逐条钉死）：**凡 payload 带 `background_tasks[]` 的事件（Stop / SubagentStop）按 `type==='shell'` 计数权威刷新**（waking-only payload 刷新为 0——正确答案就是"无 shell 工作"）；**其余事件一律 carry-forward `cur.bg`**（含 Pre/PostToolUse / Notification / SubagentStart 这些固定字面量返回的 case——漏一处即权限弹窗后齿轮静默消失，error_class v0.6.3 先例的加宽）；**UserPromptSubmit 同样 carry-forward**（UPS 裁决：null payload 信号 ≠ 零任务，dev server 还在跑）。**禁文本启发式**（用户裁决）：只数 `type` 字段，永不读 command/description。旧文件无 `bg` 按 0 读（schema 只增字段，旧 reader 忽略 = 兼容）；writer/reader 两侧都带 `Number.isFinite` 钳制（手改 `bg:Infinity`/负数归零——reader 侧即终验 V-FLAW-1）。
   - `background_tasks[]` / `session_crons[]`：**hook payload 字段（CC v2.1.145+），不落盘**——Stop/SubagentStop 时由 writer 就地读取作权威判定（覆盖 workflow/subagent/teammate 等全类型）。
 - 写入：**原子**（`.tmp` + `rename`，tmp 名带 `pid+Date.now()` 后缀防同 session 并发 hook 共用 tmp 路径），目录自动创建；writer 为 **read-modify-write**（读当前 `activeSubagents` + `pending` → 改 → 原子写回）
 - reader 读失败（文件不存在 / JSON 破损）→ 跳过本帧，**不覆盖**图标（保留 CC 原生 pending/done）
@@ -118,9 +119,42 @@
 | 目录                                        | 内容                                                                                                                                           | 由谁创建                               | `--revert` 是否清理      |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------ |
 | `~/.claude/cc-tab-status/`                  | **状态 IPC 文件**（本节 §3，每 session 一个 `<sid>.json`）                                                                                     | writer（hook）首次写入                 | **否**（用户数据，保留） |
-| `~/.claude/cc-status-dot/`（`INSTALL_DIR`） | **运行时副本**：`resources/*.svg`（4 个 = idle + running + done + error，reader 引用）+ `hooks/cc-status.js`（settings.json 接线的 hook 目标） | patcher 安装时从项目源复制（幂等覆盖） | **是**（删整个目录）     |
+| `~/.claude/cc-status-dot/`（`INSTALL_DIR`） | **运行时副本**：`resources/*.svg`（30 个 = 5 态 × {基础,-fav,-arch} × {无bg,-bg}，reader 引用）+ `hooks/cc-status.js`（settings.json 接线的 hook 目标） | patcher 安装时从项目源复制（幂等覆盖） | **是**（删整个目录）     |
 
 > **持久化设计（v0.2）**：reader（注入 IIFE）的 `RES` 与 settings.json 接线的 hook 命令都指向 `INSTALL_DIR` 的**绝对路径**，而非项目源目录。这样即使用户删除项目目录或 npx 缓存被清，已 patch 的扩展仍能照常渲染。安装一行：`npx vscode-claude-code-status-dot`。`PROJECT_ROOT` 仅用于"复制源"（安装时读一次），编译后从 `dist/patch.js` 运行时自动回溯到包根目录。
+
+### 3b. 后台任务齿轮徽标（v0.6.5「方案 C 终版2」· v3.1 几何 · 用户裁决 2026-09-10）
+
+**语义**：tab 图标的状态点**正下方**叠加一颗**独立灰色小齿轮**，表示"该会话有 N 个 shell 型 tracked 后台任务在飞"。颜色语义契约不动（tab = 主会话状态，五态两代裁决均保）——齿轮是**叠加属性符号**，不是第六态。
+
+**裁决链（三轮连改，v3.1 看图确认"很好"，全文锁死）**：v2 是"下缘居中小徽章 + 白色细环分离"（cx=12 与下划线共轴）→ 用户连改三轮 → v3 终版：**齿轮挂到状态点正下方**（垂直同轴镜像位）+ **弃白环** + **挖孔晕圈分离**。用户确认的预览即交付像素——`resources/` 的 15 个 `-bg` 文件与确认渲染**逐字节相等**，test-bg-gear.mjs G-A.6 以 sha256 钉死（改哈希必须重新走用户确认）。
+
+**用户三条硬要求（最高优先，全文锁死）**：
+
+1. **logo 零位移零缩放**——禁"上移让位"。`-bg` 变体 = 基础文件**两处纯插入**：`</mask>` 前插挖孔 circle、`</svg>` 前插 `<g id="ccsd-bg-gear">`；既有 SVG 元素（logo path / -fav 金线 / -arch 灰线 / 状态点 / 状态点自己的 r7.5 挖孔）**字节级不动**，round-trip 断言"去掉两处插入 === 原文"逐字节成立（test-bg-gear.mjs G-A）。
+2. **灰色齿轮，不跟状态色**——状态色语义已锁，齿轮染色会被误读为状态变化；灰 = 中性属性标记。取 `#4D5157` 中性深灰（N1 对抗审查：`#808080`/`#767676` 中灰在 1x/16px 下读作污渍且与 -arch 灰线合并；深一档双主题可辨且不偏色）。禁青色。
+3. **整体协调**——齿轮 = 状态点的**镜像位**：`cx=18`（状态点 (18,6) 正下方垂直同轴），`cy=18.5`；dot 底边 y12 与齿轮顶边 y13 之间 **1.0u 净隙**（用户要求"分割一点"）；齿轮齿顶外缘（cy+tipR=24.0）**不越 y=24 画布底边**。
+
+**92% 取舍（裁决链记录）**：`tipR=5.5` 是状态点 r6 的 92%。24 单位画布在状态点下方放不下"r6 全尺寸 + 净隙"（dot 底 12 + r6 即触底，无隙可分），取舍 = 5.5 + 真实净隙，@16px 小 0.67px。
+
+**齿轮图例（gen-bg-gear.mjs 单一真相源，v3.1）**：8 齿 + 中心孔（`fill-rule="evenodd"` 挖孔），齿顶 5.5 / 齿根 3.85 / 孔 1.6，tipHalf 10° / rootHalf 13°，圆心 `(18, 18.5)`。**无白环**（v2 的 r4.15 白细环已随三轮裁决退役）。与 logo 射线的分离 = **badge-mask 挖孔晕圈**：`<circle (18,18.5) r7.0 fill="black"/>` 插在既有 mask 内（超齿顶 1.5u）——**状态点同款家族语言**（状态点自己的挖孔 r7.5 = r6+1.5u，同为 body+1.5u），既挡住齿轮区射线、又在 dot 与齿轮之间留出净隙背景。
+
+**图标管线（三层正交叠加）**：基础态叶子 → `-fav`/`-arch`（会话属性，favOf）→ `-bg`（任务属性，**bgOf 在 favOf 之后组合**：`bgOf(favOf(svg,sid),__bgOn)`）。30 个 SVG 全组合（5 态 × {普通,fav,arch} × {无bg,有bg}）入 `resources/` 并列 `OUR_SVGS` 清单（缺列 = 安装器不拷贝 + 升级清扫删旧拷贝，v0.5.39 先例）。`CC_DEFAULT`（interrupted 闪帧原生 logo）天然无徽标（bgOf 首守卫）；`-bg` 叶子再入 bgOf 不匹配正则（幂等）；变体文件缺失回退无齿轮基础图标（fail-open，per-leaf statSync 缓存）。
+
+**reader 显示门（§H tick，v3.1 两处 T3 调整）**：`j.bg` 为**有限正整数** **且** sid.json mtime 新鲜（**<24h，独立常量 `BG_STALE_MS`**，`__adj` 睡眠账本感知）→ 用含齿轮变体；否则无齿轮。两处调整（均已报备用户）：
+
+- **Infinity 守卫（终验 V-FLAW-1）**：`__bgN` 解析加 `Number.isFinite`——手改 `bg:Infinity` 的文件原本能通过 typeof+>0+floor(Infinity)===Infinity 三关，把齿轮（和 "Infinity" tooltip）永久钉死；现在归零。闸门 test-bg-gear.mjs G-C.17/18 对 corrupt 值动物园做了**功能性**执行验证。
+- **2h→24h（N1 条件）**：VPN 探测类 tracked 任务真实跑 4h+，T2 的 2h 门会任务中途提前隐齿轮。新独立常量 `BG_STALE_MS=24h`（徽标**显示窗口**）；SBI 聚合的 `SBI_MISSING_LT_STALE_MS=2h` **保持不动**（decay 死 spawn 证人，必须收紧）——两常量语义分离、**禁耦合**（显示窗口宽 ≫ 证人紧：徽标多留一小时只多一个灰 glyph，decay 早触发错一个状态）。闸门 G-C.6a/b/c + G-C.21/22/23 在 23:59 on / 24:01 off / 2h 仍 on 边界执行验证，且断言 decay 谓词未被带动。
+
+数量 N 放 **tooltip**（`panelTab.tooltip` 追加 `⚙… 后台任务`，tr() 8 语言，dedup 门防 2Hz IPC 重写，bg→0 时塌缩回裸 title）；**SBI 文字后缀取消**（用户裁决）。
+
+**已知限制（诚实声明，v3.1 口径）**：
+
+- **16px 1x 残余**：齿轮齿形可辨但小；**5（done 绿）vs 6 齿视觉在无下划线锚定（非 fav/arch）时辨识度最低**——静态截图下"多一颗灰齿轮"靠位置（点正下方闭合 glyph vs 任何下划线横线）区分，动态（任务起停出现/消失）与 tooltip 计数消除歧义。
+- **金线/灰线右端遮挡 = 已接受的层次语言**：齿轮 z 序在最上（`</svg>` 前插入），-fav 金线 / -arch 灰线（x=4..20, y=22..22.9）的右端（约 x≥13.8 起）被齿轮遮住——与 v2"徽章直印射线尖"同族的层叠取舍，裁决链已接受；左段金线（x=4..13.8）仍完整可辨。
+- `WebviewPanel` 无公开 tooltip setter（VSCode 1.136 stable 实证）——tooltip 赋值在该表面为惰性 expando（无害），齿轮图标为保底可见通道。
+
+**预览图（用户确认的像素）**：`docs/sheet-light.png` / `docs/sheet-dark.png`（全组合 4× 缩放表）、`docs/strip16-light.png` / `docs/strip16-dark.png`（16px 1x 实尺寸条）——即 v3.1 确认时用户所见图。
 
 ---
 

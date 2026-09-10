@@ -327,6 +327,23 @@ check(
       /delete globalThis\.__ccsdSuspLedger;/.test(iife),
     'v0.5.24 debt #1: §F/§H decay unified into one predicate. running decay gated on since AND tokens.last_ts AND !activeSubagents (v0.5.13/14/16 rationale preserved in the declaration comment).',
   );
+  // v0.6.5 T3: BG_STALE_MS is baked as an INDEPENDENT constant (24h display
+  // window) and the decay predicate above must still key off the 2h
+  // SBI_MISSING_LT_STALE_MS — the N1 finding was exactly the risk of the two
+  // drifting into one knob. Strong pin: decay predicate source contains
+  // SBI_MISSING_LT_STALE_MS and NOT BG_STALE_MS; the badge gate (pinned in
+  // test-bg-gear.mjs G-C.6) does the inverse.
+  check(
+    'IIFE.12e2 v0.6.5 BG_STALE_MS baked (24h) — independent from the 2h decay witness, decay predicate NOT dragged along',
+    /var BG_STALE_MS=86400000;/.test(iife) &&
+      /var SBI_MISSING_LT_STALE_MS=7200000;/.test(iife) &&
+      /var __bgOn=__bgN>0&&__mt>0&&\(__adj\?__adj\(__mt\)-__mt:now-__mt\)<BG_STALE_MS;/.test(iife) &&
+      !/__bgOn=[^;]*SBI_MISSING_LT_STALE_MS/.test(iife) &&
+      !/E\(mt\)\)>SBI_AS_PROTECT_MAX_MS[\s\S]{0,400}?BG_STALE_MS/.test(
+        iife.slice(iife.indexOf('function __ccsdDecayState'), iife.indexOf('function __ccsdDecayState') + 2000),
+      ),
+    'BG_STALE_MS=24h (badge display window, N1: VPN-probe tracked tasks run 4h+); SBI_MISSING_LT_STALE_MS=2h (dead-spawn decay witness) — semantically separate by design',
+  );
   check(
     'IIFE.12f per-tab decay call sits AFTER __ccsdPending yield (yield still wins for CC-native blue)',
     yieldIdx >= 0 && perTabDecayCallIdx >= 0 && yieldIdx < perTabDecayCallIdx,
@@ -408,7 +425,7 @@ check(
 // IIFE body unchanged — bump triggers companion IIFE-version drift detect so
 // the new companion's setContext dispatches land cleanly across a CC update).
 // v0.5.21: loading 图标不可点击(refreshFavStatusBar loading→command undefined;sid→恢复 toggleTab)。根治"显示 loading 但点击时 loading 已过→误 toggle 上个会话"。IIFE body 未变(companion-only);stamp 跟随 5-way pin。
-check('IIFE.21c banner carries v0.6.4 stamp', /\/\*cc-status-dot-injected:v0\.6\.4:/.test(iife));
+check('IIFE.21c banner carries v0.6.5 stamp', /\/\*cc-status-dot-injected:v0\.6\.5:/.test(iife));
 
 // --- 10. flashSeq (renamed from `seq`, M8) ----------------------------------
 check('IIFE.22 flashSeq drives interrupted flash', /flashSeq\s*%\s*2/.test(iife));
@@ -525,8 +542,8 @@ check(
   'v0.5.12 perf: guard prevents duplicate timers; tick extracted to named __ccsdSbiTick + invoked once immediately after setInterval registration (four-light first paint without waiting 500ms)',
 );
 check(
-  'IIFE.25b v0.5.23 §H per-panel tick reads sid.json DIRECTLY (no __ccsdAgCache; v0.5.35 pend +__ccsdUserDialogSet OR term; v0.6 seam pend +__ccsdToolPermSet/__ccsdWireState OR terms — five-state table §6.4)',
-  /st=j\.state;since=j\.since;err=j\.error\|\|"";pend=\(j\.pending===true\)\|\|\(globalThis\.__ccsdPendingSet&&globalThis\.__ccsdPendingSet\[sid\]===true\)\|\|\(globalThis\.__ccsdUserDialogSet&&globalThis\.__ccsdUserDialogSet\[sid\]===true\)\|\|\(globalThis\.__ccsdToolPermSet&&globalThis\.__ccsdToolPermSet\[sid\]===true\)\|\|\(globalThis\.__ccsdWireState&&globalThis\.__ccsdWireState\[sid\]==="waiting_input"\)\}catch\(e\)\{\}/.test(
+  'IIFE.25b v0.5.23 §H per-panel tick reads sid.json DIRECTLY (no __ccsdAgCache; v0.5.35 pend +__ccsdUserDialogSet OR term; v0.6 seam pend +__ccsdToolPermSet/__ccsdWireState OR terms — five-state table §6.4; v0.6.5 T3 tail parses __bgN WITH the Number.isFinite guard — V-FLAW-1: a hand-edited bg:Infinity passed typeof+>0+floor and pinned the gear on forever)',
+  /st=j\.state;since=j\.since;err=j\.error\|\|"";pend=\(j\.pending===true\)\|\|\(globalThis\.__ccsdPendingSet&&globalThis\.__ccsdPendingSet\[sid\]===true\)\|\|\(globalThis\.__ccsdUserDialogSet&&globalThis\.__ccsdUserDialogSet\[sid\]===true\)\|\|\(globalThis\.__ccsdToolPermSet&&globalThis\.__ccsdToolPermSet\[sid\]===true\)\|\|\(globalThis\.__ccsdWireState&&globalThis\.__ccsdWireState\[sid\]==="waiting_input"\);__bgN=\(typeof j\.bg==="number"&&Number\.isFinite\(j\.bg\)&&j\.bg>0&&Math\.floor\(j\.bg\)===j\.bg\)\?j\.bg:0\}catch\(e\)\{\}/.test(
     iife,
   ) && !/__ccsdAgCache[\s\S]{0,100}?__ch\.j/.test(iife),
   'v0.5.23: §H reads sid.json directly (JSON.parse(readFileSync)), NOT via §F cache. QW4 (v0.5.12 cache reuse) caused §H/§F tick desync — §H read stale cache (running, since=old) while §F read fresh (done, since=Stop) → §H decayed to idle (gray) while §F stayed done (green). Direct read ensures §H always reads latest, same as §F. v0.5.35: pend OR-chain extended with __ccsdUserDialogSet (consent/refusal coverage) mirroring §F.',
@@ -1380,7 +1397,7 @@ check(
 // had a content hash.
 {
   const HOOK_SRC = path.join(ROOT, 'hooks', 'cc-status.js');
-  const SRC_HOOK_VERSION = 'v0.2.5'; // mirror HOOK_VERSION in patch.ts (v0.2.4 state-machine v3: subject scoping + transient red + wf-alive decay guard)
+  const SRC_HOOK_VERSION = 'v0.2.6'; // mirror HOOK_VERSION in patch.ts (v0.6.5: bg shell-task field — gear badge writer contract)
   const HOOK_HASH_LEN = 8;
   let hookSrc = '';
   try {
@@ -2406,8 +2423,17 @@ check(
     // set MUST be in the manifest or installRuntimeFiles never copies them,
     // stale-sweep deletes any prior copy, and favOf()'s -arch.svg path 404s →
     // archived tabs render a broken icon (review high finding).
+    // v0.6.5: +15 -bg gear-badge variants → 30. Same manifest rule: a missing
+    // -bg entry means installRuntimeFiles never copies the file and the sweep
+    // deletes prior copies; bgOf()'s existsSync fallback then silently strips
+    // the gear from every tab (fail-open feature loss — pinned here + R.1 in
+    // test-bg-gear.mjs).
     const count = (m[1].match(/"claude-logo-/g) || []).length;
-    check('IIFE.117 OUR_SVGS contains 15 entries (5 base + 5 -fav + 5 -arch)', count === 15, 'count=' + count);
+    check(
+      'IIFE.117 OUR_SVGS contains 30 entries (5 base + 5 -fav + 5 -arch + 5×3 -bg)',
+      count === 30,
+      'count=' + count,
+    );
     // v0.5.0: every base variant has a -fav twin.
     const baseStates = ['idle', 'running', 'done', 'error', 'pending'];
     for (const st of baseStates) {
@@ -2416,6 +2442,16 @@ check(
         m[1].includes(`"claude-logo-${st}-fav.svg"`),
         'OUR_SVGS body: ' + m[1],
       );
+    }
+    // v0.6.5: every variant family has a -bg twin (gear badge).
+    for (const st of baseStates) {
+      for (const suf of ['', '-fav', '-arch']) {
+        check(
+          `IIFE.117a3 OUR_SVGS includes claude-logo-${st}${suf}-bg.svg (v0.6.5 gear badge)`,
+          m[1].includes(`"claude-logo-${st}${suf}-bg.svg"`),
+          'OUR_SVGS body: ' + m[1],
+        );
+      }
     }
     // v0.5.39: every base variant has a -arch twin (archived-session grey icon).
     for (const st of baseStates) {
@@ -2443,9 +2479,15 @@ check(
     // on-frame, final apply) MUST be wrapped in favOf(svg,sid) so a favorited
     // session renders the -fav variant. A regression that dropped any wrap
     // would leave that one state un-gold-underlined while the others work.
+    // v0.6.5: the pending + final sites gained the SECOND overlay hop —
+    // bgOf(favOf(...),__bgOn) — the grey gear badge composing AFTER the
+    // fav/arch layer (three orthogonal icon layers: state → -fav/-arch → -bg).
+    // The interrupted on-frame site (117j) is UNCHANGED: its flash twin is
+    // CC_DEFAULT which carries no badge, so wrapping it would only break the
+    // flash pair's symmetry.
     check(
-      'IIFE.117i pending early-return iconPath wrapped in favOf (v0.5.0)',
-      /ccuri\(\s*favOf\(\s*pth\.join\(\s*RES\s*,\s*["']claude-logo-pending\.svg["']\s*\)\s*,\s*sid\s*\)\s*\)/.test(
+      'IIFE.117i pending early-return iconPath wrapped in favOf (v0.5.0; v0.6.5 bgOf overlay)',
+      /ccuri\(\s*bgOf\(\s*favOf\(\s*pth\.join\(\s*RES\s*,\s*["']claude-logo-pending\.svg["']\s*\)\s*,\s*sid\s*\)\s*,\s*__bgOn\s*\)\s*\)/.test(
         iife,
       ),
     );
@@ -2456,8 +2498,8 @@ check(
       ),
     );
     check(
-      'IIFE.117k final iconPath apply wrapped in favOf(svg,sid) (v0.5.0)',
-      /ccuri\(\s*favOf\(\s*svg\s*,\s*sid\s*\)\s*\)/.test(iife),
+      'IIFE.117k final iconPath apply wrapped in bgOf(favOf(svg,sid),__bgOn) (v0.5.0; v0.6.5 bgOf overlay)',
+      /ccuri\(\s*bgOf\(\s*favOf\(\s*svg\s*,\s*sid\s*\)\s*,\s*__bgOn\s*\)\s*\)/.test(iife),
     );
     // v0.5.40 archive detection: archive.json is an INDEPENDENT file from
     // favorites.json. Companion writes archive.json separately; the IIFE reads

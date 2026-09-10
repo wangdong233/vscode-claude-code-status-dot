@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-/*cc-status-dot-hook:v0.2.5:951b1fe3*/
+/*cc-status-dot-hook:v0.2.6:2396aeb5*/
 
 /**
  * cc-status.js — Claude Code per-session status hook (cross-platform).
@@ -244,6 +244,31 @@ function inflightFromPayload(payload) {
 }
 
 /**
+ * v0.6.5 (Plan C final-2, user ruling 2026-09-10): count of SHELL-type tracked
+ * background tasks — the class whose color cannot show it. Waking types
+ * (subagent / workflow / teammate / monitor / cloud session, plus every
+ * UNKNOWN type per the v0.6.4 rule) already surface as yellow / activeSubagents;
+ * a non-waking shell (nohup dev server / test watcher) keeps the turn DONE
+ * (green), so its "task in flight" signal needs its own channel: the `bg`
+ * field → the tab icon's grey gear badge. Type discrimination mirrors
+ * inflightFromPayload EXACTLY (type==='shell' is shell; everything else,
+ * including unknown, is waking) so bg + activeSubagents partition
+ * background_tasks with no double-count and no gap.
+ * Returns null when background_tasks is absent (no authoritative signal) —
+ * the caller then carries cur.bg forward. TEXT HEURISTICS ARE FORBIDDEN
+ * (user ruling): bg counts the `type` field only, never command/description.
+ */
+function shellBgFromPayload(payload) {
+  const tasks = payload && payload.background_tasks;
+  if (!Array.isArray(tasks)) return null;
+  let shell = 0;
+  for (const t of tasks) {
+    if (t && typeof t === 'object' && t.type === 'shell') shell++;
+  }
+  return shell;
+}
+
+/**
  * Map a parsed hook payload to a status object (read-modify-write, hybrid).
  *   - Method B (primary): prefer the authoritative `background_tasks.length`
  *     from the payload when present — zero counting, zero drift, covers every
@@ -273,11 +298,23 @@ function inflightFromPayload(payload) {
 function deriveStatus(payload, cur, now) {
   const event = payload.hook_event_name;
   const inflight = inflightFromPayload(payload);
+  // v0.6.5 (Plan C final-2): bg = SHELL-type tracked background-task count.
+  // AUTHORITATIVE refresh on every event whose payload carries
+  // background_tasks[] (Stop / SubagentStop per CC v2.1.145+ — a waking-only
+  // payload refreshes it to 0, which is the correct "no shell work" answer);
+  // every OTHER event carries cur.bg forward unchanged. Carry-forward is the
+  // widened error_class precedent (v0.6.3): Pre/PostToolUse and Notification
+  // return fixed literal shapes, so a per-case omission would atomically
+  // zero the count after every permission prompt / tool call — the gear would
+  // vanish mid-flight. EVERY return in this switch therefore carries `bg`
+  // (pinned case-by-case by test-cc-status.js §V3.10).
   // Clamp non-finite AND negative to 0 — a corrupt/hand-edited file must not
   // propagate a negative counter (SubagentStart would then write a+1 = -N+1,
   // persisting the negative across events). See STATES.md §3 "activeSubagents:
   // <int> (>= 0)".
   const a = Number.isFinite(cur && cur.activeSubagents) && cur.activeSubagents >= 0 ? cur.activeSubagents : 0;
+  const bgShell = shellBgFromPayload(payload);
+  const bg = bgShell != null ? bgShell : Number.isFinite(cur && cur.bg) && cur.bg >= 0 ? cur.bg : 0;
 
   switch (event) {
     // A new turn just began: CC is working on the user's prompt.
@@ -298,6 +335,7 @@ function deriveStatus(payload, cur, now) {
         since: now,
         activeSubagents:
           inflight != null ? inflight : cur && typeof cur.activeSubagents === 'number' ? cur.activeSubagents : 0,
+        bg,
         pending: false,
       };
 
@@ -314,6 +352,7 @@ function deriveStatus(payload, cur, now) {
         since: now,
         activeSubagents:
           inflight != null ? inflight : cur && typeof cur.activeSubagents === 'number' ? cur.activeSubagents : 0,
+        bg,
         pending: false,
       };
 
@@ -345,6 +384,7 @@ function deriveStatus(payload, cur, now) {
           state: 'done',
           since: typeof cur.since === 'number' && cur.since > 0 ? cur.since : now,
           activeSubagents: inflight != null ? inflight : a + 1,
+          bg,
           pending: cur.pending === true,
         };
       }
@@ -356,6 +396,7 @@ function deriveStatus(payload, cur, now) {
             ? { error: cur.error, ...(cur.error_class ? { error_class: cur.error_class } : {}) }
             : {}),
           activeSubagents: inflight != null ? inflight : a + 1,
+          bg,
           pending: cur.pending === true,
         };
       }
@@ -363,6 +404,7 @@ function deriveStatus(payload, cur, now) {
         state: 'running',
         since: now,
         activeSubagents: inflight != null ? inflight : a + 1,
+        bg,
         pending: cur.pending === true,
       };
 
@@ -441,6 +483,7 @@ function deriveStatus(payload, cur, now) {
             ? { error: cur.error, ...(cur.error_class ? { error_class: cur.error_class } : {}) }
             : {}),
         activeSubagents: next,
+        bg,
         pending: cur.pending === true,
       };
     }
@@ -501,6 +544,7 @@ function deriveStatus(payload, cur, now) {
         since: curSince,
         ...(preserveError ? { error: cur.error } : {}),
         activeSubagents: a,
+        bg,
         pending: !suppressPending,
       };
     }
@@ -573,6 +617,7 @@ function deriveStatus(payload, cur, now) {
           ? { error: cur.error, ...(cur.error_class ? { error_class: cur.error_class } : {}) }
           : {}),
         activeSubagents: inflight != null ? inflight : 0,
+        bg,
         pending: false,
       };
     }
@@ -618,6 +663,7 @@ function deriveStatus(payload, cur, now) {
         error: already ? cur.error : errStr,
         error_class: already && cur.error_class ? cur.error_class : errorClass,
         activeSubagents: inflight != null ? inflight : a,
+        bg,
         pending: false,
       };
     }
@@ -661,6 +707,7 @@ function deriveStatus(payload, cur, now) {
           state: 'done',
           since: now,
           activeSubagents: inflight != null ? inflight : a,
+          bg,
           pending: false,
         };
       }
@@ -2343,7 +2390,15 @@ async function main() {
   // A structural fix would be a separate <sid>.pending sidecar written only
   // by Notification, but for a UI status flag the documented bound is the
   // pragmatic bar.
-  let cur = { state: 'running', activeSubagents: 0, since: 0, pending: false, cwd: undefined, tokens: undefined };
+  let cur = {
+    state: 'running',
+    activeSubagents: 0,
+    since: 0,
+    pending: false,
+    cwd: undefined,
+    tokens: undefined,
+    bg: 0,
+  };
   try {
     const prev = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     cur = {
@@ -2359,6 +2414,13 @@ async function main() {
       error_class: prev.error_class,
       // Reject negative and non-finite counters (see deriveStatus note).
       activeSubagents: Number.isFinite(prev.activeSubagents) && prev.activeSubagents >= 0 ? prev.activeSubagents : 0,
+      // v0.6.5 (Plan C final-2): shell-type tracked background-task count for
+      // the grey gear badge. Carried with the same looseness as error_class
+      // (absent on legacy files ⇒ 0 — old readers ignore the field entirely,
+      // old writers never emit it, so the schema only ever GROWS). Same
+      // finite/non-negative rejection rule as activeSubagents above: a
+      // hand-edited negative must not propagate.
+      bg: Number.isFinite(prev.bg) && prev.bg >= 0 ? prev.bg : 0,
       // Strict boolean coercion: only literal `true` on disk counts as pending.
       pending: prev.pending === true,
       // v0.2.4: cwd pass-through (string or undefined). Used by the IIFE tooltip

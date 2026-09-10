@@ -142,7 +142,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in companion/CHANGELOG.md (entries up to 0.5.9; later versions document rationale in commit messages); SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.6.4";
+const INJECT_VERSION = "v0.6.5";
 /** v0.6 seam: the second prelude line identifies the seam architecture + its
  *  own version. Byte form `/*ccsd2:begin:seam:vX.Y.Z*​/` … `/*ccsd2:end*​/`
  *  brackets a DETERMINISTIC region (by construction — the prelude never
@@ -177,7 +177,7 @@ const HOOK_MARKER = "cc-status-dot-managed";
  *  INSTALL_DIR/hooks/cc-status.js) saw silent feature loss with no warning.
  *  MUST be kept in lockstep with the banner at the top of
  *  hooks/cc-status.js. */
-const HOOK_VERSION = "v0.2.5";
+const HOOK_VERSION = "v0.2.6";
 const HOOK_BANNER_PREFIX = "cc-status-dot-hook:";
 /** CC extension version against which the anchor strings (ANCHOR_A / ANCHOR_B)
  *  were last verified byte-exact. Historical rationale: the
@@ -399,6 +399,24 @@ const SBI_AS_PROTECT_MAX_MS = 24 * 60 * 60 * 1000;
  *  comfortably exceeds a legitimate no-event first-response turn; ladder
  *  stays coherent 30m / 2h / 24h / 7d. */
 const SBI_MISSING_LT_STALE_MS = 2 * 60 * 60 * 1000;
+/** v0.6.5 (gear badge): how long a sid.json's `bg` count stays trustworthy for
+ *  BADGE DISPLAY — the __bgOn freshness gate reads this, NOT
+ *  SBI_MISSING_LT_STALE_MS. The two constants are SEMANTICALLY INDEPENDENT and
+ *  deliberately NOT coupled (do not "unify" them — that is the coupling the
+ *  N1 review caught):
+ *    - BG_STALE_MS (24h) answers "may the gear still be DISPLAYED?" — a
+ *      display window for an attribute mark. N1 condition: VPN-probe style
+ *      tracked tasks legitimately run 4h+; the T2 2h gate prematurely hid the
+ *      gear mid-task (the exact class a badge must never do). 24h matches the
+ *      SBI_AS_PROTECT_MAX_MS rung — the widest "session plausibly alive"
+ *      window on the ladder.
+ *    - SBI_MISSING_LT_STALE_MS (2h) answers "is this running file a DEAD
+ *      SPAWN (no tokens.last_ts, zero follow-up events)?" — a liveness witness
+ *      inside the decay predicate. Tight on purpose: it flips a STATE (yellow
+ *      → idle), so it must fail toward decay early.
+ *  A badge that lingers an hour too long costs one grey glyph; a decay that
+ *  fires early costs a wrong state — hence display window ≫ decay witness. */
+const BG_STALE_MS = 24 * 60 * 60 * 1000;
 /** v0.5.52 (sleep ledger): a tick gap >5s (10× TICK_MS) means the EH was
  *  suspended (system sleep) — record it and subtract from staleness ages so
  *  an UNFINISHED session stays yellow across sleep (user ruling). DarkWake
@@ -464,6 +482,34 @@ const OUR_SVGS = [
     "claude-logo-done-arch.svg",
     "claude-logo-error-arch.svg",
     "claude-logo-pending-arch.svg",
+    // v0.6.5 — background-task gear-badge variants (v3.1 geometry, user ruling
+    //   2026-09-10 three-iteration final "很好"): grey #4D5157 8-tooth gear
+    //   DIRECTLY BELOW the status dot (cx=18 coaxial, cy=18.5, tipR=5.5 = 92%
+    //   of the dot's r6, 1.0u clear gap dot-bottom→gear-top), separated from
+    //   the logo rays by a r7.0 badge-mask knockout halo (the dot's own r7.5
+    //   knockout family language; no white ring). Selected by the IIFE's
+    //   bgOf() overlay when <sid>.json carries bg>0 with a fresh (<24h,
+    //   BG_STALE_MS) mtime. Same manifest rule as -fav/-arch above: without
+    //   these entries installRuntimeFiles never copies them, the stale-sweep
+    //   DELETES prior copies, and bgOf()'s existsSync fallback silently
+    //   degrades every tab to the gear-less icon (fail-open, but the feature
+    //   vanishes) — the v0.5.39 review finding, now pinned by test-bg-gear.mjs
+    //   R.1.
+    "claude-logo-idle-bg.svg",
+    "claude-logo-running-bg.svg",
+    "claude-logo-done-bg.svg",
+    "claude-logo-error-bg.svg",
+    "claude-logo-pending-bg.svg",
+    "claude-logo-idle-fav-bg.svg",
+    "claude-logo-running-fav-bg.svg",
+    "claude-logo-done-fav-bg.svg",
+    "claude-logo-error-fav-bg.svg",
+    "claude-logo-pending-fav-bg.svg",
+    "claude-logo-idle-arch-bg.svg",
+    "claude-logo-running-arch-bg.svg",
+    "claude-logo-done-arch-bg.svg",
+    "claude-logo-error-arch-bg.svg",
+    "claude-logo-pending-arch-bg.svg",
 ];
 /** Extension directories to search, highest version wins. */
 // v0.6 test seam: CCSD_EXT_SEARCH_DIR (when set) REPLACES the search list —
@@ -1321,6 +1367,23 @@ const I18N_DICT = {
         pt: "Claude Code: {done} concluídos, {running} em execução, {pending} pendentes, {interrupted} interrompidos",
         ru: "Claude Code: {done} завершено, {running} выполняется, {pending} ожидает, {interrupted} прервано",
     },
+    // v0.6.5 (Plan C final-2): per-tab tooltip suffix appended when the grey
+    // gear badge is showing (j.bg>0 + fresh mtime). The ⚙ glyph rides inside
+    // the translated string so every locale keeps the gear+count pairing the
+    // user ruling specified ("tooltip 追加 ⚙N 后台任务"). Inflecting locales
+    // put the count LAST (the fbCopiedTpl plural-avoidance convention) so no
+    // count agreement is needed; zh/ja have no plural so the compact
+    // "⚙{n} <noun>" ruling shape is kept verbatim.
+    ttBgTasksTpl: {
+        zh: "⚙{n} 后台任务",
+        en: "⚙ background tasks: {n}",
+        ja: "⚙バックグラウンドタスク {n} 件",
+        de: "⚙ Hintergrund-Aufgaben: {n}",
+        es: "⚙ tareas en segundo plano: {n}",
+        fr: "⚙ tâches en arrière-plan : {n}",
+        pt: "⚙ tarefas em segundo plano: {n}",
+        ru: "⚙ фоновые задачи: {n}",
+    },
     // === notify() messages (§B — turn-complete / error feedback) ===
     // ntTurnComplete carries the "Claude Code: " brand prefix baked in (it is
     // the FULL notification body for the done state). ntRateLimit /
@@ -2056,11 +2119,33 @@ function buildIIFE(resDir) {
         // sequence still alternates correctly. Uses the same ccuri memoization
         // downstream — new -fav path strings cache independently.
         `function favOf(svgPath,sid){try{if(!svgPath||svgPath===CC_DEFAULT||!sid)return svgPath;var fset=readFavSet();var aset=readArchivedSet();var leaf=svgPath.split(pth.sep).pop();if(/^claude-logo-(idle|running|done|error|pending)\\.svg$/.test(leaf)){/*MUTEX: favorited → gold -fav.svg; archived → grey -arch.svg; neither → unchanged. FAVORITED checked first (unified precedence: if a crash-mid-move / hand-edit leaves the sid in BOTH files, favorited wins — matches the tab-title prefix ternary and refreshFavStatusBar, so the icon never contradicts the ★ title / gold status-bar highlight).*/if(fset&&fset[sid])return pth.join(RES,leaf.replace(/\\.svg$/,"-fav.svg"));if(aset&&aset[sid])return pth.join(RES,leaf.replace(/\\.svg$/,"-arch.svg"));}}catch(_){}return svgPath;}`,
+        // v0.6.5 (Plan C final-2, user ruling 2026-09-10): background-task gear
+        // OVERLAY — a third, orthogonal icon layer applied AFTER favOf (base →
+        // -fav/-arch → -bg suffix). Contract mirrors the ruling: (1) the gear
+        // is an ATTRIBUTE mark, never a state — grey #4D5157, it never
+        // borrows a status color, and the state dot's color pipeline above is
+        // untouched (bg wraps favOf's RESULT, it does not touch the state
+        // switch); (2) CC_DEFAULT (interrupted flash off-frame) passes through
+        // unchanged — the native logo frame carries no badge, same immunity
+        // favOf has; (3) the leaf regex accepts base/-fav/-arch but NOT an
+        // already-suffixed -bg leaf, so a second application is a no-op
+        // (idempotent — mirrors favOf's own second-hop safety); (4) fail-open:
+        // a missing -bg file (stale install, sweep race) resolves via the
+        // per-leaf statSync cache to the gear-less original — the badge
+        // degrades, the icon never goes blank. `on` is the caller-computed
+        // gate (j.bg>0 AND sid.json mtime < BG_STALE_MS (24h), the §H
+        // freshness witness — see the BG_STALE_MS JSDoc for why the display
+        // window is deliberately wider than the 2h decay witness).
+        `function bgOf(p,on){try{if(!on||!p||p===CC_DEFAULT)return p;var leaf=p.split(pth.sep).pop();if(!/^claude-logo-(idle|running|done|error|pending)(-fav|-arch)?\\.svg$/.test(leaf))return p;var c=globalThis.__ccsdBgRes;if(!c)c=globalThis.__ccsdBgRes=Object.create(null);if(!(leaf in c)){var q=pth.join(RES,leaf.replace(/\\.svg$/,"-bg.svg"));try{c[leaf]=fs.statSync(q).isFile()?q:null}catch(_){c[leaf]=null}}return c[leaf]||p}catch(_){return p}}`,
         `var DONE_TO_IDLE_MS=${DONE_TO_IDLE_MS};`,
         `/*§7.2 stale-running heuristic: v0.2.6 keys off 'since' (the *→running transition time), not mtime. Stop preserveSince path (cc-status.js:390-401) keeps cur.since on inflight>0 Stop heartbeats while writeJsonAtomic refreshes mtime — mtime stays fresh forever under CC's repeated Stop fire on drifted inflight payloads, so mtime-decay never fires. since-decay fires correctly because since is preserved (not refreshed) across the same path. Mirrors done>5min / interrupted>24h decay which already key off since.*/`,
         `var SBI_RUNNING_STALE_MS=${SBI_RUNNING_STALE_MS};`,
         `var SBI_AS_PROTECT_MAX_MS=${SBI_AS_PROTECT_MAX_MS};`,
         `var SBI_MISSING_LT_STALE_MS=${SBI_MISSING_LT_STALE_MS};`,
+        // v0.6.5 gear badge display window — INDEPENDENT of the 2h
+        // SBI_MISSING_LT_STALE_MS decay witness above (see the BG_STALE_MS
+        // JSDoc at the const declaration for the semantic separation).
+        `var BG_STALE_MS=${BG_STALE_MS};`,
         `var CCSD_SUSPEND_GAP_MS=${CCSD_SUSPEND_GAP_MS};`,
         `var CCSD_LEDGER_MAX_IV=${CCSD_LEDGER_MAX_IV};`,
         /*v0.5.2 (#4): the per-tab decay threshold is UNIFIED with §F — both
@@ -2604,7 +2689,7 @@ function buildIIFE(resDir) {
         // (favOf) mirrors favorites: Claude logo + grey underline (-arch.svg)
         // vs logo + gold underline (-fav.svg). Favorited wins the tiebreak.
         `try{var __fset=readFavSet();var __aset=readArchivedSet();var __isFav=!(!__fset||!__fset[sid]);var __isArch=!(!__aset||!__aset[sid]);var __base=t.__ccsdTitle||"";if(__base){var __want=__isFav?("\\u2605 "+__base):(__isArch?("\\u25CF "+__base):__base);if(t.panelTab.title!==__want)t.panelTab.title=__want;}}catch(_){}`,
-        `var st=null,since=null,err="",pend=false;`,
+        `var st=null,since=null,err="",pend=false,__bgN=0;`,
         /* rejected-by-design (R-CI-06): §H reads sid.json DIRECTLY (NOT via §F's
          * __ccsdAgCache). Intentional: §H = per-tab active display (latency-
          * sensitive, active tab must read latest); §F = four-light aggregation
@@ -2628,7 +2713,13 @@ function buildIIFE(resDir) {
         // changes askUserQuestion's can_use_tool routing, or adds notification_
         // type coverage for consent → re-audit which term covers which dialog.
         `var __mt=0;try{var __s2=fs.statSync(pth.join(DIR,sid+".json"));__mt=__s2.mtimeMs;}catch(_){}`,
-        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)||(globalThis.__ccsdPendingSet&&globalThis.__ccsdPendingSet[sid]===true)||(globalThis.__ccsdUserDialogSet&&globalThis.__ccsdUserDialogSet[sid]===true)||(globalThis.__ccsdToolPermSet&&globalThis.__ccsdToolPermSet[sid]===true)||(globalThis.__ccsdWireState&&globalThis.__ccsdWireState[sid]==="waiting_input")}catch(e){}`,
+        // v0.6.5 T3 (V-FLAW-1 fix): __bgN parses j.bg with the Number.isFinite
+        // guard — a hand-edited bg:Infinity file passed the v2 typeof+>0+
+        // floor(Infinity)===Infinity chain and pinned the gear (and an
+        // "Infinity" tooltip) on forever; NaN/-Infinity already failed >0.
+        // Mirrors the writer-side clamp (cur whitelist: Number.isFinite &&
+        // >=0) so neither side of the contract trusts a non-finite count.
+        `try{var j=JSON.parse(fs.readFileSync(pth.join(DIR,sid+".json"),"utf8"));st=j.state;since=j.since;err=j.error||"";pend=(j.pending===true)||(globalThis.__ccsdPendingSet&&globalThis.__ccsdPendingSet[sid]===true)||(globalThis.__ccsdUserDialogSet&&globalThis.__ccsdUserDialogSet[sid]===true)||(globalThis.__ccsdToolPermSet&&globalThis.__ccsdToolPermSet[sid]===true)||(globalThis.__ccsdWireState&&globalThis.__ccsdWireState[sid]==="waiting_input");__bgN=(typeof j.bg==="number"&&Number.isFinite(j.bg)&&j.bg>0&&Math.floor(j.bg)===j.bg)?j.bg:0}catch(e){}`,
         `if(!seeded){seeded=true;if(st==="done"||st==="interrupted")lastTermSince=since}`,
         `else if((st==="done"||st==="interrupted")&&since!==lastTermSince){`,
         ,
@@ -2684,9 +2775,25 @@ function buildIIFE(resDir) {
         // pending at cc-status.js:558; the §F aggregate decays interrupted at
         // 7d, the only remaining per-tab-vs-SBI divergence — see STATES.md §7.4).
         `var now=Date.now();`,
+        // v0.6.5 (Plan C final-2): gear-badge gate. Two conjuncts, both
+        // required: (1) j.bg is a finite positive integer (the writer's
+        // shell-task count — legacy files without the field read 0 = badge
+        // off, D9 compat; Number.isFinite also rejects a hand-edited
+        // bg:Infinity); (2) the sid.json mtime is fresher than BG_STALE_MS
+        // (24h — NOT the 2h SBI_MISSING_LT_STALE_MS: that constant is the
+        // decay predicate's dead-spawn witness and must stay tight, while the
+        // badge is a display window that must cover VPN-probe style tracked
+        // tasks running 4h+. Two independent constants, by design — see the
+        // BG_STALE_MS JSDoc). A fresh count with a >24h-stale file means the
+        // session is long gone: its shell tasks are unverifiable, and a badge
+        // that outlives its session by days is exactly the phantom-mark class
+        // §7.2/§7.5 exist to prevent. __mt is already in scope (the statSync
+        // above); the __adj-aware age mirrors __ccsdDecayState's E(ts) so
+        // system sleep does not false-expire a live badge.
+        `var __bgOn=__bgN>0&&__mt>0&&(__adj?__adj(__mt)-__mt:now-__mt)<BG_STALE_MS;`,
         /*§H per-tab decay (done>5min / running-stale) — BEFORE the pending check so a decayed session with j.pending=true does not false-stick 🔵. Unified predicate __ccsdDecayState (decayInterrupted=false — interrupted stays red on tab for diagnostics, STATES.md §7.4); see its declaration for the full running-decay rationale.*/ `st=__ccsdDecayState(st,since,j,now,false,__mt,__adj);`,
         `/*reader pending (Notification file-flag OR __ps IPC permission set): render our blue svg. Guard st!=="idle" so a session decayed to idle above does not false-stick 🔵 forever.*/`,
-        `if(pend && st!=="idle"){try{p.iconPath=ccuri(favOf(pth.join(RES,"claude-logo-pending.svg"),sid))}catch(e){}return}`,
+        `if(pend && st!=="idle"){try{p.iconPath=ccuri(bgOf(favOf(pth.join(RES,"claude-logo-pending.svg"),sid),__bgOn))}catch(e){}return}`,
         `var svg;`,
         `if(st==="interrupted"){svg=(flashSeq%2===0)?favOf(pth.join(RES,"claude-logo-error.svg"),sid):CC_DEFAULT}`,
         `/*v0.5.2 (F4): the running/done decay ternaries that lived HERE in v0.2.6 round-1 are removed as dead code. The round-2 fix moved decay BEFORE the pending check (the st="idle" assignments above), so by the time this SVG switch runs, a stale running/done session has ALREADY been downgraded to st="idle" and renders claude-logo-idle.svg via the idle branch below. The old ternaries' idle branches were therefore unreachable, and they referenced the now-retired 15min per-tab constant. Single decay site (above) eliminates the copy-paste-with-divergence that let per-tab and §F drift.*/`,
@@ -2695,7 +2802,29 @@ function buildIIFE(resDir) {
         `else if(st==="idle"){svg=pth.join(RES,"claude-logo-idle.svg")}`,
         `else{try{p.iconPath=ccuri(pth.join(RES,"claude-logo-idle.svg"))}catch(e){}return}`,
         `flashSeq++;`,
-        `try{p.iconPath=ccuri(favOf(svg,sid))}catch(e){}`,
+        // v0.6.5: the bg overlay composes OUTSIDE favOf (favOf(svg,sid) first,
+        // then bgOf(result)) so the three icon layers stay independent and
+        // order-stable: state leaf → -fav/-arch (session attribute) → -bg
+        // (task attribute). interrupted odd frames passed CC_DEFAULT through
+        // favOf unchanged; bgOf's own CC_DEFAULT guard keeps the flash pair
+        // symmetric (native frame carries no badge — no flicker of a
+        // gear appearing only on our frames).
+        `try{p.iconPath=ccuri(bgOf(favOf(svg,sid),__bgOn))}catch(e){}`,
+        // v0.6.5 (Plan C final-2): per-tab tooltip — the N of the gear badge
+        // lives here per the user ruling (SBI text suffix was REJECTED; the
+        // count must not widen the status bar). Base is the LIVE painted title
+        // (★/● prefix included — the title block above has just refreshed it),
+        // so the tooltip always mirrors the tab label plus the localized
+        // "⚙… background tasks" suffix. D1-F07 disciplines: (a) dedup gate
+        // `!==` — a 500ms tick must not rewrite an unchanged tooltip (the
+        // tsbi.tooltip IPC-leak class); (b) bg→0 collapses the tooltip back
+        // to the bare title, so a stale count can never linger. Guarded by
+        // t.__ccsdTitle so a session CC has not titled yet is untouched.
+        // NOTE: on WebviewPanel surfaces VSCode exposes no tooltip setter
+        // (stable API) — the assignment is an inert expando there and the
+        // gear icon remains the only visible channel; the write is kept
+        // harmless + future-proof rather than branchy (see T2 findings).
+        `try{if(t.__ccsdTitle){var __tt=(t.panelTab&&typeof t.panelTab.title==="string"&&t.panelTab.title)?t.panelTab.title:t.__ccsdTitle;var __wt=__bgOn?(__tt+" \\u2014 "+tr("ttBgTasksTpl").replace("{n}",__bgN)):__tt;if(t.panelTab.tooltip!==__wt)t.panelTab.tooltip=__wt;}}catch(_){}`,
         `},${TICK_MS});`,
         // === §Z onDidDispose teardown + IIFE close ===
         `/*release this panel's 500ms tick + closed-over refs on panel close; on LAST panel out also clear the SBI singleton timer + dispose the single v0.1.17 SBI so the bottom bar can't freeze on a stale count. (v0.1.15/v0.1.16 used to loop over the 4-element __ccsdSbis array — gone with the pivot to one SBI.)*/`,

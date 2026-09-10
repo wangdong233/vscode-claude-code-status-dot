@@ -4420,5 +4420,155 @@ checkPending(
   }
 }
 
+// ---------------------------------------------------------------------------
+// §V3.10 v0.6.5 (Plan C final-2, user ruling 2026-09-10): bg = SHELL-type
+// tracked background-task count → the tab icon's grey gear badge + tooltip
+// count. Writer matrix, pinned case-by-case:
+//   - Stop carrying background_tasks refreshes bg AUTHORITATIVELY from the
+//     payload's shell entries (done+bg:N when no waking work remains);
+//   - waking-only payloads write bg=0 (their signal is the yellow/as channel);
+//   - every OTHER event (incl. the fixed-literal Pre/PostToolUse /
+//     Notification / SubagentStart shapes) carries cur.bg forward — the F4
+//     widening of the v0.6.3 error_class precedent: one omitted case would
+//     atomically zero the count and vanish the gear mid-flight;
+//   - UserPromptSubmit carries bg forward (UPS ruling, mirrors the V6
+//     activeSubagents-preserve rule: null payload signal ≠ zero tasks);
+//   - legacy files without bg read as 0; negative/non-finite bg sanitizes
+//     to 0; unknown task types count as WAKING (v0.6.4), never shell;
+//   - TEXT HEURISTICS FORBIDDEN: type field only, never command/description.
+// ---------------------------------------------------------------------------
+{
+  function bgcheck(name, got, expectedState, expectedBg) {
+    if (got === undefined) return false;
+    const ok = got && got.state === expectedState && got.bg === expectedBg;
+    if (ok) {
+      pass++;
+      console.log('  PASS  ' + name + '   -> state=' + got.state + ' bg=' + got.bg);
+    } else {
+      fail++;
+      console.log(
+        '  FAIL  ' +
+          name +
+          '   expected state=' +
+          expectedState +
+          ' bg=' +
+          expectedBg +
+          ' got state=' +
+          (got ? got.state : 'null') +
+          ' bg=' +
+          (got ? got.bg : 'null'),
+      );
+    }
+    return ok;
+  }
+  const shell = (n) => Array.from({ length: n }, () => ({ type: 'shell' }));
+
+  // V3.10.1 — Stop with 2 shell tasks, no waking: turn is DONE + bg=2
+  // (the v0.6.4 ruling: a delivered turn whose only background work is
+  // non-waking shell is green — the gear now carries the "in flight" part).
+  {
+    const home = newTempHome();
+    const s = fire(home, 'Stop', { background_tasks: shell(2) });
+    bgcheck('§V3.10.1 Stop shell×2 → done + bg=2', s, 'done', 2);
+  }
+  // V3.10.2 — waking-only payload: bg=0 (waking is the yellow/as channel).
+  {
+    const home = newTempHome();
+    const s = fire(home, 'Stop', { background_tasks: [{ type: 'subagent' }] });
+    bgcheck('§V3.10.2 Stop waking-only → running + bg=0', s, 'running', 0);
+  }
+  // V3.10.3 — mixed payload: waking keeps the turn running, shell still counted.
+  {
+    const home = newTempHome();
+    const s = fire(home, 'Stop', { background_tasks: [{ type: 'workflow' }, ...shell(1)] });
+    bgcheck('§V3.10.3 Stop mixed (workflow+shell) → running + bg=1', s, 'running', 1);
+  }
+  // V3.10.4 — carry-forward across EVERY fixed-literal event shape (F4): a
+  // permission prompt / tool call / subagent spawn between two Stops must not
+  // zero the shell count.
+  {
+    const home = newTempHome();
+    fire(home, 'Stop', { background_tasks: shell(3) });
+    const pre = fire(home, 'PreToolUse');
+    bgcheck('§V3.10.4a PreToolUse carries bg=3 forward', pre, 'running', 3);
+    const post = fire(home, 'PostToolUse');
+    bgcheck('§V3.10.4b PostToolUse carries bg=3 forward', post, 'running', 3);
+    const notif = fire(home, 'Notification');
+    bgcheck('§V3.10.4c Notification carries bg=3 forward (pending path)', notif, 'running', 3);
+    const start = fire(home, 'SubagentStart');
+    bgcheck('§V3.10.4d SubagentStart carries bg=3 forward', start, 'running', 3);
+  }
+  // V3.10.5 — UPS ruling: a new user prompt preserves the shell count (the
+  // background dev server is still running; null payload signal ≠ zero).
+  {
+    const home = newTempHome();
+    fire(home, 'Stop', { background_tasks: shell(1) });
+    const ups = fire(home, 'UserPromptSubmit');
+    bgcheck('§V3.10.5 UserPromptSubmit carries bg=1 forward (UPS ruling)', ups, 'running', 1);
+  }
+  // V3.10.6 — SubagentStop also refreshes bg authoritatively when it carries
+  // background_tasks (the other documented carrier event).
+  {
+    const home = newTempHome();
+    fire(home, 'UserPromptSubmit');
+    const s = fire(home, 'SubagentStop', { background_tasks: shell(4) });
+    bgcheck('§V3.10.6 SubagentStop shell×4 → bg=4 refresh', s, 'running', 4);
+  }
+  // V3.10.7 — bg decays via the SAME authoritative channel that raised it: a
+  // later waking-only Stop writes bg=0 (no sticky phantom gear).
+  {
+    const home = newTempHome();
+    fire(home, 'Stop', { background_tasks: shell(2) });
+    const s = fire(home, 'Stop', { background_tasks: [{ type: 'teammate' }] });
+    bgcheck('§V3.10.7 re-Stop waking-only refreshes bg→0 (no phantom gear)', s, 'running', 0);
+  }
+  // V3.10.8 — legacy file WITHOUT bg (pre-v0.6.5 writer / hand-edit): the
+  // reader-side default is 0 and the writer round-trips 0 — schema only grows.
+  {
+    const home = newTempHome();
+    const dir = path.join(home, '.claude', 'cc-tab-status');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      stateFile(home),
+      JSON.stringify({ state: 'running', since: Date.now() - 1000, activeSubagents: 0, pending: true }),
+    );
+    const s = fire(home, 'Notification');
+    bgcheck('§V3.10.8 legacy file (no bg field) → bg=0 on rewrite', s, 'running', 0);
+  }
+  // V3.10.9 — corrupt bg values sanitize to 0 (same clamp class as
+  // activeSubagents: negative / string counters must not propagate).
+  {
+    const home = newTempHome();
+    const dir = path.join(home, '.claude', 'cc-tab-status');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      stateFile(home),
+      JSON.stringify({ state: 'done', since: Date.now() - 1000, activeSubagents: 0, bg: -5 }),
+    );
+    const s = fire(home, 'PreToolUse');
+    bgcheck('§V3.10.9 negative bg sanitizes to 0', s, 'running', 0);
+  }
+  // V3.10.10 — unknown type counts as WAKING (v0.6.4 fail-toward-yellow),
+  // never shell: bg stays 0 for an unrecognized task type.
+  {
+    const home = newTempHome();
+    const s = fire(home, 'Stop', { background_tasks: [{ type: 'quantum_teapot' }] });
+    bgcheck('§V3.10.10 unknown type → waking (bg=0), not shell', s, 'running', 0);
+  }
+  // V3.10.11 — TEXT HEURISTICS FORBIDDEN (user ruling): counting keys on the
+  // `type` field ONLY. A shell task is counted regardless of its command text;
+  // a waking task whose command text mentions "shell" is NOT counted.
+  {
+    const home = newTempHome();
+    const s = fire(home, 'Stop', {
+      background_tasks: [
+        { type: 'shell', command: 'npm run build', description: 'totally not shell' },
+        { type: 'monitor_file', command: 'shell-ish watcher', description: 'runs a shell' },
+      ],
+    });
+    bgcheck('§V3.10.11 type-only counting (no command/description heuristics)', s, 'running', 1);
+  }
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

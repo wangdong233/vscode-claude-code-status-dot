@@ -142,7 +142,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in companion/CHANGELOG.md (entries up to 0.5.9; later versions document rationale in commit messages); SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.6.5";
+const INJECT_VERSION = "v0.6.6";
 /** v0.6 seam: the second prelude line identifies the seam architecture + its
  *  own version. Byte form `/*ccsd2:begin:seam:vX.Y.Z*​/` … `/*ccsd2:end*​/`
  *  brackets a DETERMINISTIC region (by construction — the prelude never

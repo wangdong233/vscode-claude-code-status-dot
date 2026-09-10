@@ -1,0 +1,27 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                node: [20, 22]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node }}
+                  cache: npm
+            # --ignore-scripts: skips the husky `prepare` hook (dev-only, no CI value);
+            # every dependency the 21 test suites need lives in devDependencies
+            # (tsx/prettier/typescript verified locally), so plain npm ci is enough —
+            # companion has its own package.json but no suite imports it.
+            - run: npm ci --ignore-scripts
+            - run: npm run format:check
+            - run: npm test

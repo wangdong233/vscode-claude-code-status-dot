@@ -253,6 +253,70 @@ check(
   'bridge=' + JSON.stringify(G.__ccsdSidToTitle['sid-fav']),
 );
 
+// FP.10-13 (v0.6.6): the v0.6.5 tab-tooltip surface joins the soak matrix.
+// The tooltip is the N-of-gear count channel (D1-F07): a dedup-gated (!==)
+// periodic write. Steady state MUST be byte-stable with ZERO setter writes —
+// the same bounded-work invariant FP.8 pins for titles. A bg transition must
+// flip it once; bg=0 or a stale mtime must collapse it back to the bare
+// painted title (fake env language is 'en' → tr() resolves the en template).
+let tt_writes = 0;
+{
+  const cur = p1.tooltip;
+  Object.defineProperty(p1, 'tooltip', {
+    configurable: true,
+    get() {
+      return this._tt;
+    },
+    set(v) {
+      this._tt = v;
+      tt_writes++;
+    },
+  });
+  p1._tt = cur;
+}
+const SIDF = path.join(DIR, 'sid-fav.json');
+const FAVJSON = {
+  state: 'running',
+  since: 1,
+  cwd: '/x',
+  bg: 2,
+  tokens: { total: { in: 10, out: 5 }, windows: { all: { in: 10, out: 5 } } },
+  offset: 0,
+};
+fs.writeFileSync(SIDF, JSON.stringify(FAVJSON));
+await new Promise((r) => setTimeout(r, 1300));
+check(
+  'FP.10 fresh bg=2 → tooltip = painted title + en suffix "— ⚙ background tasks: 2"',
+  p1.tooltip === '★ Fav Session — ⚙ background tasks: 2',
+  'tooltip=' + JSON.stringify(p1.tooltip),
+);
+const ttAt10 = p1.tooltip;
+const wAt10 = tt_writes;
+await new Promise((r) => setTimeout(r, 2100));
+check(
+  'FP.11 steady state (bg unchanged 2.1s): tooltip byte-stable, ZERO setter writes (new periodic surface soak-bounded)',
+  p1.tooltip === ttAt10 && tt_writes === wAt10,
+  `writes+${tt_writes - wAt10} tooltip=${JSON.stringify(p1.tooltip)}`,
+);
+FAVJSON.bg = 0;
+fs.writeFileSync(SIDF, JSON.stringify(FAVJSON));
+await new Promise((r) => setTimeout(r, 1300));
+check(
+  'FP.12 bg=0 → tooltip collapses to the bare painted title (no stale count lingers)',
+  p1.tooltip === '★ Fav Session',
+  'tooltip=' + JSON.stringify(p1.tooltip),
+);
+FAVJSON.bg = 2;
+fs.writeFileSync(SIDF, JSON.stringify(FAVJSON));
+const stale = new Date(Date.now() - 25 * 3600 * 1000);
+fs.utimesSync(SIDF, stale, stale);
+await new Promise((r) => setTimeout(r, 1300));
+check(
+  'FP.13 bg=2 but stale mtime (25h) → gear gate off → tooltip bare (both mtime directions)',
+  p1.tooltip === '★ Fav Session',
+  'tooltip=' + JSON.stringify(p1.tooltip),
+);
+
 if (fail === 0) {
   console.log(`All ${pass} seam-favpaint checks passed.`);
   process.exit(0); // the prelude's live tick/heartbeat intervals keep the loop alive

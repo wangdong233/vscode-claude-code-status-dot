@@ -24,7 +24,7 @@
  *     badge-mask (1.5u beyond the 5.5 tooth tips) — the exact mechanism the
  *     status dot itself uses (its knockout is r7.5 around r6, also 1.5u). The
  *     logo path stays BYTE-IDENTICAL; only the mask gains one circle.
- *   - GREY, NEVER A STATUS COLOR: #4D5157 neutral dark grey (N1 pick — the
+ *   - GREY/SILVER, NEVER A STATUS COLOR: v3.1 shipped #4D5157 (the N1 pick for the OLD small-badge size); 2026-09-13 the user re-ruled it too dark at the dot-sized geometry and confirmed #C6CCD4 via the docs/ladder-*.png renders (the G-A.6 re-walk). The
  *     #808080/#767676 mid-greys read as a washed-out smudge at 1x/16px and
  *     merged with the -arch grey underline; darker stays neutral-axis and
  *     survives both themes).
@@ -62,7 +62,7 @@ const GEAR = {
   tipHalf: 10, // half-angle (deg) of the tooth tip arc
   rootHalf: 13, // half-angle (deg) of the root arc between teeth
   holeR: 1.6, // center bore (fill-rule evenodd)
-  fill: '#4D5157', // neutral dark grey — never a status color
+  fill: '#C6CCD4', // bright silver-grey (2026-09-13 user ruling: #4D5157 too dark on dark theme, 2.09:1; reference image asked for bright silver ~#CDD2D9; picked half a step deeper: 10.2:1 dark / 1.65:1 light = same class as the -fav gold line 1.9:1 on light — attribute marks may be subtle on light theme, family precedent). Never a status color.
 };
 // Knockout halo inside badge-mask: r7.0 = tips 5.5 + 1.5u, the dot-family
 // language (the dot's own knockout is r7.5 around its r6 — also 1.5u). NO

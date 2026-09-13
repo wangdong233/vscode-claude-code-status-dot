@@ -16,7 +16,7 @@
  *      regeneration that drifts a single byte fails here even if round-trip
  *      still holds (e.g. a "harmless" constant tweak in the generator).
  *
- *   G-B gear spec pins (v3.1) — grey #4D5157 (never a status color), 8-tooth
+ *   G-B gear spec pins (v3.1 + 2026-09-13 color re-ruling) — silver-grey #C6CCD4 (never a status color), 8-tooth
  *      (8 tip arcs + 8 root arcs + 2 bore arcs), cx=18 DIRECTLY BELOW the
  *      status dot (same vertical axis), cy=18.5, tipR=5.5 (= 92% of the dot's
  *      r6 — canvas 24 cannot fit r6 + a clear gap; ruling-chain trade-off),
@@ -115,28 +115,33 @@ check(
   fs.readdirSync(RES).filter((n) => n.startsWith('claude-logo') && n.endsWith('.svg')).length === 30,
 );
 // G-A.6 — the USER-CONFIRMED PIXELS anchor: sha256 of every -bg output pinned
-// to the v3.1 reference renders the user approved on 2026-09-10 ("很好").
-// Derived once from the confirmed artifacts; a regeneration that drifts even
-// one byte (e.g. someone nudges a generator constant and re-runs) fails here
-// even though round-trip still holds. Updating these hashes REQUIRES a new
-// user-confirmed preview — do not edit them to "make the test pass".
+// to the reference renders the user approved. Re-walked TWICE:
+//   2026-09-10 — v3.1 geometry ("很好")
+//   2026-09-13 — #4D5157 → #C6CCD4 brightening (user approved the silver
+//                candidate via the docs/ladder-*.png five-step renders —
+//                "可以,同意推荐" — after complaining #4D5157 needed careful
+//                looking on dark theme). The re-pin discipline worked: this
+//                update is only legitimate BECAUSE a fresh user confirmation
+//                exists; do not edit hashes to "make the test pass".
+// A regeneration that drifts even one byte (e.g. someone nudges a generator
+// constant and re-runs) fails here even though round-trip still holds.
 {
   const REF_SHA256 = {
-    'claude-logo-idle-bg.svg': '4ca5dade8044b2154a768473581358dd45cb9c85c9b64e59606e9ebe05eb1a7e',
-    'claude-logo-running-bg.svg': '3744731c6b65f42d9905e3aa84f95683076e686afdc3bc5668b4cf8281027e21',
-    'claude-logo-done-bg.svg': 'ac266292d098233067e11cda6a89f2d8629b16789811dcd858b395daab62ad74',
-    'claude-logo-error-bg.svg': 'a08eb8f2eab68bb0c046ff3e9bc7f23cee8d27aff5f7747b90a2441960938b46',
-    'claude-logo-pending-bg.svg': '6285f01f7b5c9be60ecd6e9dfb33ee8b2cc4364f0c9ecf2ffdbb237dbf1eb6d3',
-    'claude-logo-idle-fav-bg.svg': '520e09326f1046317226a393a04cc371978d039b695129b675baced2941dd7c5',
-    'claude-logo-running-fav-bg.svg': '09f246a67820406a873de0ded8bb448248298fe8c2c5e01beb07ce6e57e2b667',
-    'claude-logo-done-fav-bg.svg': '6ad1d6f121356383e4f4743267fb5babff6fe0a365f0419d5a030a3d4c3942bb',
-    'claude-logo-error-fav-bg.svg': '6f8e85939c7a7d91a1831d61ecbc2b02de762488c9e7b0833ead14ce2cc29815',
-    'claude-logo-pending-fav-bg.svg': '40bf99cb66134b774c2a9802758a53161877ede383cd3e20590e3da9697c1d25',
-    'claude-logo-idle-arch-bg.svg': '2de88ea23c82b6a0f2f7ccdf994c9e5dc26f5d3cb3ef976b108dd239b1c8297f',
-    'claude-logo-running-arch-bg.svg': 'e7f93d5471afe917ff250ad3c404f3dc9db94a72f457fcdc80bbe511987f410f',
-    'claude-logo-done-arch-bg.svg': '024d326cfe54af162f7d7430d763c2e94ed509bfa63fb88ae0345dae3cb4178c',
-    'claude-logo-error-arch-bg.svg': 'e5c04313d8d97a89a477794c1e4ae8f293bc6973bf34774e28c70ca5f0610564',
-    'claude-logo-pending-arch-bg.svg': 'ceb3de8deb50c1cd5b382a1a2576ea9c8a3b4ebf59125b132f8251f372c691ee',
+    'claude-logo-idle-bg.svg': '82bd84829ffb8dd11ea6cbe77ef22229a955f07161234c00c296a20f5f72343c',
+    'claude-logo-running-bg.svg': '09393adc8e732d7b34282ea32668d972247612d928cb181ff111504bd0e3e6e4',
+    'claude-logo-done-bg.svg': '19e40e0265d1eabf9b178c62863b1f2991c73b70c358ccdb3977ca8b327ad05e',
+    'claude-logo-error-bg.svg': 'd85eb4d5ca8c2ab1d72dc1b062f6f3086350c4e172fd52ed3f6c0699e05bf735',
+    'claude-logo-pending-bg.svg': '571ab7c1e5b3e2a226b43b2044d026bdc0aedfd5b567e700fdb8d99432aa7243',
+    'claude-logo-idle-fav-bg.svg': 'e5f97b172aee99c64e90bc42b594585a515975216b10d9b61f1fdd5717c607c2',
+    'claude-logo-running-fav-bg.svg': '79b413eddbe10b6b9dea6619e2716f53c7a2bb6a78d6f4c172228081d981eef4',
+    'claude-logo-done-fav-bg.svg': 'e6c97ef1d6c38910024250474d3be2326c8a674d8955b59a5c41b172d2904a15',
+    'claude-logo-error-fav-bg.svg': '1505c9fea89f5f045cd0b24f619baaa23f14c064f77157032ae17114b3fd7195',
+    'claude-logo-pending-fav-bg.svg': 'd9510f7e19c53ecbea02425621628c22dab2fd6a3ea8c5870e0e4989b8b9c587',
+    'claude-logo-idle-arch-bg.svg': '14f39b53b8ff54741aa8a5e8b329994356d9053f0cc9ad670223c1d0d56b9929',
+    'claude-logo-running-arch-bg.svg': '58f5069bac207f6d60e3e028a9acb6b48c651fc2e7c449cbbaadc092ca32443d',
+    'claude-logo-done-arch-bg.svg': '16da75eeffdb1ff11c6cc1bc27fe1f53d6576bdc6ed3058576aa8988bbc87097',
+    'claude-logo-error-arch-bg.svg': '1b14086c7227e100bcadf459954ab571d087091786cbfa4cd8107731c84829cd',
+    'claude-logo-pending-arch-bg.svg': '8113877f60e97e2d383c8d7972d3ca88977c61171ddf0cff80f8223e1a871662',
   };
   for (const [leaf, want] of Object.entries(REF_SHA256)) {
     const got = createHash('sha256')
@@ -154,8 +159,8 @@ console.log('\nG-B gear spec pins (v3.1: dot-mirror, knockout halo, no ring)');
   const sample = fs.readFileSync(path.join(RES, 'claude-logo-done-bg.svg'), 'utf8');
   const g = sample.slice(sample.indexOf('<g id="ccsd-bg-gear"'), sample.lastIndexOf('</svg>'));
   check(
-    'G-B.1 gear fill is #4D5157 (neutral dark grey — never a status color)',
-    g.includes('fill="#4D5157"') &&
+    'G-B.1 gear fill is #C6CCD4 (bright silver-grey, 2026-09-13 user re-ruling — never a status color)',
+    g.includes('fill="#C6CCD4"') &&
       !['#3FB950', '#CCA700', '#F85149', '#58A6FF', '#808080', '#F5A623', '#D97757'].some((c) =>
         g.includes(`fill="${c}"`),
       ),

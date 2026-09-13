@@ -142,7 +142,7 @@ const INJECT_MARKER = "cc-status-dot-injected";
  *  Version-by-version rationale lives in companion/CHANGELOG.md (entries up to 0.5.9; later versions document rationale in commit messages); SBI visual-design
  *  rationale lives in docs/STATES.md §7. Keep this JSDoc to purpose + bump
  *  rule so the two narratives don't drift apart. */
-const INJECT_VERSION = "v0.6.7";
+const INJECT_VERSION = "v0.6.8";
 /** v0.6 seam: the second prelude line identifies the seam architecture + its
  *  own version. Byte form `/*ccsd2:begin:seam:vX.Y.Z*​/` … `/*ccsd2:end*​/`
  *  brackets a DETERMINISTIC region (by construction — the prelude never
@@ -483,7 +483,7 @@ const OUR_SVGS = [
     "claude-logo-error-arch.svg",
     "claude-logo-pending-arch.svg",
     // v0.6.5 — background-task gear-badge variants (v3.1 geometry, user ruling
-    //   2026-09-10 three-iteration final "很好"): grey #4D5157 8-tooth gear
+    //   2026-09-10 three-iteration final "很好"): grey #C6CCD4 8-tooth gear
     //   DIRECTLY BELOW the status dot (cx=18 coaxial, cy=18.5, tipR=5.5 = 92%
     //   of the dot's r6, 1.0u clear gap dot-bottom→gear-top), separated from
     //   the logo rays by a r7.0 badge-mask knockout halo (the dot's own r7.5
@@ -2122,7 +2122,7 @@ function buildIIFE(resDir) {
         // v0.6.5 (Plan C final-2, user ruling 2026-09-10): background-task gear
         // OVERLAY — a third, orthogonal icon layer applied AFTER favOf (base →
         // -fav/-arch → -bg suffix). Contract mirrors the ruling: (1) the gear
-        // is an ATTRIBUTE mark, never a state — grey #4D5157, it never
+        // is an ATTRIBUTE mark, never a state — grey #C6CCD4, it never
         // borrows a status color, and the state dot's color pipeline above is
         // untouched (bg wraps favOf's RESULT, it does not touch the state
         // switch); (2) CC_DEFAULT (interrupted flash off-frame) passes through

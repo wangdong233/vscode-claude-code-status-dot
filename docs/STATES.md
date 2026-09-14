@@ -246,6 +246,8 @@ flashSeq++   # 每 tick 自增，仅供 interrupted 的 flashSeq%2 判定
 
 ## 5. 已知限制（诚实声明，写入文档）
 
+**v0.6.9 记录(2026-09-14):CC 平台"停摆 agent 被误判完成+注销"缺陷(绿+齿轮案 RCA 终裁)**——后台 agent 生成被切断(转录尾部 `stop_reason:null`)时,CC 会把它误判为"完成"并立即从 background_tasks 注册表注销+发 completed 通知;主会话(经 `absorbed_mid_turn` 隐形注入读到中间态通知)理性地等待一个**永远不会再来的终稿**,而 Stop 时注册表已空 → 插件判 done 绿(**契约忠实**,状态机无缺陷)。取证样本:luceo 会话 wb-hotkey-modes agent(2026-09-14);终态普查 53/53 干净 agent 尾部为 `end_turn`/`stop_sequence`,`null` 零出现(停摆指纹 FP≈0),终态 `tool_use`(悬空调用)为另一可检出死亡形态。**恢复手法(实测可用)**:主会话 `SendMessage` 同名唤醒死 agent,从转录断点续跑。**插件侧防线(已设计未实施)**:SubagentStop 时读子转录尾部 stop_reason,`null`/终态 `tool_use` ⇒ sid.json 记 `stalled` 诊断字段(纯诊断,不碰颜色契约);前置条件=先实证 background agent 的 SubagentStop hook 是否触发(RCA 中不可判定)。队列语义备注:后台 agent 通知走 `absorbed_mid_turn`(移除=已注入模型上下文,无 user 消息痕迹,勿误判"丢失");idle 会话走 enqueue→dequeue→user 消息注入,双通道均正常。
+
 **v2 新特性 — workflow / 后台 subagent 跑期间保持 running**：主 agent 回复"已启动"后 `Stop` 不再误写 `done`（假绿）。实现 = hybrid：`Stop`/`SubagentStop` 时优先读 payload 的 `background_tasks[]`（CC v2.1.145+ 权威，覆盖 workflow/subagent/teammate 全类型），缺失时退化为 `activeSubagents` 计数 + `SubagentStart` 早信号。reader 不读 `activeSubagents`，state 仍四态。
 
 - **手动 Esc 中断无 hook**：CC 不触发 Stop/StopFailure（[#45289](https://github.com/anthropics/claude-code/issues/45289)/[#9516](https://github.com/anthropics/claude-code/issues/9516)），状态会停在 `running`。reader 无 watchdog（当前版本不做主动推断），靠下一次 `UserPromptSubmit`/`Stop` 自然更正。

@@ -7,7 +7,7 @@
  * fake vscode namespace, then drives every seam layer end-to-end:
  *   L1 require rebinding + passthrough + .resolve/.main/.cache mirrors
  *   L2 surface capture (create / view-provider / serializer dual-name) + whitelist
- *   L3 inbound envelope judgment + outbound postMessage shadow (3-value whitelist)
+ *   L3 inbound envelope judgment + outbound postMessage shadow (4-value whitelist, from-extension unwrap since v0.6.9)
  *   L4 binding-layer/observation-layer separation (HIGH#1) + farewell unbind
  *   L5 title/iconPath setter shadows (record/passthrough/re-assert, no loop)
  *   L6 bridge contracts (__ccsdSidToPanel shapes, sidToTitle, pending sets)
@@ -458,12 +458,74 @@ check(
   (panel1.webview._sent || []).length === beforeSent + 1,
 );
 
+// L3.9-14 (v0.6.9): CC 2.1.270 wraps every host→webview post in a
+// {type:"from-extension",message:…} envelope (comm.send). The outbound
+// observer must unwrap BOTH shapes — pre-270 raw requests and the 270
+// wrapper — and session_renamed joins the whitelist as the 4th value (the
+// only title signal for a list-renamed session with no inbound title
+// traffic; see STATES.md §5 v0.6.9 for the 2.1.270 rename flash-revert RCA).
+panel1.webview.postMessage({
+  type: 'from-extension',
+  message: {
+    type: 'request',
+    requestId: 'rr4',
+    request: { type: 'user_dialog_request', dialogKind: 'fable_overage_consent_prompt' },
+  },
+});
+check(
+  'L3.9 from-extension-wrapped user_dialog_request still sets the dialog pending set',
+  G.__ccsdUserDialogSet['sid-B'] === true,
+);
+msg(panel1, { type: 'response', requestId: 'rr4' });
+check(
+  'L3.10 response envelope clears the wrapped dialog pending set (270 transport repair)',
+  !('sid-B' in G.__ccsdUserDialogSet),
+);
+panel1.webview.postMessage({
+  type: 'from-extension',
+  message: {
+    type: 'request',
+    requestId: 'sr1',
+    request: { type: 'session_renamed', sessionId: 'sid-B', title: 'B renamed' },
+  },
+});
+check(
+  'L3.11 from-extension-wrapped session_renamed writes the title bridge',
+  G.__ccsdSidToTitle['sid-B'] === 'B renamed',
+);
+panel1.webview.postMessage({
+  type: 'from-extension',
+  message: {
+    type: 'request',
+    requestId: 'sr2',
+    request: { type: 'session_renamed', sessionId: 'sid-never-seen', title: 'X' },
+  },
+});
+check(
+  'L3.12 session_renamed for a never-seen sid plants NO orphan bridge entry',
+  !('sid-never-seen' in G.__ccsdSidToTitle),
+);
+panel1.webview.postMessage({
+  type: 'from-extension',
+  message: { type: 'request', requestId: 'sr3', request: { type: 'session_renamed', sessionId: 'sid-B', title: '' } },
+});
+check('L3.13 empty-title session_renamed leaves the bridge unchanged', G.__ccsdSidToTitle['sid-B'] === 'B renamed');
+const pForHbSr = vs.window.createWebviewPanel('claudeVSCodePanel9x', 't3', {}, {}); // arms + forces a heartbeat write
+const hbSr = JSON.parse(fs.readFileSync(hbPath, 'utf8'));
+check(
+  'L3.14 heartbeat obs.session_renamed counted (first occurrence forces a write)',
+  (hbSr.obs.session_renamed || 0) >= 1,
+  JSON.stringify(hbSr.obs.session_renamed),
+);
+
 // ---------------------------------------------------------------- L5 shadows
 // title: record + passthrough + bridge refresh
 panel1.title = 'Renamed by CC';
 check(
   "L5.1 title shadow: CC's write lands (passthrough) + bridge UNTOUCHED (v0.6.1: recording poisoned the paint loop)",
-  panel1.title === 'Renamed by CC' && G.__ccsdSidToTitle['sid-B'] === 'B*',
+  // v0.6.9: the bridge's latest observer write is L3.11's session_renamed
+  // ('B renamed') — the manual write must leave exactly that value alone.
+  panel1.title === 'Renamed by CC' && G.__ccsdSidToTitle['sid-B'] === 'B renamed',
 );
 // iconPath: ours (RESDIR-prefixed) recorded; CC's write re-asserted back to ours
 const RES = path.join(IDIR, 'resources');

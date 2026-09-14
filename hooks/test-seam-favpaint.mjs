@@ -19,6 +19,10 @@
  *          map scan and returns). Fixed: when a sid lands on an ACTIVE
  *          panel, the observers publish it to __ccsdActiveSid immediately.
  *
+ *   v0.6.9 FP.14-17 extend the soak matrix to the 4th outbound whitelist
+ *          value (session_renamed, from-extension-wrapped): the owner-ctx
+ *          title write must drive the paint exactly once and stay bounded.
+ *
  * Runs the REAL emitted prelude with a sandboxed HOME (favorites/sid files
  * under tmp), drives the real 500ms §H tick by wall-clock, and pins both
  * outcomes. Async (needs real timer ticks) — self-contained process, so the
@@ -317,6 +321,63 @@ check(
   'FP.13 bg=2 but stale mtime (25h) → gear gate off → tooltip bare (both mtime directions)',
   p1.tooltip === '★ Fav Session',
   'tooltip=' + JSON.stringify(p1.tooltip),
+);
+
+// FP.14-17 (v0.6.9): session_renamed — the 4th outbound whitelist value — is
+// the ONLY title signal for a list-renamed session with no inbound title
+// traffic. CC 2.1.270 wraps every outbound post in {type:"from-extension",
+// message:…}; these drives use the wrapped shape (the raw shape is covered by
+// L3.4-8 in test-seam-runtime.mjs). Observer-only write (FAV.1): the owner
+// ctx (__ccsdTitle) drives the §H paint; the bridge carries the clean
+// un-starred title; FP.7's manual-write isolation stays untouched.
+p1.webview.postMessage({
+  type: 'from-extension',
+  message: {
+    type: 'request',
+    requestId: 'sr9',
+    request: { type: 'session_renamed', sessionId: 'sid-fav', title: 'Renamed Live' },
+  },
+});
+await new Promise((r) => setTimeout(r, 1300));
+check(
+  'FP.14 painted title follows session_renamed (owner-ctx write drives the §H tick, single star)',
+  p1.title === '★ Renamed Live',
+  'title=' + JSON.stringify(p1.title),
+);
+check(
+  'FP.15 bridge carries the clean un-starred renamed title',
+  G.__ccsdSidToTitle['sid-fav'] === 'Renamed Live',
+  'bridge=' + JSON.stringify(G.__ccsdSidToTitle['sid-fav']),
+);
+const wAt14 = fp8_writes;
+const tAt14 = p1.title;
+await new Promise((r) => setTimeout(r, 2100));
+check(
+  'FP.16 steady state after rename (2.1s): title byte-stable, ZERO setter writes',
+  p1.title === tAt14 && tAt14 === '★ Renamed Live' && fp8_writes === wAt14,
+  `writes+${fp8_writes - wAt14} title=${JSON.stringify(p1.title)}`,
+);
+p1.webview.postMessage({
+  type: 'from-extension',
+  message: {
+    type: 'request',
+    requestId: 'sr10',
+    request: { type: 'session_renamed', sessionId: 'sid-fav', title: 'Renamed Live' },
+  },
+});
+p1.webview.postMessage({
+  type: 'from-extension',
+  message: {
+    type: 'request',
+    requestId: 'sr11',
+    request: { type: 'session_renamed', sessionId: 'sid-other', title: 'Other' },
+  },
+});
+await new Promise((r) => setTimeout(r, 1300));
+check(
+  'FP.17 duplicate same-title + non-matching sid: title exactly unchanged, no orphan bridge entry',
+  p1.title === '★ Renamed Live' && !('sid-other' in G.__ccsdSidToTitle),
+  `title=${JSON.stringify(p1.title)} sid-other-in-bridge=${'sid-other' in G.__ccsdSidToTitle}`,
 );
 
 if (fail === 0) {
